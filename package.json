@@ -1,0 +1,52 @@
+{
+  "name": "my-pi-extensions",
+  "version": "0.1.0",
+  "description": "Personal pi extension collection.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extensions"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WAY29/my-pi-extensions.git"
+  },
+  "homepage": "https://github.com/WAY29/my-pi-extensions#readme",
+  "bugs": {
+    "url": "https://github.com/WAY29/my-pi-extensions/issues"
+  },
+  "pi": {
+    "extensions": [
+      "./AskUserQuestion.ts",
+      "./bash-grep-output-mode.ts",
+      "./codex-apply-patch.ts",
+      "./copy-code-block.ts",
+      "./effort.ts",
+      "./hide-code-fence-markers.ts",
+      "./hide-read-output.ts",
+      "./permission-gate.ts",
+      "./progress-checkpoints.ts",
+      "./pi-glance/index.ts",
+      "./pi-goal/index.ts",
+      "./pi-rewind/index.ts",
+      "./pi-sandbox/index.ts",
+      "./plan-mode/index.ts"
+    ]
+  },
+  "dependencies": {
+    "diff": "^8.0.4"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  }
+}
