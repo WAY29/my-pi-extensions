@@ -1,0 +1,192 @@
+export type SegmentId = "git" | "plan" | "model" | "context" | "tokens" | "cost";
+export type GlanceThemeName = "light" | "dark" | "catppuccin-latte" | "catppuccin-mocha";
+export type IconMode = "nerd" | "plain";
+export type WidthMode = "full" | "compact" | "minimal";
+export type GitStatus = "clean" | "dirty" | "conflict" | "unknown";
+export type GitShaMode = "off" | "detached" | "always";
+export type ContextDisplayMode = "percent+tokens" | "percent" | "tokens";
+export type ContextUnknownMode = "show" | "hide";
+export type TokensDisplayMode = "input-output" | "total";
+export type TokensCacheMode = "auto" | "show" | "hide";
+export type ModelThinkingMode = "auto" | "always" | "never";
+export type WorkspaceLabelMode = "name" | "smart" | "path";
+export type TitleSource = "fallback" | "llm";
+
+export interface SegmentConfig {
+	id: SegmentId;
+	enabled: boolean;
+}
+
+interface DisplayConfig {
+	adaptive: boolean;
+	showProvider: "auto" | "always" | "never";
+	workspaceLabel: WorkspaceLabelMode;
+}
+
+interface EditorConfig {
+	minContentRows: number;
+}
+
+interface TitleConfig {
+	enabled: boolean;
+	model: string;
+}
+
+export interface GitConfig {
+	showDirty: boolean;
+	showAheadBehind: boolean;
+	shaMode: GitShaMode;
+	timeoutMs: number;
+	refreshDebounceMs: number;
+	pollIntervalMs: number;
+}
+
+interface ContextConfig {
+	display: ContextDisplayMode;
+	unknown: ContextUnknownMode;
+}
+
+interface CostConfig {
+	hideZero: boolean;
+}
+
+interface TokensConfig {
+	display: TokensDisplayMode;
+	cache: TokensCacheMode;
+}
+
+export interface GlanceConfig {
+	version: 2;
+	enabled: boolean;
+	theme: GlanceThemeName;
+	icons: IconMode;
+	editor: EditorConfig;
+	display: DisplayConfig;
+	title: TitleConfig;
+	segments: SegmentConfig[];
+	model: {
+		customNames: Record<string, string>;
+		showThinking: ModelThinkingMode;
+	};
+	git: GitConfig;
+	context: ContextConfig;
+	cost: CostConfig;
+	tokens: TokensConfig;
+}
+
+export interface UsageTotals {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+}
+
+export interface GitSnapshot {
+	repo: boolean;
+	branch: string | null;
+	detached: boolean;
+	sha: string | null;
+	upstream: string | null;
+	ahead: number;
+	behind: number;
+	staged: number;
+	unstaged: number;
+	untracked: number;
+	conflicts: number;
+	dirty: boolean;
+	status: GitStatus;
+	updatedAt: number;
+}
+
+export interface GlanceState {
+	workspace: {
+		name: string;
+		path: string;
+	};
+	git: GitSnapshot;
+	providers: {
+		availableCount: number;
+	};
+	model: {
+		id?: string;
+		provider?: string;
+		displayName?: string;
+		thinking: string;
+	};
+	plan: {
+		enabled: boolean;
+		executing: boolean;
+		completed: number;
+		total: number;
+	};
+	context: {
+		tokens: number | null;
+		window: number;
+		percent: number | null;
+	};
+	usage: UsageTotals;
+	title: {
+		text: string | null;
+		generating: boolean;
+		source?: TitleSource;
+		prompt?: string;
+		model?: string;
+	};
+	version: number;
+}
+
+export interface Rgb {
+	r: number;
+	g: number;
+	b: number;
+}
+
+interface SegmentPalette {
+	fg: Rgb;
+}
+
+export interface GlancePalette {
+	name: GlanceThemeName;
+	text: Rgb;
+	dim: Rgb;
+	warn: Rgb;
+	error: Rgb;
+	separator: Rgb;
+	border: Rgb;
+	title: Rgb;
+	segments: Record<SegmentId, SegmentPalette>;
+}
+
+export interface IconSet extends Record<SegmentId, string> {}
+
+interface SegmentDisplay {
+	full?: string;
+	compact?: string;
+	minimal?: string;
+}
+
+export interface SegmentData {
+	primary: string;
+	secondary?: string;
+	display?: SegmentDisplay;
+}
+
+export interface SegmentRenderContext {
+	state: GlanceState;
+	config: GlanceConfig;
+	widthMode: WidthMode;
+	icons: IconSet;
+	showProvider: boolean;
+}
+
+export interface SegmentRenderResult {
+	id: SegmentId;
+	text: string;
+}
+
+export interface SegmentDefinition {
+	id: SegmentId;
+	label: string;
+	collect(ctx: SegmentRenderContext): SegmentData | undefined;
+}

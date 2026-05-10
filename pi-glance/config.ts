@@ -1,0 +1,250 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import type {
+	ContextDisplayMode,
+	ContextUnknownMode,
+	GitShaMode,
+	GlanceConfig,
+	GlanceThemeName,
+	IconMode,
+	ModelThinkingMode,
+	SegmentConfig,
+	SegmentId,
+	TokensCacheMode,
+	TokensDisplayMode,
+	WorkspaceLabelMode,
+} from "./types.js";
+
+const CONFIG_PATH = join(getAgentDir(), "pi-glance", "config.json");
+const CONFIG_VERSION = 2 as const;
+
+const DEFAULT_SEGMENTS: SegmentConfig[] = [
+	{ id: "git", enabled: true },
+	{ id: "plan", enabled: true },
+	{ id: "context", enabled: true },
+	{ id: "cost", enabled: true },
+	{ id: "tokens", enabled: false },
+	{ id: "model", enabled: true },
+];
+
+const SEGMENT_IDS = new Set<SegmentId>(DEFAULT_SEGMENTS.map((s) => s.id));
+const THEMES = new Set<GlanceThemeName>(["light", "dark", "catppuccin-latte", "catppuccin-mocha"]);
+const ICON_MODES = new Set<IconMode>(["nerd", "plain"]);
+const PROVIDER_MODES = new Set<GlanceConfig["display"]["showProvider"]>(["auto", "always", "never"]);
+const WORKSPACE_LABEL_MODES = new Set<WorkspaceLabelMode>(["name", "smart", "path"]);
+const GIT_SHA_MODES = new Set<GitShaMode>(["off", "detached", "always"]);
+const CONTEXT_DISPLAY_MODES = new Set<ContextDisplayMode>(["percent+tokens", "percent", "tokens"]);
+const CONTEXT_UNKNOWN_MODES = new Set<ContextUnknownMode>(["show", "hide"]);
+const TOKENS_DISPLAY_MODES = new Set<TokensDisplayMode>(["input-output", "total"]);
+const TOKENS_CACHE_MODES = new Set<TokensCacheMode>(["auto", "show", "hide"]);
+const MODEL_THINKING_MODES = new Set<ModelThinkingMode>(["auto", "always", "never"]);
+
+export function defaultConfig(): GlanceConfig {
+	return {
+		version: CONFIG_VERSION,
+		enabled: true,
+		theme: "light",
+		icons: "plain",
+		editor: {
+			minContentRows: 3,
+		},
+		title: {
+			enabled: true,
+			model: "",
+		},
+		display: {
+			adaptive: true,
+			showProvider: "auto",
+			workspaceLabel: "name",
+		},
+		segments: DEFAULT_SEGMENTS.map((s) => ({ ...s })),
+		model: {
+			customNames: {},
+			showThinking: "auto",
+		},
+		git: {
+			showDirty: true,
+			showAheadBehind: true,
+			shaMode: "off",
+			timeoutMs: 1000,
+			refreshDebounceMs: 1500,
+			pollIntervalMs: 5000,
+		},
+		context: {
+			display: "percent+tokens",
+			unknown: "show",
+		},
+		cost: {
+			hideZero: false,
+		},
+		tokens: {
+			display: "input-output",
+			cache: "auto",
+		},
+	};
+}
+
+export function cloneConfig(config: GlanceConfig): GlanceConfig {
+	return {
+		...config,
+		editor: { ...config.editor },
+		display: { ...config.display },
+		title: { ...config.title },
+		segments: config.segments.map((s) => ({ ...s })),
+		model: { customNames: { ...config.model.customNames }, showThinking: config.model.showThinking },
+		git: { ...config.git },
+		context: { ...config.context },
+		cost: { ...config.cost },
+		tokens: { ...config.tokens },
+	};
+}
+
+function parseBool(value: unknown, fallback: boolean): boolean {
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function parseStringEnum<T extends string>(value: unknown, allowed: Set<T>, fallback: T): T {
+	return typeof value === "string" && allowed.has(value as T) ? (value as T) : fallback;
+}
+
+function parseIntInRange(value: unknown, fallback: number, min: number, max: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function parseIntAtLeast(value: unknown, fallback: number, min: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.max(min, Math.floor(value));
+}
+
+function normalizeSegments(value: unknown): SegmentConfig[] {
+	const defaults = DEFAULT_SEGMENTS.map((s) => ({ ...s }));
+	const byId = new Map<SegmentId, SegmentConfig>(defaults.map((s) => [s.id, s]));
+	const ordered: SegmentConfig[] = [];
+
+	if (Array.isArray(value)) {
+		for (const raw of value) {
+			if (!raw || typeof raw !== "object") continue;
+			const record = raw as Record<string, unknown>;
+			if (typeof record.id !== "string" || !SEGMENT_IDS.has(record.id as SegmentId)) continue;
+			const id = record.id as SegmentId;
+			const base = byId.get(id)!;
+			const segment = {
+				id,
+				enabled: parseBool(record.enabled, base.enabled),
+			};
+			byId.set(id, segment);
+			if (!ordered.some((s) => s.id === id)) ordered.push(segment);
+		}
+	}
+
+	if (!ordered.some((s) => s.id === "git")) return defaults;
+
+	if (!ordered.some((s) => s.id === "plan")) {
+		const planSegment = byId.get("plan");
+		const gitIndex = ordered.findIndex((s) => s.id === "git");
+		if (planSegment) ordered.splice(gitIndex + 1, 0, planSegment);
+	}
+
+	for (const segment of defaults) {
+		if (!ordered.some((s) => s.id === segment.id)) ordered.push(byId.get(segment.id)!);
+	}
+
+	return ordered;
+}
+
+function normalizeConfig(raw: unknown): GlanceConfig {
+	const defaults = defaultConfig();
+	if (!raw || typeof raw !== "object") return defaults;
+	const record = raw as Record<string, unknown>;
+	const editor = record.editor && typeof record.editor === "object" ? (record.editor as Record<string, unknown>) : {};
+	const title = record.title && typeof record.title === "object" ? (record.title as Record<string, unknown>) : {};
+	const display = record.display && typeof record.display === "object" ? (record.display as Record<string, unknown>) : {};
+	const model = record.model && typeof record.model === "object" ? (record.model as Record<string, unknown>) : {};
+	const git = record.git && typeof record.git === "object" ? (record.git as Record<string, unknown>) : {};
+	const context = record.context && typeof record.context === "object" ? (record.context as Record<string, unknown>) : {};
+	const cost = record.cost && typeof record.cost === "object" ? (record.cost as Record<string, unknown>) : {};
+	const tokens = record.tokens && typeof record.tokens === "object" ? (record.tokens as Record<string, unknown>) : {};
+
+	return {
+		version: CONFIG_VERSION,
+		enabled: parseBool(record.enabled, defaults.enabled),
+		theme: parseStringEnum(record.theme, THEMES, defaults.theme),
+		icons: parseStringEnum(record.icons, ICON_MODES, defaults.icons),
+		editor: {
+			minContentRows: parseIntInRange(editor.minContentRows, defaults.editor.minContentRows, 2, 4),
+		},
+		title: {
+			enabled: parseBool(title.enabled, defaults.title.enabled),
+			model: typeof title.model === "string" ? title.model.trim() : defaults.title.model,
+		},
+		display: {
+			adaptive: parseBool(display.adaptive, defaults.display.adaptive),
+			showProvider: parseStringEnum(display.showProvider, PROVIDER_MODES, defaults.display.showProvider),
+			workspaceLabel: parseStringEnum(display.workspaceLabel, WORKSPACE_LABEL_MODES, defaults.display.workspaceLabel),
+		},
+		segments: normalizeSegments(record.segments),
+		model: {
+			customNames:
+				model.customNames && typeof model.customNames === "object"
+					? (Object.fromEntries(
+							Object.entries(model.customNames as Record<string, unknown>).filter(
+								(entry): entry is [string, string] => typeof entry[1] === "string",
+							),
+						) as Record<string, string>)
+					: {},
+			showThinking: parseStringEnum(model.showThinking, MODEL_THINKING_MODES, defaults.model.showThinking),
+		},
+		git: {
+			showDirty: parseBool(git.showDirty, defaults.git.showDirty),
+			showAheadBehind: parseBool(git.showAheadBehind, defaults.git.showAheadBehind),
+			shaMode: parseStringEnum(git.shaMode, GIT_SHA_MODES, defaults.git.shaMode),
+			timeoutMs: parseIntAtLeast(git.timeoutMs, defaults.git.timeoutMs, 100),
+			refreshDebounceMs: parseIntAtLeast(git.refreshDebounceMs, defaults.git.refreshDebounceMs, 0),
+			pollIntervalMs: parseIntAtLeast(git.pollIntervalMs, defaults.git.pollIntervalMs, 1000),
+		},
+		context: {
+			display: parseStringEnum(context.display, CONTEXT_DISPLAY_MODES, defaults.context.display),
+			unknown: parseStringEnum(context.unknown, CONTEXT_UNKNOWN_MODES, defaults.context.unknown),
+		},
+		cost: {
+			hideZero: parseBool(cost.hideZero, defaults.cost.hideZero),
+		},
+		tokens: {
+			display: parseStringEnum(tokens.display, TOKENS_DISPLAY_MODES, defaults.tokens.display),
+			cache: parseStringEnum(tokens.cache, TOKENS_CACHE_MODES, defaults.tokens.cache),
+		},
+	};
+}
+
+export async function loadConfig(): Promise<GlanceConfig> {
+	try {
+		const text = await readFile(CONFIG_PATH, "utf8");
+		return normalizeConfig(JSON.parse(text));
+	} catch {
+		return defaultConfig();
+	}
+}
+
+export async function saveConfig(config: GlanceConfig): Promise<void> {
+	await mkdir(dirname(CONFIG_PATH), { recursive: true });
+	await writeFile(CONFIG_PATH, `${JSON.stringify(normalizeConfig(config), null, "\t")}\n`, "utf8");
+}
+
+export function moveSegment(config: GlanceConfig, id: SegmentId, direction: -1 | 1): GlanceConfig {
+	const next = cloneConfig(config);
+	const index = next.segments.findIndex((s) => s.id === id);
+	if (index < 0) return next;
+	const target = index + direction;
+	if (target < 0 || target >= next.segments.length) return next;
+	[next.segments[index], next.segments[target]] = [next.segments[target]!, next.segments[index]!];
+	return next;
+}
+
+export function toggleSegment(config: GlanceConfig, id: SegmentId): GlanceConfig {
+	const next = cloneConfig(config);
+	const segment = next.segments.find((s) => s.id === id);
+	if (segment) segment.enabled = !segment.enabled;
+	return next;
+}
