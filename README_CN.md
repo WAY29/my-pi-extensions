@@ -54,7 +54,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `copy-code-block.ts` | 命令/快捷键 | `/copy-code`, `Ctrl+Alt+C` | 从最新的 assistant 消息中复制代码块。支持选择某个代码块、复制全部代码块，并可保留 markdown fence。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
 | `hide-code-fence-markers.ts` | UI patch | 自动 | 通过隐藏终端 UI 中额外的代码块 fence 标记行，清理 markdown 代码块渲染效果。 |
-| `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏体积较大的 `read` 工具输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
+| `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `permission-gate.ts` | 安全门禁 | 自动 | 对 `rm`、`sudo`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。 |
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。 |
@@ -78,7 +78,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 
 搭配使用：
 
-- `hide-read-output.ts`：折叠大型 read 结果。
+- `hide-read-output.ts`：隐藏所有内置 `read` 结果输出。
 - `bash-grep-output-mode.ts`：控制噪声较多的命令/搜索输出。
 - `hide-code-fence-markers.ts`：让 markdown 代码块显示更干净。
 - `copy-code-block.ts`：需要快速复制生成代码时使用。

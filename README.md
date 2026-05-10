@@ -54,7 +54,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `copy-code-block.ts` | command/shortcut | `/copy-code`, `Ctrl+Alt+C` | Copies code blocks from the latest assistant message. Supports choosing a block, copying all blocks, and preserving markdown fences. |
 | `effort.ts` | command | `/effort` | Quickly switches or cycles pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | `hide-code-fence-markers.ts` | UI patch | automatic | Cleans up markdown code block rendering by hiding extra code fence marker lines in the terminal UI. |
-| `hide-read-output.ts` | UI/tool renderer | automatic | Hides bulky `read` tool output in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
+| `hide-read-output.ts` | UI/tool renderer | automatic | Hides all rendered result output from the built-in `read` tool in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
 | `permission-gate.ts` | safety gate | automatic | Prompts before potentially dangerous bash commands such as `rm`, `sudo`, or `chmod/chown ... 777`. Blocks by default when no UI is available. |
 | `progress-checkpoints.ts` | prompt helper | `/progress`, `/progress-checkpoints` | Injects a progress-checkpoint policy so the assistant gives short status updates around multi-step or tool-heavy work. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. |
@@ -78,7 +78,7 @@ Use these together:
 
 Use these together:
 
-- `hide-read-output.ts` to collapse large read results.
+- `hide-read-output.ts` to hide all built-in `read` result output.
 - `bash-grep-output-mode.ts` to control noisy command/search output.
 - `hide-code-fence-markers.ts` for cleaner markdown code blocks.
 - `copy-code-block.ts` when you want quick clipboard access to generated code.
