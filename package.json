@@ -28,6 +28,7 @@
       "./hide-code-fence-markers.ts",
       "./hide-read-output.ts",
       "./permission-gate.ts",
+      "./path-autocomplete-normalizer.ts",
       "./progress-checkpoints.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
