@@ -1,5 +1,7 @@
 # Pi Extensions
 
+English | [简体中文](README_CN.md)
+
 Personal extension collection for [pi](https://pi.dev). These extensions are intended to live in `~/.pi/agent/extensions/` and can be enabled with pi's normal extension discovery plus `/reload`.
 
 > Security note: pi extensions run with the same permissions as your local pi process. Review code before installing or sharing with others.
