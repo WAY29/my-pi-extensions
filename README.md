@@ -64,7 +64,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates Git-based checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox` | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/` and uses `bash-tool-coordinator.ts` for bash wrapping. |
-| `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan` | Read-only exploration mode for safe planning, then execution mode with numbered plan steps and `[DONE:n]` progress tracking. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
+| `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, and `[DONE:n]` transcript fallback. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
 
 ## Extension Relationships
 
@@ -86,7 +86,7 @@ These three extensions cooperate but have separate responsibilities:
 3. `plan-mode/` asks `pi-sandbox/` to enforce read-only planning by emitting `pi-sandbox:set-read-only-lock` with owner `plan-mode`.
 4. When `pi-sandbox/` is available, plan mode keeps the current active tool set unchanged, but writes under the current working directory are denied by sandbox policy.
 5. When `pi-sandbox/` is unavailable, plan mode falls back to a smaller read-only tool set (`read`, `bash`, `grep`, `find`, `ls`, `AskUserQuestion`) and an internal bash allowlist.
-6. When the plan is executed, `plan-mode/` lifts the read-only lock and sends execution context so the agent can work through numbered steps and mark progress with `[DONE:n]`.
+6. When the plan is executed, `plan-mode/` lifts the read-only lock and sends execution context so the agent can work through numbered steps, call `plan_complete_step` as each step finishes, and also leave `[DONE:n]` markers for transcript-based recovery.
 
 ### Safety and recovery layers
 

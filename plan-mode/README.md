@@ -7,9 +7,10 @@ Exploration mode for safe code analysis. With pi-sandbox, plan mode only blocks 
 - **Sandbox integration**: If pi-sandbox is loaded, enables a cwd-scoped write lock while keeping all current tools available
 - **Fallback read-only tools**: If pi-sandbox is unavailable, restricts available tools to read, bash, grep, find, ls, question
 - **Fallback bash allowlist**: Only read-only bash commands are allowed when sandbox locking is unavailable
-- **Plan extraction**: Extracts numbered steps from `Plan:` sections
+- **Plan extraction**: Extracts 1-10 numbered steps from `Plan:` sections
 - **Progress tracking**: Widget shows completion status during execution
-- **[DONE:n] markers**: Explicit step completion tracking
+- **`plan_complete_step` tool**: Execution-time tool marks completed steps immediately
+- **[DONE:n] markers**: Transcript fallback for completion tracking (spaces/full-width colon are tolerated)
 - **Session persistence**: State survives session resume
 - **pi-glance integration**: Emits `plan-mode:state` events for display in pi-glance
 
@@ -32,8 +33,10 @@ Plan:
 3. Third step description
 ```
 
+Use between 1 and 10 steps. Never include step 11 or beyond.
+
 4. Choose "Execute the plan" when prompted
-5. During execution, the agent marks steps complete with `[DONE:n]` tags
+5. During execution, the agent marks steps complete with `plan_complete_step` and `[DONE:n]` tags such as `[DONE:1]`
 6. Progress widget shows completion status
 
 ## How It Works
@@ -47,7 +50,8 @@ Plan:
 ### Execution Mode
 - Plan-mode write restrictions are lifted
 - Agent executes steps in order
-- `[DONE:n]` markers track completion
+- The `plan_complete_step` tool marks completed steps immediately during execution
+- `[DONE:n]` markers rebuild completion from the transcript; `[DONE: 1]`, `[DONE：1]`, and grouped markers such as `[DONE:1,2]` are accepted
 - Widget shows progress
 
 ### Fallback Command Allowlist

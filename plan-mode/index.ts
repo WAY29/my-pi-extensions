@@ -9,8 +9,8 @@
  * - /plan command or Shift+Tab to toggle
  * - Sandbox cwd write lock when pi-sandbox is available
  * - Bash restricted to allowlisted read-only commands only in fallback mode
- * - Extracts numbered plan steps from "Plan:" sections
- * - [DONE:n] markers to complete steps during execution
+ * - Extracts 1-10 numbered plan steps from "Plan:" sections
+ * - plan_complete_step tool and [DONE:n] markers to complete steps during execution
  * - Progress tracking widget during execution
  */
 
@@ -18,10 +18,26 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
+import { Type } from "typebox";
+import {
+	extractTodoItems,
+	isSafeCommand,
+	markCompletedSteps,
+	MAX_TODO_ITEMS,
+	MIN_TODO_ITEMS,
+	type TodoItem,
+} from "./utils.js";
 
 // Fallback tools used only when pi-sandbox cannot provide a cwd-scoped write lock.
 const FALLBACK_PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "AskUserQuestion"];
+
+const PlanCompleteStepParams = Type.Object({
+	steps: Type.Array(Type.Number({ description: "1-based plan step number to mark completed" }), {
+		minItems: 1,
+		maxItems: MAX_TODO_ITEMS,
+		description: "One or more completed plan step numbers",
+	}),
+});
 
 interface SandboxReadOnlyLockResponse {
 	accepted: boolean;
@@ -49,6 +65,10 @@ function getTextContent(message: AssistantMessage): string {
 		.filter((block): block is TextContent => block.type === "text")
 		.map((block) => block.text)
 		.join("\n");
+}
+
+function getAssistantMessagesText(messages: AgentMessage[]): string {
+	return messages.filter(isAssistantMessage).map(getTextContent).join("\n");
 }
 
 export default function planModeExtension(pi: ExtensionAPI): void {
@@ -210,6 +230,63 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.registerTool({
+		name: "plan_complete_step",
+		label: "Plan step done",
+		description: "Mark one or more current plan-mode execution steps as completed. After marking a step, continue with the next remaining step unless the whole plan is complete or blocked.",
+		parameters: PlanCompleteStepParams,
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!executionMode || todoItems.length === 0) {
+				return {
+					content: [{ type: "text", text: "No active plan execution." }],
+					details: { completed: [], invalid: params.steps, total: 0, completedCount: 0 },
+				};
+			}
+
+			const newlyCompleted: number[] = [];
+			const invalid: number[] = [];
+			const seen = new Set<number>();
+
+			for (const step of params.steps) {
+				if (!Number.isInteger(step)) {
+					invalid.push(step);
+					continue;
+				}
+				if (seen.has(step)) continue;
+				seen.add(step);
+
+				const item = todoItems.find((t) => t.step === step);
+				if (!item) {
+					invalid.push(step);
+					continue;
+				}
+				if (!item.completed) {
+					item.completed = true;
+					newlyCompleted.push(step);
+				}
+			}
+
+			updateStatus(ctx);
+			persistState();
+
+			const completedCount = todoItems.filter((t) => t.completed).length;
+			const status = `${completedCount}/${todoItems.length} completed`;
+			const completedText =
+				newlyCompleted.length > 0 ? `Marked completed: ${newlyCompleted.join(", ")}.` : "No new steps marked.";
+			const invalidText = invalid.length > 0 ? ` Invalid steps: ${invalid.join(", ")}.` : "";
+			const next = todoItems.find((t) => !t.completed);
+			const nextText = next
+				? ` Continue now with step ${next.step}: ${next.text}`
+				: " All plan steps are complete; provide the final concise summary.";
+
+			return {
+				content: [{ type: "text", text: `${completedText}${invalidText} ${status}.${nextText}` }],
+				details: { completed: newlyCompleted, invalid, total: todoItems.length, completedCount },
+			};
+		},
+	});
+
 	// In fallback mode, block destructive bash commands because no OS sandbox is enforcing read-only writes.
 	pi.on("tool_call", async (event) => {
 		if (!planModeEnabled || usingSandboxReadOnly || event.toolName !== "bash") return;
@@ -269,7 +346,9 @@ ${restrictions}
 Ask clarifying questions using the AskUserQuestion tool.
 Use brave-search skill via bash for web research.
 
-Create a detailed numbered plan under a "Plan:" header:
+Create a detailed numbered plan under a "Plan:" header with ${MIN_TODO_ITEMS}-${MAX_TODO_ITEMS} steps.
+The plan MUST contain at least ${MIN_TODO_ITEMS} step and MUST NOT contain more than ${MAX_TODO_ITEMS} steps.
+If the task is small, use 1 step. Do not include step ${MAX_TODO_ITEMS + 1} or beyond.
 
 Plan:
 1. First step description
@@ -293,8 +372,16 @@ Do NOT attempt to make changes - just describe what you would do.`,
 Remaining steps:
 ${todoList}
 
-Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.`,
+Execute the entire remaining plan, not only the first step.
+Continue autonomously from one step to the next until every remaining step is complete, unless you are blocked or need user input.
+Do not stop, summarize, or hand control back after completing a single step when more steps remain.
+
+Progress tracking:
+- As soon as step n is complete, call the plan_complete_step tool with that step number.
+- After marking a step complete, immediately continue with the next remaining step.
+- Also include the exact visible tag [DONE:n] in text, for example [DONE:1], so progress can be rebuilt from the transcript.
+- If multiple steps complete in one response, mark every completed step.
+- Only provide a final summary after all remaining steps have been completed.`,
 					display: false,
 				},
 			};
@@ -317,6 +404,12 @@ After completing a step, include a [DONE:n] tag in your response.`,
 	pi.on("agent_end", async (event, ctx) => {
 		// Check if execution is complete
 		if (executionMode && todoItems.length > 0) {
+			const newlyCompleted = markCompletedSteps(getAssistantMessagesText(event.messages), todoItems);
+			if (newlyCompleted > 0) {
+				updateStatus(ctx);
+				persistState();
+			}
+
 			if (todoItems.every((t) => t.completed)) {
 				const completedList = todoItems.map((t) => `~~${t.text}~~`).join("\n");
 				pi.sendMessage(
@@ -372,8 +465,8 @@ After completing a step, include a [DONE:n] tag in your response.`,
 
 			const execMessage =
 				todoItems.length > 0
-					? `Execute the plan. Start with: ${todoItems[0].text}`
-					: "Execute the plan you just created.";
+					? `Execute the entire plan from start to finish. Begin with step 1: ${todoItems[0].text}. After completing each step, mark it done and continue to the next step until the full plan is complete.`
+					: "Execute the plan you just created from start to finish.";
 			pi.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: true },
 				{ triggerTurn: true },
@@ -401,7 +494,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 
 		if (planModeEntry?.data) {
 			planModeEnabled = planModeEntry.data.enabled ?? planModeEnabled;
-			todoItems = planModeEntry.data.todos ?? todoItems;
+			todoItems = (planModeEntry.data.todos ?? todoItems).slice(0, MAX_TODO_ITEMS);
 			executionMode = planModeEntry.data.executing ?? executionMode;
 			previousActiveTools = planModeEntry.data.previousActiveTools ?? previousActiveTools;
 			usingSandboxReadOnly = false;

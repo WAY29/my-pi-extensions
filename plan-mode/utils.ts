@@ -3,6 +3,9 @@
  * Extracted for testability.
  */
 
+export const MIN_TODO_ITEMS = 1;
+export const MAX_TODO_ITEMS = 10;
+
 // Destructive commands blocked in plan mode
 const DESTRUCTIVE_PATTERNS = [
 	/\brm\b/i,
@@ -135,6 +138,8 @@ export function extractTodoItems(message: string): TodoItem[] {
 	const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
 
 	for (const match of planSection.matchAll(numberedPattern)) {
+		if (items.length >= MAX_TODO_ITEMS) break;
+
 		const text = match[2]
 			.trim()
 			.replace(/\*{1,2}$/, "")
@@ -151,18 +156,28 @@ export function extractTodoItems(message: string): TodoItem[] {
 
 export function extractDoneSteps(message: string): number[] {
 	const steps: number[] = [];
-	for (const match of message.matchAll(/\[DONE:(\d+)\]/gi)) {
-		const step = Number(match[1]);
-		if (Number.isFinite(step)) steps.push(step);
+	for (const match of message.matchAll(/\[DONE\s*(?:[:：]|\s)\s*([0-9][0-9\s,，]*)\]/gi)) {
+		const numbers = match[1].match(/\d+/g) ?? [];
+		for (const numberText of numbers) {
+			const step = Number(numberText);
+			if (Number.isInteger(step) && step > 0) steps.push(step);
+		}
 	}
 	return steps;
 }
 
 export function markCompletedSteps(text: string, items: TodoItem[]): number {
-	const doneSteps = extractDoneSteps(text);
-	for (const step of doneSteps) {
+	let newlyCompleted = 0;
+	const seenSteps = new Set<number>();
+	for (const step of extractDoneSteps(text)) {
+		if (seenSteps.has(step)) continue;
+		seenSteps.add(step);
+
 		const item = items.find((t) => t.step === step);
-		if (item) item.completed = true;
+		if (item && !item.completed) {
+			item.completed = true;
+			newlyCompleted += 1;
+		}
 	}
-	return doneSteps.length;
+	return newlyCompleted;
 }

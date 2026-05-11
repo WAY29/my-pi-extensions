@@ -64,7 +64,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建基于 Git 的检查点，并在 agent 改错时回退文件和/或会话状态。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox` | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，并通过 `bash-tool-coordinator.ts` 包装 bash。 |
-| `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan` | 用于安全规划的只读探索模式，以及带编号计划步骤和 `[DONE:n]` 进度跟踪的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
+| `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度和 `[DONE:n]` transcript 兜底的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 
 ## 扩展之间的关系
 
@@ -86,7 +86,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 3. `plan-mode/` 会通过发出 owner 为 `plan-mode` 的 `pi-sandbox:set-read-only-lock` 事件，请求 `pi-sandbox/` 执行只读规划。
 4. 当 `pi-sandbox/` 可用时，plan mode 会保持当前活动工具集合不变，但由沙箱策略拒绝当前工作目录下的写入。
 5. 当 `pi-sandbox/` 不可用时，plan mode 会降级到较小的只读工具集合（`read`、`bash`、`grep`、`find`、`ls`、`AskUserQuestion`）以及内部 bash allowlist。
-6. 当开始执行计划时，`plan-mode/` 会解除只读锁并发送执行上下文，让 agent 按编号步骤推进，并用 `[DONE:n]` 标记进度。
+6. 当开始执行计划时，`plan-mode/` 会解除只读锁并发送执行上下文，让 agent 按编号步骤推进，在每步完成时调用 `plan_complete_step`，并额外留下 `[DONE:n]` 标记以便从 transcript 恢复进度。
 
 ### 安全与恢复分层
 
