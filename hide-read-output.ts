@@ -167,8 +167,8 @@ function installReadRenderPatch(isHiddenReadComponent: (component: unknown) => b
  * Hide the rendered result body of the built-in read tool in pi's interactive UI.
  *
  * The read tool still returns file contents to the model and stores normal tool
- * results in the session. This only changes terminal rendering so built-in read
- * result bodies are not shown in the TUI.
+ * results in the session. This only changes terminal rendering so large or
+ * truncated read output is not shown in the TUI.
  */
 export default function (pi: ExtensionAPI) {
 	const read = createReadToolDefinition(process.cwd());

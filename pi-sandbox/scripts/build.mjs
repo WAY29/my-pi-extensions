@@ -1,5 +1,5 @@
-import { cp, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { access, cp, mkdir, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { build } from "esbuild";
 
 await rm("dist", { recursive: true, force: true });
@@ -22,11 +22,24 @@ await build({
   },
 });
 
-await mkdir("dist/vendor", { recursive: true });
+async function copyIfExists(source, destination) {
+  try {
+    await access(source);
+  } catch {
+    return;
+  }
+  await mkdir(dirname(destination), { recursive: true });
+  await cp(source, destination, { force: true });
+}
 
-for (const source of [
-  join("node_modules", "@carderne", "sandbox-runtime", "vendor"),
-  join("node_modules", "@carderne", "sandbox-runtime", "dist", "vendor"),
-]) {
-  await cp(source, "dist/vendor", { recursive: true, force: true }).catch(() => {});
+for (const arch of ["x64", "arm64"]) {
+  for (const sourceRoot of [
+    join("node_modules", "@carderne", "sandbox-runtime", "vendor"),
+    join("node_modules", "@carderne", "sandbox-runtime", "dist", "vendor"),
+  ]) {
+    await copyIfExists(
+      join(sourceRoot, "seccomp", arch, "apply-seccomp"),
+      join("dist", "vendor", "seccomp", arch, "apply-seccomp"),
+    );
+  }
 }

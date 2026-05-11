@@ -1,10 +1,10 @@
 # Plan Mode Extension
 
-Read-only exploration mode for safe code analysis.
+Exploration mode for safe code analysis. With pi-sandbox, plan mode only blocks writes under the current working directory.
 
 ## Features
 
-- **Sandbox integration**: If pi-sandbox is loaded, enables a read-only write lock while keeping all current tools available
+- **Sandbox integration**: If pi-sandbox is loaded, enables a cwd-scoped write lock while keeping all current tools available
 - **Fallback read-only tools**: If pi-sandbox is unavailable, restricts available tools to read, bash, grep, find, ls, question
 - **Fallback bash allowlist**: Only read-only bash commands are allowed when sandbox locking is unavailable
 - **Plan extraction**: Extracts numbered steps from `Plan:` sections
@@ -15,7 +15,7 @@ Read-only exploration mode for safe code analysis.
 
 ## Commands
 
-- `/plan` - Toggle plan mode
+- `/plan` - Toggle plan mode (protect cwd from writes)
 - `/plan-todos` - Show current plan progress
 - `Shift+Tab` - Toggle plan mode (shortcut)
 
@@ -38,14 +38,14 @@ Plan:
 
 ## How It Works
 
-### Plan Mode (Read-Only)
-- With pi-sandbox: all current tools stay available, but writes are denied by sandbox policy
+### Plan Mode (Protected cwd)
+- With pi-sandbox: all current tools stay available, but writes under the current working directory are denied by sandbox policy
 - Without pi-sandbox: only fallback read-only tools are available
 - Bash commands are filtered through an allowlist only in fallback mode
-- Agent creates a plan without making changes
+- Agent creates a plan without making changes under the current working directory
 
 ### Execution Mode
-- Plan-mode read-only restrictions are lifted
+- Plan-mode write restrictions are lifted
 - Agent executes steps in order
 - `[DONE:n]` markers track completion
 - Widget shows progress

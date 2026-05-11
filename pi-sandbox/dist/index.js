@@ -104,7 +104,7 @@ var require_dist = __commonJS({
         this.handleGreeting();
       }
       readBytes(len) {
-        return new Promise((resolve4) => {
+        return new Promise((resolve5) => {
           let buf = Buffer.allocUnsafe(len);
           let offset = 0;
           const dataListener = (chunk) => {
@@ -114,7 +114,7 @@ var require_dist = __commonJS({
             if (offset < len) return;
             this.socket.removeListener("data", dataListener);
             this.socket.push(chunk.subarray(readAmount));
-            resolve4(buf);
+            resolve5(buf);
             this.socket.pause();
           };
           this.socket.on("data", dataListener);
@@ -602,13 +602,13 @@ var require_shell_quote = __commonJS({
 });
 
 // src/index.ts
-import { spawn as spawn4 } from "node:child_process";
-import fs6 from "node:fs";
-import { existsSync as existsSync4, mkdirSync, readFileSync as readFileSync2, realpathSync as realpathSync3, writeFileSync } from "node:fs";
+import { spawn as spawn5 } from "node:child_process";
+import fs7 from "node:fs";
+import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync2, realpathSync as realpathSync4, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { BlockList as BlockList2, isIP as isIP3 } from "node:net";
 import { homedir as homedir3 } from "node:os";
-import { basename, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
+import { basename, dirname as dirname5, join as join4, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // node_modules/@carderne/sandbox-runtime/dist/sandbox/http-proxy.js
@@ -786,7 +786,7 @@ function openConnectTunnel(opts) {
     return Promise.reject(new Error(`Invalid destination port: ${destPort}`));
   }
   const authority = isIP(bare) === 6 ? `[${bare}]:${destPort}` : `${bare}:${destPort}`;
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const sock = opts.dial();
     let settled = false;
     const fail = (err) => {
@@ -827,7 +827,7 @@ Host: ${authority}\r
         sock.setTimeout(0);
         sock.removeListener("error", fail);
         sock.removeListener("close", onClose);
-        resolve4(sock);
+        resolve5(sock);
       };
       sock.on("data", onData);
     });
@@ -914,7 +914,7 @@ function canonicalizeHost(h) {
   }
 }
 function dialDirect(host, port, timeoutMs = CONNECT_TIMEOUT_MS) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const s = netConnect(port, host);
     let settled = false;
     const done = (err) => {
@@ -926,7 +926,7 @@ function dialDirect(host, port, timeoutMs = CONNECT_TIMEOUT_MS) {
         s.destroy();
         reject(err);
       } else {
-        resolve4(s);
+        resolve5(s);
       }
     };
     s.setTimeout(timeoutMs, () => done(new Error("connect timed out")));
@@ -1196,7 +1196,7 @@ function createSocksProxyServer(options) {
       return void 0;
     },
     listen(port, hostname) {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         const serverInternal = socksServer?.server;
         serverInternal?.once("error", reject);
         const listeningCallback = () => {
@@ -1204,7 +1204,7 @@ function createSocksProxyServer(options) {
           const actualPort = this.getPort();
           if (actualPort) {
             logForDebugging(`SOCKS proxy listening on ${hostname}:${actualPort}`);
-            resolve4(actualPort);
+            resolve5(actualPort);
           } else {
             reject(new Error("Failed to get SOCKS proxy server port"));
           }
@@ -1213,7 +1213,7 @@ function createSocksProxyServer(options) {
       });
     },
     async close() {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         socksServer.close((error) => {
           if (error) {
             const errorMessage = error.message?.toLowerCase() || "";
@@ -1223,7 +1223,7 @@ function createSocksProxyServer(options) {
               return;
             }
           }
-          resolve4();
+          resolve5();
         });
       });
     },
@@ -1315,8 +1315,8 @@ async function ripGrep(args, target, abortSignal, config2 = { command: "rg" }) {
   const [stdout, stderr, code] = await Promise.all([
     text(child.stdout),
     text(child.stderr),
-    new Promise((resolve4, reject) => {
-      child.on("close", resolve4);
+    new Promise((resolve5, reject) => {
+      child.on("close", resolve5);
       child.on("error", reject);
     })
   ]);
@@ -1462,8 +1462,8 @@ function getDefaultWritePaths() {
   return recommendedPaths;
 }
 function generateProxyEnvVars(httpProxyPort, socksProxyPort) {
-  const tmpdir2 = process.env.CLAUDE_TMPDIR || "/tmp/claude";
-  const envVars = [`SANDBOX_RUNTIME=1`, `TMPDIR=${tmpdir2}`];
+  const tmpdir3 = process.env.CLAUDE_TMPDIR || "/tmp/claude";
+  const envVars = [`SANDBOX_RUNTIME=1`, `TMPDIR=${tmpdir3}`];
   if (!httpProxyPort && !socksProxyPort) {
     return envVars;
   }
@@ -1928,7 +1928,7 @@ async function initializeLinuxNetworkBridge(httpProxyPort, socksProxyPort) {
       }
       throw new Error(`Failed to create bridge sockets after ${maxAttempts} attempts`);
     }
-    await new Promise((resolve4) => setTimeout(resolve4, i * 100));
+    await new Promise((resolve5) => setTimeout(resolve5, i * 100));
   }
   return {
     httpSocketPath,
@@ -2680,13 +2680,13 @@ function startMacOSSandboxLogMonitor(callback, ignoreViolations) {
     }
     if (ignoreViolations && command) {
       if (wildcardPaths.length > 0) {
-        const shouldIgnore = wildcardPaths.some((path4) => violationDetails.includes(path4));
+        const shouldIgnore = wildcardPaths.some((path6) => violationDetails.includes(path6));
         if (shouldIgnore)
           return;
       }
       for (const [pattern, paths] of commandPatterns) {
         if (command.includes(pattern)) {
-          const shouldIgnore = paths.some((path4) => violationDetails.includes(path4));
+          const shouldIgnore = paths.some((path6) => violationDetails.includes(path6));
           if (shouldIgnore)
             return;
         }
@@ -2864,7 +2864,7 @@ async function startHttpProxyServer(sandboxAskCallback) {
     getMitmSocketPath,
     parentProxy
   });
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     if (!httpProxyServer) {
       reject(new Error("HTTP proxy server undefined before listen"));
       return;
@@ -2876,7 +2876,7 @@ async function startHttpProxyServer(sandboxAskCallback) {
       if (address && typeof address === "object") {
         server.unref();
         logForDebugging(`HTTP proxy listening on localhost:${address.port}`);
-        resolve4(address.port);
+        resolve5(address.port);
       } else {
         reject(new Error("Failed to get proxy server address"));
       }
@@ -2889,14 +2889,14 @@ async function startSocksProxyServer(sandboxAskCallback) {
     filter: (port, host) => filterNetworkRequest(port, host, sandboxAskCallback),
     parentProxy
   });
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     if (!socksProxyServer) {
       reject(new Error("SOCKS proxy server undefined before listen"));
       return;
     }
     socksProxyServer.listen(0, "127.0.0.1").then((port) => {
       socksProxyServer?.unref();
-      resolve4(port);
+      resolve5(port);
     }).catch(reject);
   });
 }
@@ -3023,16 +3023,16 @@ function getFsWriteConfig() {
   if (!config) {
     return { allowOnly: getDefaultWritePaths(), denyWithinAllow: [] };
   }
-  const allowPaths = config.filesystem.allowWrite.map((path4) => removeTrailingGlobSuffix(path4)).filter((path4) => {
-    if (getPlatform() === "linux" && containsGlobChars(path4)) {
-      logForDebugging(`Skipping glob pattern on Linux/WSL: ${path4}`);
+  const allowPaths = config.filesystem.allowWrite.map((path6) => removeTrailingGlobSuffix(path6)).filter((path6) => {
+    if (getPlatform() === "linux" && containsGlobChars(path6)) {
+      logForDebugging(`Skipping glob pattern on Linux/WSL: ${path6}`);
       return false;
     }
     return true;
   });
-  const denyPaths = config.filesystem.denyWrite.map((path4) => removeTrailingGlobSuffix(path4)).filter((path4) => {
-    if (getPlatform() === "linux" && containsGlobChars(path4)) {
-      logForDebugging(`Skipping glob pattern on Linux/WSL: ${path4}`);
+  const denyPaths = config.filesystem.denyWrite.map((path6) => removeTrailingGlobSuffix(path6)).filter((path6) => {
+    if (getPlatform() === "linux" && containsGlobChars(path6)) {
+      logForDebugging(`Skipping glob pattern on Linux/WSL: ${path6}`);
       return false;
     }
     return true;
@@ -3228,10 +3228,10 @@ async function reset() {
       try {
         process.kill(httpBridgeProcess.pid, "SIGTERM");
         logForDebugging("Sent SIGTERM to HTTP bridge process");
-        exitPromises.push(new Promise((resolve4) => {
+        exitPromises.push(new Promise((resolve5) => {
           httpBridgeProcess.once("exit", () => {
             logForDebugging("HTTP bridge process exited");
-            resolve4();
+            resolve5();
           });
           setTimeout(() => {
             if (!httpBridgeProcess.killed) {
@@ -3245,7 +3245,7 @@ async function reset() {
               } catch {
               }
             }
-            resolve4();
+            resolve5();
           }, 5e3);
         }));
       } catch (err) {
@@ -3260,10 +3260,10 @@ async function reset() {
       try {
         process.kill(socksBridgeProcess.pid, "SIGTERM");
         logForDebugging("Sent SIGTERM to SOCKS bridge process");
-        exitPromises.push(new Promise((resolve4) => {
+        exitPromises.push(new Promise((resolve5) => {
           socksBridgeProcess.once("exit", () => {
             logForDebugging("SOCKS bridge process exited");
-            resolve4();
+            resolve5();
           });
           setTimeout(() => {
             if (!socksBridgeProcess.killed) {
@@ -3277,7 +3277,7 @@ async function reset() {
               } catch {
               }
             }
-            resolve4();
+            resolve5();
           }, 5e3);
         }));
       } catch (err) {
@@ -3313,14 +3313,14 @@ async function reset() {
   const closePromises = [];
   if (httpProxyServer) {
     const server = httpProxyServer;
-    const httpClose = new Promise((resolve4) => {
+    const httpClose = new Promise((resolve5) => {
       server.close((error) => {
         if (error && error.message !== "Server is not running.") {
           logForDebugging(`Error closing HTTP proxy server: ${error.message}`, {
             level: "error"
           });
         }
-        resolve4();
+        resolve5();
       });
     });
     closePromises.push(httpClose);
@@ -3368,10 +3368,10 @@ function getLinuxGlobPatternWarnings() {
     ...config.filesystem.allowWrite,
     ...config.filesystem.denyWrite
   ];
-  for (const path4 of allPaths) {
-    const pathWithoutTrailingStar = removeTrailingGlobSuffix(path4);
+  for (const path6 of allPaths) {
+    const pathWithoutTrailingStar = removeTrailingGlobSuffix(path6);
     if (containsGlobChars(pathWithoutTrailingStar)) {
-      globPatterns.push(path4);
+      globPatterns.push(path6);
     }
   }
   return globPatterns;
@@ -3882,8 +3882,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path4, errorMaps, issueData } = params;
-  const fullPath = [...path4, ...issueData.path || []];
+  const { data, path: path6, errorMaps, issueData } = params;
+  const fullPath = [...path6, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -3999,11 +3999,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path4, key) {
+  constructor(parent, value, path6, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path4;
+    this._path = path6;
     this._key = key;
   }
   get path() {
@@ -7526,7 +7526,7 @@ var SandboxRuntimeConfigSchema = external_exports.object({
 
 // src/index.ts
 import {
-  createBashToolDefinition,
+  createBashToolDefinition as createBashToolDefinition2,
   getAgentDir,
   getShellConfig,
   isToolCallEventType,
@@ -7534,6 +7534,1105 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 import fsPromises from "node:fs/promises";
+
+// ../bash-tool-coordinator.ts
+import {
+  createBashToolDefinition,
+  createLocalBashOperations
+} from "@earendil-works/pi-coding-agent";
+var STATE_KEY = /* @__PURE__ */ Symbol.for("pi.extensions.bashToolCoordinator");
+function getState() {
+  const globalRecord = globalThis;
+  globalRecord[STATE_KEY] ??= { plugins: /* @__PURE__ */ new Map() };
+  return globalRecord[STATE_KEY];
+}
+function orderedPlugins(state) {
+  return [...state.plugins.values()].sort(
+    (a, b) => (a.priority ?? 0) - (b.priority ?? 0) || a.id.localeCompare(b.id)
+  );
+}
+function composeOperations(state) {
+  let operations = createLocalBashOperations();
+  for (const plugin of orderedPlugins(state)) {
+    if (plugin.wrapOperations) operations = plugin.wrapOperations(operations);
+  }
+  return operations;
+}
+function composeRenderResult(state, baseRenderResult) {
+  let renderResult = baseRenderResult;
+  for (const plugin of orderedPlugins(state)) {
+    if (plugin.wrapRenderResult) renderResult = plugin.wrapRenderResult(renderResult);
+  }
+  return renderResult;
+}
+function createComposedBashTool(cwd, state) {
+  const base = createBashToolDefinition(cwd, { operations: composeOperations(state) });
+  if (!base.renderResult) return base;
+  return {
+    ...base,
+    renderResult: composeRenderResult(state, base.renderResult)
+  };
+}
+function registerWithCurrentOwner(state) {
+  if (!state.ownerPi || !state.cwd) return false;
+  try {
+    state.ownerPi.registerTool(createComposedBashTool(state.cwd, state));
+    return true;
+  } catch {
+    state.ownerPi = void 0;
+    state.cwd = void 0;
+    return false;
+  }
+}
+function registerBashToolPlugin(_pi, plugin) {
+  const state = getState();
+  state.plugins.set(plugin.id, plugin);
+  registerWithCurrentOwner(state);
+}
+function ensureBashToolRegistered(pi, cwd) {
+  const state = getState();
+  state.cwd = cwd;
+  if (!registerWithCurrentOwner(state)) {
+    state.ownerPi = pi;
+    state.cwd = cwd;
+    state.ownerPi.registerTool(createComposedBashTool(cwd, state));
+  }
+}
+
+// src/direct-linux-sandbox.ts
+import * as fs6 from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import path4 from "node:path";
+var DEFAULT_MANDATORY_DENY_SEARCH_DEPTH2 = 3;
+function findSymlinkInPath2(targetPath, allowedWritePaths) {
+  const parts = targetPath.split(path4.sep);
+  let currentPath = "";
+  for (const part of parts) {
+    if (!part) continue;
+    const nextPath = currentPath + path4.sep + part;
+    try {
+      const stats = fs6.lstatSync(nextPath);
+      if (stats.isSymbolicLink()) {
+        const isWithinAllowedPath = allowedWritePaths.some(
+          (allowedPath) => nextPath.startsWith(allowedPath + "/") || nextPath === allowedPath
+        );
+        if (isWithinAllowedPath) return nextPath;
+      }
+    } catch {
+      break;
+    }
+    currentPath = nextPath;
+  }
+  return null;
+}
+function hasFileAncestor2(targetPath) {
+  const parts = targetPath.split(path4.sep);
+  let currentPath = "";
+  for (const part of parts) {
+    if (!part) continue;
+    const nextPath = currentPath + path4.sep + part;
+    try {
+      const stat = fs6.statSync(nextPath);
+      if (stat.isFile() || stat.isSymbolicLink()) return true;
+    } catch {
+      break;
+    }
+    currentPath = nextPath;
+  }
+  return false;
+}
+function findFirstNonExistentComponent2(targetPath) {
+  const parts = targetPath.split(path4.sep);
+  let currentPath = "";
+  for (const part of parts) {
+    if (!part) continue;
+    const nextPath = currentPath + path4.sep + part;
+    if (!fs6.existsSync(nextPath)) return nextPath;
+    currentPath = nextPath;
+  }
+  return targetPath;
+}
+async function linuxGetMandatoryDenyPaths2(ripgrepConfig = { command: "rg" }, maxDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH2, allowGitConfig = false, abortSignal) {
+  const cwd = process.cwd();
+  const fallbackController = new AbortController();
+  const signal = abortSignal ?? fallbackController.signal;
+  const dangerousDirectories = getDangerousDirectories();
+  const denyPaths = [
+    ...DANGEROUS_FILES.map((fileName) => path4.resolve(cwd, fileName)),
+    ...dangerousDirectories.map((dirName) => path4.resolve(cwd, dirName))
+  ];
+  const dotGitPath = path4.resolve(cwd, ".git");
+  let dotGitIsDirectory = false;
+  try {
+    dotGitIsDirectory = fs6.statSync(dotGitPath).isDirectory();
+  } catch {
+  }
+  if (dotGitIsDirectory) {
+    denyPaths.push(path4.resolve(cwd, ".git/hooks"));
+    if (!allowGitConfig) denyPaths.push(path4.resolve(cwd, ".git/config"));
+  }
+  const iglobArgs = [];
+  for (const fileName of DANGEROUS_FILES) iglobArgs.push("--iglob", fileName);
+  for (const dirName of dangerousDirectories) iglobArgs.push("--iglob", `**/${dirName}/**`);
+  iglobArgs.push("--iglob", "**/.git/hooks/**");
+  if (!allowGitConfig) iglobArgs.push("--iglob", "**/.git/config");
+  let matches = [];
+  try {
+    matches = await ripGrep(
+      [
+        "--files",
+        "--hidden",
+        "--max-depth",
+        String(maxDepth),
+        ...iglobArgs,
+        "-g",
+        "!**/node_modules/**"
+      ],
+      cwd,
+      signal,
+      ripgrepConfig
+    );
+  } catch (error) {
+    logForDebugging(`[Sandbox] ripgrep scan failed: ${error}`);
+  }
+  for (const match of matches) {
+    const absolutePath = path4.resolve(cwd, match);
+    let foundDir = false;
+    for (const dirName of [...dangerousDirectories, ".git"]) {
+      const normalizedDirName = normalizeCaseForComparison(dirName);
+      const segments = absolutePath.split(path4.sep);
+      const dirIndex = segments.findIndex(
+        (segment) => normalizeCaseForComparison(segment) === normalizedDirName
+      );
+      if (dirIndex === -1) continue;
+      if (dirName === ".git") {
+        const gitDir = segments.slice(0, dirIndex + 1).join(path4.sep);
+        if (match.includes(".git/hooks")) denyPaths.push(path4.join(gitDir, "hooks"));
+        else if (match.includes(".git/config")) denyPaths.push(path4.join(gitDir, "config"));
+      } else {
+        denyPaths.push(segments.slice(0, dirIndex + 1).join(path4.sep));
+      }
+      foundDir = true;
+      break;
+    }
+    if (!foundDir) denyPaths.push(absolutePath);
+  }
+  return [...new Set(denyPaths)];
+}
+var directBwrapMountPoints = /* @__PURE__ */ new Set();
+var activeDirectSandboxCount = 0;
+var exitHandlerRegistered2 = false;
+function registerExitCleanupHandler2() {
+  if (exitHandlerRegistered2) return;
+  process.on("exit", () => cleanupDirectLinuxSandboxMountPoints({ force: true }));
+  exitHandlerRegistered2 = true;
+}
+function cleanupDirectLinuxSandboxMountPoints(opts) {
+  if (!opts?.force) {
+    if (activeDirectSandboxCount > 0) activeDirectSandboxCount--;
+    if (activeDirectSandboxCount > 0) {
+      logForDebugging(
+        `[Sandbox Linux] Deferring direct mount point cleanup \u2014 ${activeDirectSandboxCount} sandbox(es) still active`
+      );
+      return;
+    }
+  } else {
+    activeDirectSandboxCount = 0;
+  }
+  for (const mountPoint of directBwrapMountPoints) {
+    try {
+      const stat = fs6.statSync(mountPoint);
+      if (stat.isFile() && stat.size === 0) {
+        fs6.unlinkSync(mountPoint);
+        logForDebugging(
+          `[Sandbox Linux] Cleaned up direct bwrap mount point (file): ${mountPoint}`
+        );
+      } else if (stat.isDirectory()) {
+        const entries = fs6.readdirSync(mountPoint);
+        if (entries.length === 0) {
+          fs6.rmdirSync(mountPoint);
+          logForDebugging(
+            `[Sandbox Linux] Cleaned up direct bwrap mount point (dir): ${mountPoint}`
+          );
+        }
+      }
+    } catch {
+    }
+  }
+  directBwrapMountPoints.clear();
+}
+async function generateFilesystemArgs2(readConfig, writeConfig, ripgrepConfig = { command: "rg" }, mandatoryDenySearchDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH2, allowGitConfig = false, abortSignal) {
+  const args = [];
+  const allowedWritePaths = [];
+  const denyWriteArgs = [];
+  if (writeConfig) {
+    args.push("--ro-bind", "/", "/");
+    for (const pathPattern of writeConfig.allowOnly || []) {
+      const normalizedPath = normalizePathForSandbox(pathPattern);
+      logForDebugging(`[Sandbox Linux] Processing write path: ${pathPattern} -> ${normalizedPath}`);
+      if (normalizedPath.startsWith("/dev/")) {
+        logForDebugging(`[Sandbox Linux] Skipping /dev path: ${normalizedPath}`);
+        continue;
+      }
+      if (!fs6.existsSync(normalizedPath)) {
+        logForDebugging(`[Sandbox Linux] Skipping non-existent write path: ${normalizedPath}`);
+        continue;
+      }
+      try {
+        const resolvedPath = fs6.realpathSync(normalizedPath);
+        const normalizedForComparison = normalizedPath.replace(/\/+$/, "");
+        if (resolvedPath !== normalizedForComparison && isSymlinkOutsideBoundary(normalizedPath, resolvedPath)) {
+          logForDebugging(
+            `[Sandbox Linux] Skipping symlink write path pointing outside expected location: ${pathPattern} -> ${resolvedPath}`
+          );
+          continue;
+        }
+      } catch {
+        logForDebugging(
+          `[Sandbox Linux] Skipping write path that could not be resolved: ${normalizedPath}`
+        );
+        continue;
+      }
+      args.push("--bind", normalizedPath, normalizedPath);
+      allowedWritePaths.push(normalizedPath);
+    }
+    const denyPaths = [
+      ...writeConfig.denyWithinAllow || [],
+      ...await linuxGetMandatoryDenyPaths2(
+        ripgrepConfig,
+        mandatoryDenySearchDepth,
+        allowGitConfig,
+        abortSignal
+      )
+    ];
+    const seenDenyWrite = /* @__PURE__ */ new Set();
+    for (const pathPattern of denyPaths) {
+      const normalizedPath = normalizePathForSandbox(pathPattern);
+      if (seenDenyWrite.has(normalizedPath)) continue;
+      seenDenyWrite.add(normalizedPath);
+      if (normalizedPath.startsWith("/dev/")) continue;
+      const symlinkInPath = findSymlinkInPath2(normalizedPath, allowedWritePaths);
+      if (symlinkInPath) {
+        denyWriteArgs.push("--ro-bind", "/dev/null", symlinkInPath);
+        logForDebugging(
+          `[Sandbox Linux] Mounted /dev/null at symlink ${symlinkInPath} to prevent symlink replacement attack`
+        );
+        continue;
+      }
+      if (!fs6.existsSync(normalizedPath)) {
+        if (hasFileAncestor2(normalizedPath)) {
+          logForDebugging(
+            `[Sandbox Linux] Skipping deny path with file ancestor (cannot create paths under a file): ${normalizedPath}`
+          );
+          continue;
+        }
+        let ancestorPath = path4.dirname(normalizedPath);
+        while (ancestorPath !== "/" && !fs6.existsSync(ancestorPath)) {
+          ancestorPath = path4.dirname(ancestorPath);
+        }
+        const ancestorIsWithinAllowedPath = allowedWritePaths.some(
+          (allowedPath) => ancestorPath.startsWith(allowedPath + "/") || ancestorPath === allowedPath || normalizedPath.startsWith(allowedPath + "/")
+        );
+        if (ancestorIsWithinAllowedPath) {
+          const firstNonExistent = findFirstNonExistentComponent2(normalizedPath);
+          if (firstNonExistent !== normalizedPath) {
+            const emptyDir = fs6.mkdtempSync(path4.join(tmpdir2(), "claude-empty-"));
+            denyWriteArgs.push("--ro-bind", emptyDir, firstNonExistent);
+            directBwrapMountPoints.add(firstNonExistent);
+            registerExitCleanupHandler2();
+            logForDebugging(
+              `[Sandbox Linux] Mounted empty dir at ${firstNonExistent} to block creation of ${normalizedPath}`
+            );
+          } else {
+            denyWriteArgs.push("--ro-bind", "/dev/null", firstNonExistent);
+            directBwrapMountPoints.add(firstNonExistent);
+            registerExitCleanupHandler2();
+            logForDebugging(
+              `[Sandbox Linux] Mounted /dev/null at ${firstNonExistent} to block creation of ${normalizedPath}`
+            );
+          }
+        } else {
+          logForDebugging(
+            `[Sandbox Linux] Skipping non-existent deny path not within allowed paths: ${normalizedPath}`
+          );
+        }
+        continue;
+      }
+      const isWithinAllowedPath = allowedWritePaths.some(
+        (allowedPath) => normalizedPath.startsWith(allowedPath + "/") || normalizedPath === allowedPath
+      );
+      if (isWithinAllowedPath) denyWriteArgs.push("--ro-bind", normalizedPath, normalizedPath);
+      else
+        logForDebugging(
+          `[Sandbox Linux] Skipping deny path not within allowed paths: ${normalizedPath}`
+        );
+    }
+  } else {
+    args.push("--bind", "/", "/");
+  }
+  const readDenyPaths = [];
+  const readAllowPaths = (readConfig?.allowWithinDeny || []).map(
+    (pathPattern) => normalizePathForSandbox(pathPattern)
+  );
+  const maskedFiles = /* @__PURE__ */ new Set();
+  const rootSkip = /* @__PURE__ */ new Set(["proc", "dev", "sys"]);
+  for (const pathPattern of readConfig?.denyOnly || []) {
+    if (normalizePathForSandbox(pathPattern) === "/") {
+      for (const child of fs6.readdirSync("/")) {
+        if (!rootSkip.has(child)) readDenyPaths.push("/" + child);
+      }
+    } else {
+      readDenyPaths.push(pathPattern);
+    }
+  }
+  if (fs6.existsSync("/etc/ssh/ssh_config.d")) readDenyPaths.push("/etc/ssh/ssh_config.d");
+  const normalizedDenyPaths = readDenyPaths.map((pathPattern) => normalizePathForSandbox(pathPattern)).sort((a, b) => a.split("/").length - b.split("/").length);
+  for (const normalizedPath of normalizedDenyPaths) {
+    if (!fs6.existsSync(normalizedPath)) {
+      logForDebugging(`[Sandbox Linux] Skipping non-existent read deny path: ${normalizedPath}`);
+      continue;
+    }
+    const denySep = normalizedPath === "/" ? "/" : normalizedPath + "/";
+    const readDenyStat = fs6.statSync(normalizedPath);
+    if (readDenyStat.isDirectory()) {
+      args.push("--tmpfs", normalizedPath);
+      for (const writePath of allowedWritePaths) {
+        if (writePath.startsWith(denySep) || writePath === normalizedPath) {
+          args.push("--bind", writePath, writePath);
+          logForDebugging(
+            `[Sandbox Linux] Re-bound write path wiped by denyRead tmpfs: ${writePath}`
+          );
+        }
+      }
+      for (const allowPath of readAllowPaths) {
+        if (!(allowPath.startsWith(denySep) || allowPath === normalizedPath)) continue;
+        if (!fs6.existsSync(allowPath)) {
+          logForDebugging(`[Sandbox Linux] Skipping non-existent read allow path: ${allowPath}`);
+          continue;
+        }
+        if (allowedWritePaths.some(
+          (writePath) => (writePath.startsWith(denySep) || writePath === normalizedPath) && (allowPath === writePath || allowPath.startsWith(writePath + "/"))
+        )) {
+          continue;
+        }
+        args.push("--ro-bind", allowPath, allowPath);
+        logForDebugging(
+          `[Sandbox Linux] Re-allowed read access within denied region: ${allowPath}`
+        );
+      }
+    } else {
+      if (readAllowPaths.includes(normalizedPath)) {
+        logForDebugging(
+          `[Sandbox Linux] Skipping read deny for re-allowed path: ${normalizedPath}`
+        );
+        continue;
+      }
+      args.push("--ro-bind", "/dev/null", normalizedPath);
+      maskedFiles.add(normalizedPath);
+    }
+  }
+  for (let i = 0; i < denyWriteArgs.length; i += 3) {
+    const dest = denyWriteArgs[i + 2];
+    if (maskedFiles.has(dest)) continue;
+    args.push(denyWriteArgs[i], denyWriteArgs[i + 1], dest);
+  }
+  return args;
+}
+function resolveApplySeccompInvocation(applyPath, argv0) {
+  if (argv0) {
+    if (!applyPath) throw new Error("seccompConfig.argv0 requires seccompConfig.applyPath");
+    return { file: applyPath, argv0 };
+  }
+  const binary = getApplySeccompBinaryPath(applyPath);
+  return binary ? { file: binary } : void 0;
+}
+function buildNetworkCommandArgs(httpSocketPath, socksSocketPath, command, seccomp, shell) {
+  const script = [
+    'socat TCP-LISTEN:3128,fork,reuseaddr "UNIX-CONNECT:$1" >/dev/null 2>&1 &',
+    "http_pid=$!",
+    'socat TCP-LISTEN:1080,fork,reuseaddr "UNIX-CONNECT:$2" >/dev/null 2>&1 &',
+    "socks_pid=$!",
+    'cleanup() { kill "$http_pid" "$socks_pid" 2>/dev/null; }',
+    "trap cleanup EXIT",
+    'if [ -n "$4" ]; then',
+    '  if [ -n "$5" ]; then',
+    '    ARGV0="$5" "$4" "$3" -c "$6"',
+    "  else",
+    '    "$4" "$3" -c "$6"',
+    "  fi",
+    "else",
+    '  "$3" -c "$6"',
+    "fi",
+    "status=$?",
+    "exit $status"
+  ].join("\n");
+  return [
+    shell,
+    "-c",
+    script,
+    "pi-sandbox-network",
+    httpSocketPath,
+    socksSocketPath,
+    shell,
+    seccomp?.file ?? "",
+    seccomp?.argv0 ?? "",
+    command
+  ];
+}
+async function createDirectLinuxSandboxCommand(params) {
+  const {
+    command,
+    needsNetworkRestriction,
+    httpSocketPath,
+    socksSocketPath,
+    httpProxyPort,
+    socksProxyPort,
+    readConfig,
+    writeConfig,
+    enableWeakerNestedSandbox,
+    allowAllUnixSockets,
+    shell,
+    ripgrepConfig = { command: "rg" },
+    mandatoryDenySearchDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH2,
+    allowGitConfig = false,
+    seccompConfig,
+    abortSignal
+  } = params;
+  const hasReadRestrictions = readConfig && readConfig.denyOnly.length > 0;
+  const hasWriteRestrictions = writeConfig !== void 0;
+  if (!needsNetworkRestriction && !hasReadRestrictions && !hasWriteRestrictions) {
+    return { file: shell, args: ["-c", command] };
+  }
+  activeDirectSandboxCount++;
+  const bwrapArgs = ["--new-session", "--die-with-parent"];
+  let seccomp;
+  try {
+    if (!allowAllUnixSockets) {
+      seccomp = resolveApplySeccompInvocation(seccompConfig?.applyPath, seccompConfig?.argv0);
+      if (!seccomp) {
+        logForDebugging(
+          "[Sandbox Linux] apply-seccomp binary not available - unix socket blocking disabled. Install @anthropic-ai/sandbox-runtime globally for full protection.",
+          { level: "warn" }
+        );
+      } else {
+        logForDebugging("[Sandbox Linux] Applying seccomp filter for Unix socket blocking");
+      }
+    } else {
+      logForDebugging("[Sandbox Linux] Skipping seccomp filter - allowAllUnixSockets is enabled");
+    }
+    if (needsNetworkRestriction) {
+      bwrapArgs.push("--unshare-net");
+      if (httpSocketPath && socksSocketPath) {
+        if (!fs6.existsSync(httpSocketPath)) {
+          throw new Error(
+            `Linux HTTP bridge socket does not exist: ${httpSocketPath}. The bridge process may have died. Try reinitializing the sandbox.`
+          );
+        }
+        if (!fs6.existsSync(socksSocketPath)) {
+          throw new Error(
+            `Linux SOCKS bridge socket does not exist: ${socksSocketPath}. The bridge process may have died. Try reinitializing the sandbox.`
+          );
+        }
+        bwrapArgs.push("--bind", httpSocketPath, httpSocketPath);
+        bwrapArgs.push("--bind", socksSocketPath, socksSocketPath);
+        const proxyEnv = generateProxyEnvVars(3128, 1080);
+        bwrapArgs.push(
+          ...proxyEnv.flatMap((env) => {
+            const firstEq = env.indexOf("=");
+            const key = env.slice(0, firstEq);
+            const value = env.slice(firstEq + 1);
+            return ["--setenv", key, value];
+          })
+        );
+        if (httpProxyPort !== void 0) {
+          bwrapArgs.push("--setenv", "CLAUDE_CODE_HOST_HTTP_PROXY_PORT", String(httpProxyPort));
+        }
+        if (socksProxyPort !== void 0) {
+          bwrapArgs.push("--setenv", "CLAUDE_CODE_HOST_SOCKS_PROXY_PORT", String(socksProxyPort));
+        }
+      }
+    }
+    bwrapArgs.push(
+      ...await generateFilesystemArgs2(
+        readConfig,
+        writeConfig,
+        ripgrepConfig,
+        mandatoryDenySearchDepth,
+        allowGitConfig,
+        abortSignal
+      )
+    );
+    bwrapArgs.push("--dev", "/dev");
+    bwrapArgs.push("--unshare-pid");
+    if (!enableWeakerNestedSandbox) {
+      bwrapArgs.push("--proc", "/proc");
+    } else {
+      bwrapArgs.push("--unshare-user", "--bind", "/proc", "/proc");
+    }
+    const resolvedShell = whichSync(shell);
+    if (!resolvedShell) throw new Error(`Shell '${shell}' not found in PATH`);
+    if (needsNetworkRestriction && httpSocketPath && socksSocketPath) {
+      bwrapArgs.push(
+        "--",
+        ...buildNetworkCommandArgs(
+          httpSocketPath,
+          socksSocketPath,
+          command,
+          seccomp,
+          resolvedShell
+        )
+      );
+    } else if (seccomp) {
+      if (seccomp.argv0) bwrapArgs.push("--setenv", "ARGV0", seccomp.argv0);
+      bwrapArgs.push("--", seccomp.file, resolvedShell, "-c", command);
+    } else {
+      bwrapArgs.push("--", resolvedShell, "-c", command);
+    }
+    const restrictions = [];
+    if (needsNetworkRestriction) restrictions.push("network");
+    if (hasReadRestrictions || hasWriteRestrictions) restrictions.push("filesystem");
+    if (seccomp) restrictions.push("seccomp(unix-block)");
+    logForDebugging(
+      `[Sandbox Linux] Wrapped command with direct bwrap argv (${restrictions.join(", ")} restrictions)`
+    );
+    return { file: "bwrap", args: bwrapArgs, cleanup: cleanupDirectLinuxSandboxMountPoints };
+  } catch (error) {
+    if (activeDirectSandboxCount > 0) activeDirectSandboxCount--;
+    throw error;
+  }
+}
+
+// src/direct-macos-sandbox.ts
+import { spawn as spawn4 } from "node:child_process";
+import * as path5 from "node:path";
+var directSessionSuffix = `_${Math.random().toString(36).slice(2, 11)}_PI_SBX`;
+function generateLogTag2(command) {
+  return `CMD64_${encodeSandboxedCommand(command)}_END_${directSessionSuffix}`;
+}
+function macGetMandatoryDenyPatterns2(allowGitConfig = false) {
+  const cwd = process.cwd();
+  const denyPaths = [];
+  for (const fileName of DANGEROUS_FILES) {
+    denyPaths.push(path5.resolve(cwd, fileName));
+    denyPaths.push(`**/${fileName}`);
+  }
+  for (const dirName of getDangerousDirectories()) {
+    denyPaths.push(path5.resolve(cwd, dirName));
+    denyPaths.push(`**/${dirName}/**`);
+  }
+  denyPaths.push(path5.resolve(cwd, ".git/hooks"));
+  denyPaths.push("**/.git/hooks/**");
+  if (!allowGitConfig) {
+    denyPaths.push(path5.resolve(cwd, ".git/config"));
+    denyPaths.push("**/.git/config");
+  }
+  return [...new Set(denyPaths)];
+}
+function getAncestorDirectories2(pathStr) {
+  const ancestors = [];
+  let currentPath = path5.dirname(pathStr);
+  while (currentPath !== "/" && currentPath !== ".") {
+    ancestors.push(currentPath);
+    const parentPath = path5.dirname(currentPath);
+    if (parentPath === currentPath) break;
+    currentPath = parentPath;
+  }
+  return ancestors;
+}
+function escapePath2(pathStr) {
+  return JSON.stringify(pathStr);
+}
+function generateMoveBlockingRules2(pathPatterns, logTag) {
+  const rules = [];
+  const ops = ["file-write-unlink", "file-write-create"];
+  for (const pathPattern of pathPatterns) {
+    const normalizedPath = normalizePathForSandbox(pathPattern);
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath);
+      for (const op of ops) {
+        rules.push(
+          `(deny ${op}`,
+          `  (regex ${escapePath2(regexPattern)})`,
+          `  (with message "${logTag}"))`
+        );
+      }
+      const staticPrefix = normalizedPath.split(/[*?[\]]/)[0];
+      if (staticPrefix && staticPrefix !== "/") {
+        const baseDir = staticPrefix.endsWith("/") ? staticPrefix.slice(0, -1) : path5.dirname(staticPrefix);
+        for (const op of ops) {
+          rules.push(
+            `(deny ${op}`,
+            `  (literal ${escapePath2(baseDir)})`,
+            `  (with message "${logTag}"))`
+          );
+        }
+        for (const ancestorDir of getAncestorDirectories2(baseDir)) {
+          for (const op of ops) {
+            rules.push(
+              `(deny ${op}`,
+              `  (literal ${escapePath2(ancestorDir)})`,
+              `  (with message "${logTag}"))`
+            );
+          }
+        }
+      }
+    } else {
+      for (const op of ops) {
+        rules.push(
+          `(deny ${op}`,
+          `  (subpath ${escapePath2(normalizedPath)})`,
+          `  (with message "${logTag}"))`
+        );
+      }
+      for (const ancestorDir of getAncestorDirectories2(normalizedPath)) {
+        for (const op of ops) {
+          rules.push(
+            `(deny ${op}`,
+            `  (literal ${escapePath2(ancestorDir)})`,
+            `  (with message "${logTag}"))`
+          );
+        }
+      }
+    }
+  }
+  return rules;
+}
+function generateReadRules2(config2, logTag, writeAllowPaths) {
+  if (!config2) return ["(allow file-read*)"];
+  const rules = [];
+  let deniesRoot = false;
+  rules.push("(allow file-read*)");
+  for (const pathPattern of config2.denyOnly || []) {
+    const normalizedPath = normalizePathForSandbox(pathPattern);
+    if (normalizedPath === "/") deniesRoot = true;
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath);
+      rules.push(
+        "(deny file-read*",
+        `  (regex ${escapePath2(regexPattern)})`,
+        `  (with message "${logTag}"))`
+      );
+    } else {
+      rules.push(
+        "(deny file-read*",
+        `  (subpath ${escapePath2(normalizedPath)})`,
+        `  (with message "${logTag}"))`
+      );
+    }
+  }
+  if (deniesRoot) rules.push('(allow file-read* (literal "/"))');
+  for (const pathPattern of config2.allowWithinDeny || []) {
+    const normalizedPath = normalizePathForSandbox(pathPattern);
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath);
+      rules.push(
+        "(allow file-read*",
+        `  (regex ${escapePath2(regexPattern)})`,
+        `  (with message "${logTag}"))`
+      );
+    } else {
+      rules.push(
+        "(allow file-read*",
+        `  (subpath ${escapePath2(normalizedPath)})`,
+        `  (with message "${logTag}"))`
+      );
+    }
+  }
+  if (config2.denyOnly.length > 0) {
+    rules.push("(allow file-read-metadata", "  (vnode-type DIRECTORY))");
+  }
+  rules.push(...generateMoveBlockingRules2(config2.denyOnly || [], logTag));
+  if (writeAllowPaths && writeAllowPaths.length > 0) {
+    for (const pathPattern of writeAllowPaths) {
+      const normalizedPath = normalizePathForSandbox(pathPattern);
+      for (const op of ["file-write-unlink", "file-write-create"]) {
+        if (containsGlobChars(normalizedPath)) {
+          const regexPattern = globToRegex(normalizedPath);
+          rules.push(
+            `(allow ${op}`,
+            `  (regex ${escapePath2(regexPattern)})`,
+            `  (with message "${logTag}"))`
+          );
+        } else {
+          rules.push(
+            `(allow ${op}`,
+            `  (subpath ${escapePath2(normalizedPath)})`,
+            `  (with message "${logTag}"))`
+          );
+        }
+      }
+    }
+  }
+  return rules;
+}
+function generateWriteRules2(config2, logTag, allowGitConfig = false) {
+  if (!config2) return ["(allow file-write*)"];
+  const rules = [];
+  for (const pathPattern of config2.allowOnly || []) {
+    const normalizedPath = normalizePathForSandbox(pathPattern);
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath);
+      rules.push(
+        "(allow file-write*",
+        `  (regex ${escapePath2(regexPattern)})`,
+        `  (with message "${logTag}"))`
+      );
+    } else {
+      rules.push(
+        "(allow file-write*",
+        `  (subpath ${escapePath2(normalizedPath)})`,
+        `  (with message "${logTag}"))`
+      );
+    }
+  }
+  const denyPaths = [
+    ...config2.denyWithinAllow || [],
+    ...macGetMandatoryDenyPatterns2(allowGitConfig)
+  ];
+  for (const pathPattern of denyPaths) {
+    const normalizedPath = normalizePathForSandbox(pathPattern);
+    if (containsGlobChars(normalizedPath)) {
+      const regexPattern = globToRegex(normalizedPath);
+      rules.push(
+        "(deny file-write*",
+        `  (regex ${escapePath2(regexPattern)})`,
+        `  (with message "${logTag}"))`
+      );
+    } else {
+      rules.push(
+        "(deny file-write*",
+        `  (subpath ${escapePath2(normalizedPath)})`,
+        `  (with message "${logTag}"))`
+      );
+    }
+  }
+  rules.push(...generateMoveBlockingRules2(denyPaths, logTag));
+  return rules;
+}
+function generateSandboxProfile2({
+  readConfig,
+  writeConfig,
+  httpProxyPort,
+  socksProxyPort,
+  needsNetworkRestriction,
+  allowUnixSockets,
+  allowAllUnixSockets,
+  allowLocalBinding,
+  allowMachLookup,
+  allowPty,
+  allowBrowserProcess = false,
+  allowGitConfig = false,
+  enableWeakerNetworkIsolation = false,
+  logTag
+}) {
+  const profile = [
+    "(version 1)",
+    `(deny default (with message "${logTag}"))`,
+    "",
+    `; LogTag: ${logTag}`,
+    "",
+    "; Essential permissions - based on Chrome sandbox policy",
+    "; Process permissions",
+    "(allow process-exec)",
+    "(allow process-fork)",
+    "(allow process-info* (target same-sandbox))",
+    "(allow signal (target same-sandbox))",
+    "(allow mach-priv-task-port (target same-sandbox))",
+    "",
+    "; User preferences",
+    "(allow user-preference-read)",
+    "",
+    "; Mach IPC - specific services only (no wildcard)",
+    "(allow mach-lookup",
+    '  (global-name "com.apple.audio.systemsoundserver")',
+    '  (global-name "com.apple.distributed_notifications@Uv3")',
+    '  (global-name "com.apple.FontObjectsServer")',
+    '  (global-name "com.apple.fonts")',
+    '  (global-name "com.apple.logd")',
+    '  (global-name "com.apple.lsd.mapdb")',
+    '  (global-name "com.apple.PowerManagement.control")',
+    '  (global-name "com.apple.system.logger")',
+    '  (global-name "com.apple.system.notification_center")',
+    '  (global-name "com.apple.system.opendirectoryd.libinfo")',
+    '  (global-name "com.apple.system.opendirectoryd.membership")',
+    '  (global-name "com.apple.bsd.dirhelper")',
+    '  (global-name "com.apple.securityd.xpc")',
+    '  (global-name "com.apple.coreservices.launchservicesd")',
+    ")",
+    "",
+    ...enableWeakerNetworkIsolation ? [
+      "; trustd.agent - needed for Go TLS certificate verification (weaker network isolation)",
+      '(allow mach-lookup (global-name "com.apple.trustd.agent"))',
+      "; configd - needed for Rust/Go programs that query system proxy/network config (uv, cargo)",
+      '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))'
+    ] : [],
+    ...allowMachLookup && allowMachLookup.length > 0 ? [
+      "; User-specified XPC/Mach services",
+      ...allowMachLookup.map(
+        (name) => name.endsWith("*") ? `(allow mach-lookup (global-name-prefix ${escapePath2(name.slice(0, -1))}))` : `(allow mach-lookup (global-name ${escapePath2(name)}))`
+      )
+    ] : [],
+    "",
+    "; POSIX IPC - shared memory",
+    "(allow ipc-posix-shm)",
+    "",
+    "; POSIX IPC - semaphores for Python multiprocessing",
+    "(allow ipc-posix-sem)",
+    "",
+    "; IOKit - specific operations only",
+    "(allow iokit-open",
+    '  (iokit-registry-entry-class "IOSurfaceRootUserClient")',
+    '  (iokit-registry-entry-class "RootDomainUserClient")',
+    '  (iokit-user-client-class "IOSurfaceSendRight")',
+    ")",
+    "",
+    "; IOKit properties",
+    "(allow iokit-get-properties)",
+    "",
+    "; Specific safe system-sockets, doesn't allow network access",
+    "(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))",
+    "",
+    "; sysctl - specific sysctls only",
+    "(allow sysctl-read",
+    '  (sysctl-name "hw.activecpu")',
+    '  (sysctl-name "hw.busfrequency_compat")',
+    '  (sysctl-name "hw.byteorder")',
+    '  (sysctl-name "hw.cacheconfig")',
+    '  (sysctl-name "hw.cachelinesize_compat")',
+    '  (sysctl-name "hw.cpufamily")',
+    '  (sysctl-name "hw.cpufrequency")',
+    '  (sysctl-name "hw.cpufrequency_compat")',
+    '  (sysctl-name "hw.cputype")',
+    '  (sysctl-name "hw.l1dcachesize_compat")',
+    '  (sysctl-name "hw.l1icachesize_compat")',
+    '  (sysctl-name "hw.l2cachesize_compat")',
+    '  (sysctl-name "hw.l3cachesize_compat")',
+    '  (sysctl-name "hw.logicalcpu")',
+    '  (sysctl-name "hw.logicalcpu_max")',
+    '  (sysctl-name "hw.machine")',
+    '  (sysctl-name "hw.memsize")',
+    '  (sysctl-name "hw.ncpu")',
+    '  (sysctl-name "hw.nperflevels")',
+    '  (sysctl-name "hw.packages")',
+    '  (sysctl-name "hw.pagesize_compat")',
+    '  (sysctl-name "hw.pagesize")',
+    '  (sysctl-name "hw.physicalcpu")',
+    '  (sysctl-name "hw.physicalcpu_max")',
+    '  (sysctl-name "hw.tbfrequency_compat")',
+    '  (sysctl-name "hw.vectorunit")',
+    '  (sysctl-name "kern.argmax")',
+    '  (sysctl-name "kern.bootargs")',
+    '  (sysctl-name "kern.hostname")',
+    '  (sysctl-name "kern.maxfiles")',
+    '  (sysctl-name "kern.maxfilesperproc")',
+    '  (sysctl-name "kern.maxproc")',
+    '  (sysctl-name "kern.ngroups")',
+    '  (sysctl-name "kern.osproductversion")',
+    '  (sysctl-name "kern.osrelease")',
+    '  (sysctl-name "kern.ostype")',
+    '  (sysctl-name "kern.osvariant_status")',
+    '  (sysctl-name "kern.osversion")',
+    '  (sysctl-name "kern.secure_kernel")',
+    '  (sysctl-name "kern.tcsm_available")',
+    '  (sysctl-name "kern.tcsm_enable")',
+    '  (sysctl-name "kern.usrstack64")',
+    '  (sysctl-name "kern.version")',
+    '  (sysctl-name "kern.willshutdown")',
+    '  (sysctl-name "machdep.cpu.brand_string")',
+    '  (sysctl-name "machdep.ptrauth_enabled")',
+    '  (sysctl-name "security.mac.lockdown_mode_state")',
+    '  (sysctl-name "sysctl.proc_cputype")',
+    '  (sysctl-name "vm.loadavg")',
+    '  (sysctl-name-prefix "hw.optional.arm")',
+    '  (sysctl-name-prefix "hw.optional.arm.")',
+    '  (sysctl-name-prefix "hw.optional.armv8_")',
+    '  (sysctl-name-prefix "hw.perflevel")',
+    '  (sysctl-name-prefix "kern.proc.all")',
+    '  (sysctl-name-prefix "kern.proc.pgrp.")',
+    '  (sysctl-name-prefix "kern.proc.pid.")',
+    '  (sysctl-name-prefix "machdep.cpu.")',
+    '  (sysctl-name-prefix "net.routetable.")',
+    ")",
+    "",
+    "; V8 thread calculations",
+    "(allow sysctl-write",
+    '  (sysctl-name "kern.tcsm_enable")',
+    ")",
+    "",
+    "; Distributed notifications",
+    "(allow distributed-notification-post)",
+    "",
+    "; Specific mach-lookup permissions for security operations",
+    '(allow mach-lookup (global-name "com.apple.SecurityServer"))',
+    "",
+    "; File I/O on device files",
+    '(allow file-ioctl (literal "/dev/null"))',
+    '(allow file-ioctl (literal "/dev/zero"))',
+    '(allow file-ioctl (literal "/dev/random"))',
+    '(allow file-ioctl (literal "/dev/urandom"))',
+    '(allow file-ioctl (literal "/dev/dtracehelper"))',
+    '(allow file-ioctl (literal "/dev/tty"))',
+    "",
+    "(allow file-ioctl file-read-data file-write-data",
+    "  (require-all",
+    '    (literal "/dev/null")',
+    "    (vnode-type CHARACTER-DEVICE)",
+    "  )",
+    ")",
+    ""
+  ];
+  profile.push("; Network");
+  if (!needsNetworkRestriction) {
+    profile.push("(allow network*)");
+  } else {
+    if (allowLocalBinding) {
+      profile.push('(allow network-bind (local ip "*:*"))');
+      profile.push('(allow network-inbound (local ip "*:*"))');
+      profile.push('(allow network-outbound (local ip "*:*"))');
+    }
+    if (allowAllUnixSockets) {
+      profile.push("(allow system-socket (socket-domain AF_UNIX))");
+      profile.push('(allow network-bind (local unix-socket (path-regex #"^/")))');
+      profile.push('(allow network-outbound (remote unix-socket (path-regex #"^/")))');
+    } else if (allowUnixSockets && allowUnixSockets.length > 0) {
+      profile.push("(allow system-socket (socket-domain AF_UNIX))");
+      for (const socketPath of allowUnixSockets) {
+        const normalizedPath = normalizePathForSandbox(socketPath);
+        profile.push(
+          `(allow network-bind (local unix-socket (subpath ${escapePath2(normalizedPath)})))`
+        );
+        profile.push(
+          `(allow network-outbound (remote unix-socket (subpath ${escapePath2(normalizedPath)})))`
+        );
+      }
+    }
+    if (httpProxyPort !== void 0) {
+      profile.push(`(allow network-bind (local ip "localhost:${httpProxyPort}"))`);
+      profile.push(`(allow network-inbound (local ip "localhost:${httpProxyPort}"))`);
+      profile.push(`(allow network-outbound (remote ip "localhost:${httpProxyPort}"))`);
+    }
+    if (socksProxyPort !== void 0) {
+      profile.push(`(allow network-bind (local ip "localhost:${socksProxyPort}"))`);
+      profile.push(`(allow network-inbound (local ip "localhost:${socksProxyPort}"))`);
+      profile.push(`(allow network-outbound (remote ip "localhost:${socksProxyPort}"))`);
+    }
+  }
+  profile.push("");
+  profile.push("; File read");
+  profile.push(...generateReadRules2(readConfig, logTag, writeConfig?.allowOnly));
+  profile.push("");
+  profile.push("; File write");
+  profile.push(...generateWriteRules2(writeConfig, logTag, allowGitConfig));
+  if (allowPty) {
+    profile.push(
+      "",
+      "; Pseudo-terminal (pty) support",
+      "(allow pseudo-tty)",
+      "(allow file-ioctl",
+      '  (literal "/dev/ptmx")',
+      '  (regex #"^/dev/ttys")',
+      ")",
+      "(allow file-read* file-write*",
+      '  (literal "/dev/ptmx")',
+      '  (regex #"^/dev/ttys")',
+      ")"
+    );
+  }
+  if (allowBrowserProcess) {
+    profile.push(
+      "",
+      "; Browser process support (Chrome/Chromium)",
+      "; All Mach operations \u2014 Chrome requires bootstrap registration",
+      "; (Crashpad), service lookups (window server, CoreDisplay, GPU),",
+      "; task ports, and cross-domain lookups that vary by OS version",
+      "(allow mach*)",
+      "",
+      "; Process info for all processes \u2014 Chrome manages renderer, GPU,",
+      "; utility, and crashpad child processes outside the same sandbox",
+      "(allow process-info*)",
+      "",
+      "; Broader IOKit access \u2014 needed for GPU process and display management",
+      "(allow iokit-open)",
+      "",
+      "; Shared memory with non-sandboxed processes (e.g. renderer \u2194 GPU)",
+      "(allow ipc-posix-shm*)"
+    );
+  }
+  return profile.join("\n");
+}
+function createDirectMacSandboxCommand(params) {
+  const hasReadRestrictions = params.readConfig && params.readConfig.denyOnly.length > 0;
+  const hasWriteRestrictions = params.writeConfig !== void 0;
+  if (!params.needsNetworkRestriction && !hasReadRestrictions && !hasWriteRestrictions) {
+    return { file: params.shell, args: ["-c", params.command] };
+  }
+  const profile = generateSandboxProfile2({ ...params, logTag: generateLogTag2(params.command) });
+  return {
+    file: "env",
+    args: [
+      ...generateProxyEnvVars(params.httpProxyPort, params.socksProxyPort),
+      "sandbox-exec",
+      "-p",
+      profile,
+      params.shell,
+      "-c",
+      params.command
+    ]
+  };
+}
+function startDirectMacSandboxLogMonitor(callback, ignoreViolations) {
+  const cmdExtractRegex = /CMD64_(.+?)_END/;
+  const sandboxExtractRegex = /Sandbox:\s+(.+)$/;
+  const wildcardPaths = ignoreViolations?.["*"] || [];
+  const commandPatterns = ignoreViolations ? Object.entries(ignoreViolations).filter(([pattern]) => pattern !== "*") : [];
+  const logProcess = spawn4("log", [
+    "stream",
+    "--predicate",
+    `(eventMessage ENDSWITH "${directSessionSuffix}")`,
+    "--style",
+    "compact"
+  ]);
+  logProcess.stdout?.on("data", (data) => {
+    const lines = data.toString().split("\n");
+    const violationLine = lines.find(
+      (line) => line.includes("Sandbox:") && line.includes("deny")
+    );
+    const commandLine = lines.find((line) => line.startsWith("CMD64_"));
+    if (!violationLine) return;
+    const sandboxMatch = violationLine.match(sandboxExtractRegex);
+    if (!sandboxMatch?.[1]) return;
+    const violationDetails = sandboxMatch[1];
+    let command;
+    let encodedCommand;
+    if (commandLine) {
+      const cmdMatch = commandLine.match(cmdExtractRegex);
+      encodedCommand = cmdMatch?.[1];
+      if (encodedCommand) {
+        try {
+          command = decodeSandboxedCommand(encodedCommand);
+        } catch {
+        }
+      }
+    }
+    if (violationDetails.includes("mDNSResponder") || violationDetails.includes("mach-lookup com.apple.diagnosticd") || violationDetails.includes("mach-lookup com.apple.analyticsd")) {
+      return;
+    }
+    if (ignoreViolations && command) {
+      if (wildcardPaths.some((ignoredPath) => violationDetails.includes(ignoredPath))) return;
+      for (const [pattern, paths] of commandPatterns) {
+        if (command.includes(pattern) && paths.some((ignoredPath) => violationDetails.includes(ignoredPath))) {
+          return;
+        }
+      }
+    }
+    callback({ line: violationDetails, command, encodedCommand, timestamp: /* @__PURE__ */ new Date() });
+  });
+  logProcess.stderr?.on("data", () => {
+  });
+  return () => logProcess.kill("SIGTERM");
+}
+
+// src/index.ts
 var DEFAULT_CONFIG = {
   enabled: true,
   network: {
@@ -7566,7 +8665,7 @@ var READ_ONLY_LOCK_DENY_WRITE_PATHS = [
 ];
 var PROCESS_READ_ONLY_LOCK_ALLOW_WRITE_PATHS = [join4(homedir3(), ".pi", "agent")];
 var fsWriteApisPatched = false;
-var readOnlyWriteLockActive;
+var readOnlyWriteLockDeniesWrite;
 var writeLockBypassDepth = 0;
 function describeFsTarget(target) {
   if (typeof target === "string") return target;
@@ -7575,16 +8674,16 @@ function describeFsTarget(target) {
   return void 0;
 }
 function getFsTargetPath(target) {
-  if (typeof target === "string") return resolve3(target.replace(/^~(?=$|\/)/, homedir3()));
-  if (target instanceof URL && target.protocol === "file:") return resolve3(fileURLToPath2(target));
-  if (Buffer.isBuffer(target)) return resolve3(target.toString("utf8"));
+  if (typeof target === "string") return resolve4(target.replace(/^~(?=$|\/)/, homedir3()));
+  if (target instanceof URL && target.protocol === "file:") return resolve4(fileURLToPath2(target));
+  if (Buffer.isBuffer(target)) return resolve4(target.toString("utf8"));
   return void 0;
 }
 function isProcessWriteAllowedByPath(target) {
   const targetPath = getFsTargetPath(target);
   if (!targetPath) return false;
   return PROCESS_READ_ONLY_LOCK_ALLOW_WRITE_PATHS.some((allowedPath) => {
-    const resolvedAllowedPath = resolve3(allowedPath);
+    const resolvedAllowedPath = resolve4(allowedPath);
     return targetPath === resolvedAllowedPath || targetPath.startsWith(resolvedAllowedPath + "/");
   });
 }
@@ -7597,7 +8696,7 @@ function createReadOnlyWriteError(operation, target) {
   return error;
 }
 function assertProcessWriteAllowed(operation, target) {
-  if (writeLockBypassDepth === 0 && readOnlyWriteLockActive?.() && !isProcessWriteAllowedByPath(target)) {
+  if (writeLockBypassDepth === 0 && readOnlyWriteLockDeniesWrite?.(target)) {
     throw createReadOnlyWriteError(operation, target);
   }
 }
@@ -7620,7 +8719,7 @@ function runWithWriteLockBypass(fn) {
 function isWriteFlag(flags) {
   if (typeof flags === "number") {
     return Boolean(
-      flags & (fs6.constants.O_WRONLY | fs6.constants.O_RDWR | fs6.constants.O_APPEND | fs6.constants.O_CREAT | fs6.constants.O_TRUNC)
+      flags & (fs7.constants.O_WRONLY | fs7.constants.O_RDWR | fs7.constants.O_APPEND | fs7.constants.O_CREAT | fs7.constants.O_TRUNC)
     );
   }
   if (typeof flags !== "string") return false;
@@ -7661,10 +8760,10 @@ function patchCreateWriteStream(target) {
     }
   );
 }
-function patchFsWriteApis(isActive) {
-  readOnlyWriteLockActive = isActive;
+function patchFsWriteApis(deniesWrite) {
+  readOnlyWriteLockDeniesWrite = deniesWrite;
   if (fsWriteApisPatched) return;
-  const fsModule = fs6;
+  const fsModule = fs7;
   const fsPromisesModule = fsPromises;
   const pathMutations = [
     ["writeFile"],
@@ -7705,14 +8804,14 @@ function loadConfig(cwd) {
   const globalConfigPath = join4(getAgentDir(), "sandbox.json");
   let globalConfig = {};
   let projectConfig = {};
-  if (existsSync4(globalConfigPath)) {
+  if (existsSync5(globalConfigPath)) {
     try {
       globalConfig = JSON.parse(readFileSync2(globalConfigPath, "utf-8"));
     } catch (e) {
       console.error(`Warning: Could not parse ${globalConfigPath}: ${e}`);
     }
   }
-  if (existsSync4(projectConfigPath)) {
+  if (existsSync5(projectConfigPath)) {
     try {
       projectConfig = JSON.parse(readFileSync2(projectConfigPath, "utf-8"));
     } catch (e) {
@@ -7746,15 +8845,15 @@ function deepMerge(base, overrides) {
   }
   return result;
 }
-function shouldPromptForWrite(path4, allowWrite, matchesPattern2) {
-  return allowWrite.length === 0 || !matchesPattern2(path4, allowWrite);
+function shouldPromptForWrite(path6, allowWrite, matchesPattern2) {
+  return allowWrite.length === 0 || !matchesPattern2(path6, allowWrite);
 }
-function getReadBlockReason(path4, denyRead, allowRead, sessionAllowRead, matchesPattern2) {
-  if (matchesPattern2(path4, sessionAllowRead)) return null;
+function getReadBlockReason(path6, denyRead, allowRead, sessionAllowRead, matchesPattern2) {
+  if (matchesPattern2(path6, sessionAllowRead)) return null;
   if (allowRead.length > 0) {
-    return matchesPattern2(path4, allowRead) ? null : "allowRead";
+    return matchesPattern2(path6, allowRead) ? null : "allowRead";
   }
-  return matchesPattern2(path4, denyRead) ? "denyRead" : null;
+  return matchesPattern2(path6, denyRead) ? "denyRead" : null;
 }
 function normalizeNetworkHost(host) {
   const trimmed = host.trim().toLowerCase().replace(/\.$/, "");
@@ -7814,31 +8913,93 @@ function domainIsAllowed(domain, allowedDomains) {
 function createNetworkAskCallback(allowedDomains) {
   return async ({ host }) => domainIsAllowed(host, allowedDomains);
 }
-function extractBlockedWritePath(output) {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/
+var directMacSandboxViolations = [];
+var stopDirectMacSandboxLogMonitor;
+function rememberDirectMacSandboxViolation(violation) {
+  directMacSandboxViolations.push(violation);
+  if (directMacSandboxViolations.length > 100) {
+    directMacSandboxViolations.splice(0, directMacSandboxViolations.length - 100);
+  }
+}
+function getDirectMacSandboxViolationsForCommand(command) {
+  const encodedCommand = encodeSandboxedCommand(command);
+  return directMacSandboxViolations.filter(
+    (violation) => violation.command === command || violation.encodedCommand === encodedCommand
   );
-  return match ? match[1] : null;
+}
+function restartDirectMacSandboxLogMonitor(ignoreViolations) {
+  if (process.platform !== "darwin") return;
+  stopDirectMacSandboxLogMonitor?.();
+  directMacSandboxViolations.length = 0;
+  stopDirectMacSandboxLogMonitor = startDirectMacSandboxLogMonitor(
+    rememberDirectMacSandboxViolation,
+    ignoreViolations
+  );
+}
+function stopDirectMacSandboxMonitoring() {
+  stopDirectMacSandboxLogMonitor?.();
+  stopDirectMacSandboxLogMonitor = void 0;
+  directMacSandboxViolations.length = 0;
+}
+var SANDBOX_DENIAL_OUTPUT_PATTERN = /(?:Operation not permitted|Permission denied|Read-only file system)/i;
+function sleep(ms) {
+  return new Promise((resolve5) => setTimeout(resolve5, ms));
+}
+function bashOutputLooksLikeSandboxDenial(content) {
+  return content.some(
+    (part) => part.type === "text" && typeof part.text === "string" && SANDBOX_DENIAL_OUTPUT_PATTERN.test(part.text)
+  );
+}
+function getSandboxViolationsForCommand(command) {
+  return [
+    ...SandboxManager.getSandboxViolationStore?.().getViolationsForCommand(command) ?? [],
+    ...getDirectMacSandboxViolationsForCommand(command)
+  ];
+}
+function parseSandboxFilesystemViolationLine(line) {
+  const match = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
+  if (!match) return null;
+  let path6 = match[3].trim();
+  if (path6.startsWith('"') && path6.endsWith('"') || path6.startsWith("'") && path6.endsWith("'")) {
+    path6 = path6.slice(1, -1);
+  }
+  if (!path6.startsWith("/")) return null;
+  return { path: path6, access: match[2] };
+}
+function getSandboxFilesystemViolationForCommand(command) {
+  for (const violation of getSandboxViolationsForCommand(command)) {
+    const filesystemViolation = parseSandboxFilesystemViolationLine(violation.line);
+    if (filesystemViolation) return filesystemViolation;
+  }
+  return null;
+}
+async function waitForSandboxFilesystemViolationForCommand(command) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(50);
+    const violation = getSandboxFilesystemViolationForCommand(command);
+    if (violation) return violation;
+  }
+  return null;
 }
 function expandPath(filePath) {
   const expanded = filePath.replace(/^~(?=$|\/)/, homedir3());
-  return resolve3(expanded);
+  return resolve4(expanded);
 }
 function canonicalizePath(filePath) {
   const abs = expandPath(filePath);
   try {
-    return realpathSync3.native(abs);
+    return realpathSync4.native(abs);
   } catch {
     const tail = [];
     let probe = abs;
-    while (!existsSync4(probe)) {
-      const parent = dirname4(probe);
+    while (!existsSync5(probe)) {
+      const parent = dirname5(probe);
       if (parent === probe) return abs;
       tail.unshift(basename(probe));
       probe = parent;
     }
     try {
-      return resolve3(realpathSync3.native(probe), ...tail);
+      return resolve4(realpathSync4.native(probe), ...tail);
     } catch {
       return abs;
     }
@@ -7863,7 +9024,7 @@ function getConfigPaths(cwd) {
   };
 }
 function readOrEmptyConfig(configPath) {
-  if (!existsSync4(configPath)) return {};
+  if (!existsSync5(configPath)) return {};
   try {
     return JSON.parse(readFileSync2(configPath, "utf-8"));
   } catch {
@@ -7872,7 +9033,7 @@ function readOrEmptyConfig(configPath) {
 }
 function writeConfigFile(configPath, config2) {
   runWithWriteLockBypass(() => {
-    mkdirSync(dirname4(configPath), { recursive: true });
+    mkdirSync(dirname5(configPath), { recursive: true });
     writeFileSync(configPath, JSON.stringify(config2, null, 2) + "\n", "utf-8");
   });
 }
@@ -7915,65 +9076,136 @@ function addWritePathToConfig(configPath, pathToAdd) {
     writeConfigFile(configPath, config2);
   }
 }
-function createSandboxedBashOps(shellPath) {
+function execSpawnedCommand(file, args, cwd, { onData, signal, timeout, env }, cleanup) {
+  return new Promise((resolve5, reject) => {
+    const child = spawn5(file, args, {
+      cwd,
+      env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let timedOut = false;
+    let timeoutHandle;
+    let cleanupDone = false;
+    const cleanupAfterSpawn = () => {
+      if (cleanupDone) return;
+      cleanupDone = true;
+      try {
+        cleanup?.();
+      } catch {
+      }
+      try {
+        SandboxManager.cleanupAfterCommand();
+      } catch {
+      }
+    };
+    if (timeout !== void 0 && timeout > 0) {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child.kill("SIGKILL");
+          }
+        }
+      }, timeout * 1e3);
+    }
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.on("error", (err) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      cleanupAfterSpawn();
+      reject(err);
+    });
+    const onAbort = () => {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("close", (code) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onAbort);
+      cleanupAfterSpawn();
+      if (signal?.aborted) {
+        reject(new Error("aborted"));
+      } else if (timedOut) {
+        reject(new Error(`timeout:${timeout}`));
+      } else {
+        resolve5({ exitCode: code });
+      }
+    });
+  });
+}
+function createSandboxedBashOps(shellPath, fallback, isEnabled = () => SandboxManager.isSandboxingEnabled()) {
   return {
-    async exec(command, cwd, { onData, signal, timeout, env }) {
-      if (!existsSync4(cwd)) {
+    async exec(command, cwd, options) {
+      if (!existsSync5(cwd)) {
         throw new Error(`Working directory does not exist: ${cwd}`);
       }
-      const wrappedCommand = await runWithWriteLockBypass(
-        () => SandboxManager.wrapWithSandbox(command)
-      );
       const { shell, args } = getShellConfig(shellPath);
-      return new Promise((resolve4, reject) => {
-        const child = spawn4(shell, [...args, wrappedCommand], {
+      if (!isEnabled() || !SandboxManager.isSandboxingEnabled()) {
+        if (fallback) return fallback.exec(command, cwd, options);
+        return execSpawnedCommand(shell, [...args, command], cwd, options);
+      }
+      if (process.platform === "darwin") {
+        const runtimeConfig = SandboxManager.getConfig();
+        const commandSpec = createDirectMacSandboxCommand({
+          command,
+          shell,
+          needsNetworkRestriction: runtimeConfig?.network?.allowedDomains !== void 0,
+          httpProxyPort: SandboxManager.getProxyPort(),
+          socksProxyPort: SandboxManager.getSocksProxyPort(),
+          allowUnixSockets: runtimeConfig?.network?.allowUnixSockets,
+          allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
+          allowLocalBinding: runtimeConfig?.network?.allowLocalBinding,
+          allowMachLookup: runtimeConfig?.network?.allowMachLookup,
+          readConfig: SandboxManager.getFsReadConfig(),
+          writeConfig: SandboxManager.getFsWriteConfig(),
+          allowPty: runtimeConfig?.allowPty,
+          allowBrowserProcess: runtimeConfig?.allowBrowserProcess,
+          allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
+          enableWeakerNetworkIsolation: runtimeConfig?.enableWeakerNetworkIsolation
+        });
+        return execSpawnedCommand(commandSpec.file, commandSpec.args, cwd, options);
+      }
+      if (process.platform === "linux") {
+        const runtimeConfig = SandboxManager.getConfig();
+        const needsNetworkRestriction = runtimeConfig?.network?.allowedDomains !== void 0;
+        if (needsNetworkRestriction) await SandboxManager.waitForNetworkInitialization();
+        const commandSpec = await createDirectLinuxSandboxCommand({
+          command,
+          shell,
+          needsNetworkRestriction,
+          httpSocketPath: needsNetworkRestriction ? SandboxManager.getLinuxHttpSocketPath() : void 0,
+          socksSocketPath: needsNetworkRestriction ? SandboxManager.getLinuxSocksSocketPath() : void 0,
+          httpProxyPort: needsNetworkRestriction ? SandboxManager.getProxyPort() : void 0,
+          socksProxyPort: needsNetworkRestriction ? SandboxManager.getSocksProxyPort() : void 0,
+          readConfig: SandboxManager.getFsReadConfig(),
+          writeConfig: SandboxManager.getFsWriteConfig(),
+          enableWeakerNestedSandbox: runtimeConfig?.enableWeakerNestedSandbox,
+          allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
+          ripgrepConfig: runtimeConfig?.ripgrep,
+          mandatoryDenySearchDepth: runtimeConfig?.mandatoryDenySearchDepth,
+          allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
+          seccompConfig: runtimeConfig?.seccomp,
+          abortSignal: options.signal
+        });
+        return execSpawnedCommand(
+          commandSpec.file,
+          commandSpec.args,
           cwd,
-          env,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"]
-        });
-        let timedOut = false;
-        let timeoutHandle;
-        if (timeout !== void 0 && timeout > 0) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            if (child.pid) {
-              try {
-                process.kill(-child.pid, "SIGKILL");
-              } catch {
-                child.kill("SIGKILL");
-              }
-            }
-          }, timeout * 1e3);
-        }
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
-        child.on("error", (err) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          reject(err);
-        });
-        const onAbort = () => {
-          if (child.pid) {
-            try {
-              process.kill(-child.pid, "SIGKILL");
-            } catch {
-              child.kill("SIGKILL");
-            }
-          }
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-        child.on("close", (code) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          signal?.removeEventListener("abort", onAbort);
-          if (signal?.aborted) {
-            reject(new Error("aborted"));
-          } else if (timedOut) {
-            reject(new Error(`timeout:${timeout}`));
-          } else {
-            resolve4({ exitCode: code });
-          }
-        });
-      });
+          options,
+          commandSpec.cleanup
+        );
+      }
+      const directCommand = [shell, ...args, command];
+      return execSpawnedCommand(directCommand[0], directCommand.slice(1), cwd, options);
     }
   };
 }
@@ -7985,31 +9217,66 @@ function index_default(pi) {
   });
   const localCwd = process.cwd();
   const userShellPath = SettingsManager.create(localCwd).getShellPath();
-  const localBash = createBashToolDefinition(localCwd, { shellPath: userShellPath });
   let sandboxEnabled = true;
   let sandboxInitialized = false;
   const sessionAllowedDomains = [];
   const sessionAllowedReadPaths = [];
   const sessionAllowedWritePaths = [];
-  const readOnlyWriteLocks = /* @__PURE__ */ new Set();
+  const pendingSandboxedBash = /* @__PURE__ */ new Map();
+  const readOnlyWriteLocks = /* @__PURE__ */ new Map();
   let lastStatusContext;
+  registerBashToolPlugin(pi, {
+    id: "pi-sandbox",
+    priority: -100,
+    wrapOperations: (next) => createSandboxedBashOps(userShellPath, next, () => sandboxEnabled && sandboxInitialized)
+  });
   function uniqueStrings(values) {
     return [...new Set(values)];
   }
   function isReadOnlyWriteLocked() {
     return readOnlyWriteLocks.size > 0;
   }
-  patchFsWriteApis(() => sandboxEnabled && isReadOnlyWriteLocked());
+  function hasGlobalReadOnlyWriteLock() {
+    return [...readOnlyWriteLocks.values()].some((lock) => lock.scope === "global");
+  }
+  function getScopedReadOnlyWriteLockPaths() {
+    return uniqueStrings(
+      [...readOnlyWriteLocks.values()].filter((lock) => lock.scope === "cwd").map((lock) => lock.cwd)
+    );
+  }
+  function matchesReadOnlyWriteLock(filePath) {
+    if (!isReadOnlyWriteLocked()) return false;
+    if (hasGlobalReadOnlyWriteLock()) return true;
+    const lockedPaths = getScopedReadOnlyWriteLockPaths();
+    return lockedPaths.length > 0 && matchesPattern(filePath, lockedPaths);
+  }
+  function isProcessWriteDeniedByReadOnlyLock(target) {
+    if (!sandboxEnabled || !isReadOnlyWriteLocked()) return false;
+    if (hasGlobalReadOnlyWriteLock()) return !isProcessWriteAllowedByPath(target);
+    const targetPath = getFsTargetPath(target);
+    return targetPath !== void 0 && matchesReadOnlyWriteLock(targetPath);
+  }
+  function getReadOnlyWriteLockSignature() {
+    return [...readOnlyWriteLocks].map(([owner, lock]) => `${owner}:${lock.scope}:${lock.cwd}`).sort().join("|");
+  }
+  function describeReadOnlyWriteLocks() {
+    if (readOnlyWriteLocks.size === 0) return "(none)";
+    return [...readOnlyWriteLocks].map(([owner, lock]) => `${owner}:${lock.scope === "cwd" ? lock.cwd : "global"}`).join(", ");
+  }
+  patchFsWriteApis((target) => isProcessWriteDeniedByReadOnlyLock(target));
   function applyReadOnlyWriteLock(config2) {
     if (!isReadOnlyWriteLocked()) return config2;
+    const scopedDenyWrite = getScopedReadOnlyWriteLockPaths();
+    const globalLocked = hasGlobalReadOnlyWriteLock();
     return {
       ...config2,
       filesystem: {
         ...config2.filesystem,
-        allowWrite: [],
+        allowWrite: globalLocked ? [] : config2.filesystem?.allowWrite ?? [],
         denyWrite: uniqueStrings([
           ...config2.filesystem?.denyWrite ?? [],
-          ...READ_ONLY_LOCK_DENY_WRITE_PATHS
+          ...scopedDenyWrite,
+          ...globalLocked ? READ_ONLY_LOCK_DENY_WRITE_PATHS : []
         ])
       }
     };
@@ -8039,47 +9306,49 @@ function index_default(pi) {
     }
     const config2 = getEffectiveConfig(ctx.cwd);
     const networkLabel = allowsAllDomains(config2.network?.allowedDomains) ? "all domains" : `${config2.network?.allowedDomains?.length ?? 0} domains`;
-    const writeLabel = isReadOnlyWriteLocked() ? `read-only (${readOnlyWriteLocks.size} lock${readOnlyWriteLocks.size === 1 ? "" : "s"})` : `${config2.filesystem?.allowWrite?.length ?? 0} write paths`;
+    const lockScopeLabel = hasGlobalReadOnlyWriteLock() ? "read-only" : "cwd write lock";
+    const writeLabel = isReadOnlyWriteLocked() ? `${lockScopeLabel} (${readOnlyWriteLocks.size} lock${readOnlyWriteLocks.size === 1 ? "" : "s"})` : `${config2.filesystem?.allowWrite?.length ?? 0} write paths`;
     ctx.ui.setStatus(
       "sandbox",
       ctx.ui.theme.fg("accent", `\u{1F512} Sandbox: ${networkLabel}, ${writeLabel}`)
     );
   }
-  async function setReadOnlyWriteLock(enabled, owner, cwd) {
+  async function setReadOnlyWriteLock(enabled, owner, cwd, scope) {
     const availability = canUseSandbox(cwd);
     if (!availability.ok) {
       readOnlyWriteLocks.delete(owner);
       return { accepted: false, active: false, reason: availability.reason };
     }
-    const wasLocked = isReadOnlyWriteLocked();
+    const previousLockSignature = getReadOnlyWriteLockSignature();
     if (enabled) {
-      readOnlyWriteLocks.add(owner);
+      readOnlyWriteLocks.set(owner, { scope, cwd: canonicalizePath(cwd) });
     } else {
       readOnlyWriteLocks.delete(owner);
     }
     const active = isReadOnlyWriteLocked();
-    if (sandboxInitialized && wasLocked !== active) {
+    if (sandboxInitialized && previousLockSignature !== getReadOnlyWriteLockSignature()) {
       await reinitializeSandbox(cwd);
     }
     if (lastStatusContext) updateSandboxStatus(lastStatusContext);
     return {
       accepted: true,
       active,
-      reason: active ? `read-only write lock active: ${[...readOnlyWriteLocks].join(", ")}` : void 0
+      reason: active ? `write lock active: ${describeReadOnlyWriteLocks()}` : void 0
     };
   }
   pi.events.on("pi-sandbox:set-read-only-lock", (data) => {
     const request = data;
     const owner = request.owner || "unknown";
     const cwd = request.cwd || localCwd;
-    request.respond?.(setReadOnlyWriteLock(request.enabled === true, owner, cwd));
+    const scope = request.scope === "cwd" ? "cwd" : "global";
+    request.respond?.(setReadOnlyWriteLock(request.enabled === true, owner, cwd, scope));
   });
   function getEffectiveAllowedDomains(cwd) {
     const config2 = getEffectiveConfig(cwd);
     return [...config2.network?.allowedDomains ?? [], ...sessionAllowedDomains];
   }
   function getEffectiveAllowWrite(cwd) {
-    if (isReadOnlyWriteLocked()) return [];
+    if (hasGlobalReadOnlyWriteLock()) return [];
     const config2 = getEffectiveConfig(cwd);
     return [...config2.filesystem?.allowWrite ?? [], ...sessionAllowedWritePaths];
   }
@@ -8111,8 +9380,10 @@ function index_default(pi) {
             allowBrowserProcess: configExt.allowBrowserProcess,
             enableWeakerNetworkIsolation: true
           },
-          createNetworkAskCallback(network.allowedDomains)
+          createNetworkAskCallback(network.allowedDomains),
+          true
         );
+        restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
       });
     } catch (e) {
       console.error(`Warning: Failed to reinitialize sandbox: ${e}`);
@@ -8142,7 +9413,7 @@ function index_default(pi) {
       (tui, theme, _kb, done) => {
         let selectedIndex = 0;
         let pendingAction = null;
-        function resolve4(action) {
+        function resolve5(action) {
           done(action);
         }
         return {
@@ -8173,14 +9444,14 @@ function index_default(pi) {
           },
           handleInput(data) {
             if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-              resolve4("abort");
+              resolve5("abort");
               return;
             }
             if (matchesKey(data, Key.enter)) {
               if (pendingAction) {
-                resolve4(pendingAction);
+                resolve5(pendingAction);
               } else {
-                resolve4(options[selectedIndex]?.action ?? "abort");
+                resolve5(options[selectedIndex]?.action ?? "abort");
               }
               return;
             }
@@ -8199,7 +9470,7 @@ function index_default(pi) {
             for (let i = 0; i < options.length; i++) {
               const opt = options[i];
               if (data === opt.key) {
-                resolve4(opt.action);
+                resolve5(opt.action);
                 return;
               }
               if (data.toLowerCase() === opt.key.toLowerCase()) {
@@ -8207,7 +9478,7 @@ function index_default(pi) {
                   pendingAction = opt.action;
                   selectedIndex = i;
                 } else {
-                  resolve4(opt.action);
+                  resolve5(opt.action);
                 }
                 tui.requestRender();
                 return;
@@ -8264,74 +9535,31 @@ function index_default(pi) {
     if (choice === "global") addWritePathToConfig(globalPath, filePath);
     await reinitializeSandbox(cwd);
   }
-  pi.registerTool({
-    ...localBash,
-    label: "bash (sandboxed)",
-    async execute(id, params, signal, onUpdate, ctx) {
-      const runBash = () => {
-        if (!sandboxEnabled || !sandboxInitialized) {
-          return localBash.execute(id, params, signal, onUpdate, ctx);
-        }
-        const sandboxedBash = createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(userShellPath),
-          shellPath: userShellPath
-        });
-        return sandboxedBash.execute(id, params, signal, onUpdate, ctx);
+  async function retrySandboxedBash(toolCallId, params, ctx) {
+    const sandboxedBash = createBashToolDefinition2(ctx.cwd, {
+      operations: createSandboxedBashOps(userShellPath),
+      shellPath: userShellPath
+    });
+    try {
+      const result = await sandboxedBash.execute(toolCallId, params, ctx.signal, void 0, ctx);
+      return {
+        content: result.content,
+        details: result.details,
+        isError: false
       };
-      let result;
-      try {
-        result = await runBash();
-      } catch (e) {
-        if (!(e instanceof Error)) throw e;
-        if (!e.message.includes("Operation not permitted")) throw e;
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Error: Command failed with OS-level sandbox restriction: ${e.message}`
-            }
-          ],
-          details: {}
-        };
-      }
-      if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
-        const outputText = result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
-        const blockedPath = extractBlockedWritePath(outputText);
-        if (blockedPath) {
-          if (isReadOnlyWriteLocked()) return result;
-          const choice = await promptWriteBlock(ctx, blockedPath);
-          if (choice !== "abort") {
-            await applyWriteChoice(choice, blockedPath, ctx.cwd);
-            const config2 = getEffectiveConfig(ctx.cwd);
-            const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
-            if (matchesPattern(blockedPath, config2.filesystem?.denyWrite ?? [])) {
-              ctx.ui.notify(
-                `\u26A0\uFE0F "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.
-Check denyWrite in:
-  ${projectPath}
-  ${globalPath}`,
-                "warning"
-              );
-              return result;
-            }
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `
---- Write access granted for "${blockedPath}", retrying ---
-`
-                }
-              ],
-              details: {}
-            });
-            return runBash();
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: error instanceof Error ? error.message : String(error)
           }
-        }
-      }
-      return result;
+        ],
+        details: void 0,
+        isError: true
+      };
     }
-  });
+  }
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;
     const domains = extractDomainsFromCommand(event.command);
@@ -8352,7 +9580,13 @@ Check denyWrite in:
         await applyDomainChoice(choice, domain, ctx.cwd);
       }
     }
-    return { operations: createSandboxedBashOps(userShellPath) };
+    return {
+      operations: createSandboxedBashOps(
+        userShellPath,
+        void 0,
+        () => sandboxEnabled && sandboxInitialized
+      )
+    };
   });
   pi.on("tool_call", async (event, ctx) => {
     if (!sandboxEnabled) return;
@@ -8360,7 +9594,8 @@ Check denyWrite in:
     if (!config2.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
     if (sandboxInitialized && isToolCallEventType("bash", event)) {
-      const domains = extractDomainsFromCommand(event.input.command);
+      const originalCommand = event.input.command;
+      const domains = extractDomainsFromCommand(originalCommand);
       const effectiveDomains = getEffectiveAllowedDomains(ctx.cwd);
       for (const domain of domains) {
         if (!domainIsAllowed(domain, effectiveDomains)) {
@@ -8374,6 +9609,11 @@ Check denyWrite in:
           await applyDomainChoice(choice, domain, ctx.cwd);
         }
       }
+      pendingSandboxedBash.set(event.toolCallId, {
+        command: originalCommand,
+        timeout: event.input.timeout
+      });
+      return;
     }
     if (isToolCallEventType("read", event)) {
       const filePath = canonicalizePath(event.input.path);
@@ -8396,31 +9636,31 @@ Check denyWrite in:
         return;
       }
     }
-    if (isReadOnlyWriteLocked()) {
-      if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-        const path4 = canonicalizePath(event.input.path);
+    if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
+      const path6 = canonicalizePath(event.input.path);
+      if (matchesReadOnlyWriteLock(path6)) {
         return {
           block: true,
-          reason: `Sandbox read-only lock: write access denied for "${path4}"`
+          reason: `Sandbox read-only lock: write access denied for "${path6}"`
         };
       }
     }
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-      const path4 = canonicalizePath(event.input.path);
+      const path6 = canonicalizePath(event.input.path);
       const allowWrite = getEffectiveAllowWrite(ctx.cwd);
       const denyWrite = config2.filesystem?.denyWrite ?? [];
-      if (shouldPromptForWrite(path4, allowWrite, matchesPattern)) {
-        const choice = await promptWriteBlock(ctx, path4);
+      if (shouldPromptForWrite(path6, allowWrite, matchesPattern)) {
+        const choice = await promptWriteBlock(ctx, path6);
         if (choice === "abort") {
           return {
             block: true,
-            reason: `Sandbox: write access denied for "${path4}" (not in allowWrite)`
+            reason: `Sandbox: write access denied for "${path6}" (not in allowWrite)`
           };
         }
-        await applyWriteChoice(choice, path4, ctx.cwd);
-        if (matchesPattern(path4, denyWrite)) {
+        await applyWriteChoice(choice, path6, ctx.cwd);
+        if (matchesPattern(path6, denyWrite)) {
           ctx.ui.notify(
-            `\u26A0\uFE0F "${path4}" was added to allowWrite, but it is also in denyWrite and will remain blocked.
+            `\u26A0\uFE0F "${path6}" was added to allowWrite, but it is also in denyWrite and will remain blocked.
 Check denyWrite in:
   ${projectPath}
   ${globalPath}`,
@@ -8428,26 +9668,97 @@ Check denyWrite in:
           );
           return {
             block: true,
-            reason: `Sandbox: write access denied for "${path4}" (also in denyWrite)`
+            reason: `Sandbox: write access denied for "${path6}" (also in denyWrite)`
           };
         }
         return;
       }
-      if (matchesPattern(path4, denyWrite)) {
+      if (matchesPattern(path6, denyWrite)) {
         return {
           block: true,
-          reason: `Sandbox: write access denied for "${path4}" (in denyWrite). To change this, edit denyWrite in:
+          reason: `Sandbox: write access denied for "${path6}" (in denyWrite). To change this, edit denyWrite in:
   ${projectPath}
   ${globalPath}`
         };
       }
     }
   });
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sandboxEnabled || !sandboxInitialized) return;
+    if (event.toolName !== "bash") return;
+    if (!event.isError) return;
+    const original = pendingSandboxedBash.get(event.toolCallId);
+    pendingSandboxedBash.delete(event.toolCallId);
+    if (!original) return;
+    let violation = getSandboxFilesystemViolationForCommand(original.command);
+    if (!violation) {
+      if (!bashOutputLooksLikeSandboxDenial(event.content)) return;
+      violation = await waitForSandboxFilesystemViolationForCommand(original.command);
+    }
+    if (!violation) return;
+    const blockedPath = canonicalizePath(violation.path);
+    const deniedResult = (reason) => ({
+      content: [
+        ...event.content,
+        {
+          type: "text",
+          text: reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`
+        }
+      ],
+      details: event.details,
+      isError: true
+    });
+    if (!ctx.hasUI || violation.access === "write" && matchesReadOnlyWriteLock(blockedPath)) {
+      return deniedResult();
+    }
+    const config2 = getEffectiveConfig(ctx.cwd);
+    const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
+    if (violation.access === "read") {
+      const readBlockReason = getReadBlockReason(
+        blockedPath,
+        config2.filesystem?.denyRead ?? [],
+        config2.filesystem?.allowRead ?? [],
+        sessionAllowedReadPaths,
+        matchesPattern
+      );
+      if (!readBlockReason) {
+        return deniedResult(
+          `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. Check the OS-level sandbox path normalization.`
+        );
+      }
+      const choice2 = await promptReadBlock(ctx, blockedPath, readBlockReason);
+      if (choice2 === "abort") return deniedResult();
+      await applyReadChoice(choice2, blockedPath, ctx.cwd);
+      ctx.ui.notify(`Read access granted for "${blockedPath}", retrying bash command`, "info");
+      return retrySandboxedBash(event.toolCallId, original, ctx);
+    }
+    const denyWrite = config2.filesystem?.denyWrite ?? [];
+    if (matchesPattern(blockedPath, denyWrite)) {
+      return deniedResult(
+        `Sandbox: write access denied for "${blockedPath}" (in denyWrite). To change this, edit denyWrite in:
+  ${projectPath}
+  ${globalPath}`
+      );
+    }
+    const allowWrite = getEffectiveAllowWrite(ctx.cwd);
+    if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
+      return deniedResult(
+        `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. Check the OS-level sandbox path normalization.`
+      );
+    }
+    const choice = await promptWriteBlock(ctx, blockedPath);
+    if (choice === "abort") return deniedResult();
+    await applyWriteChoice(choice, blockedPath, ctx.cwd);
+    ctx.ui.notify(`Write access granted for "${blockedPath}", retrying bash command`, "info");
+    return retrySandboxedBash(event.toolCallId, original, ctx);
+  });
   pi.on("session_start", async (_event, ctx) => {
     lastStatusContext = ctx;
+    ensureBashToolRegistered(pi, ctx.cwd);
     const noSandbox = pi.getFlag("no-sandbox");
     if (noSandbox) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
       return;
@@ -8455,6 +9766,7 @@ Check denyWrite in:
     const config2 = getEffectiveConfig(ctx.cwd);
     if (!config2.enabled) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
@@ -8468,8 +9780,8 @@ Check denyWrite in:
     }
     try {
       const configExt = config2;
-      await runWithWriteLockBypass(
-        () => SandboxManager.initialize(
+      await runWithWriteLockBypass(async () => {
+        await SandboxManager.initialize(
           {
             network: config2.network,
             filesystem: config2.filesystem,
@@ -8478,9 +9790,11 @@ Check denyWrite in:
             allowBrowserProcess: configExt.allowBrowserProcess,
             enableWeakerNetworkIsolation: true
           },
-          createNetworkAskCallback(config2.network?.allowedDomains ?? [])
-        )
-      );
+          createNetworkAskCallback(config2.network?.allowedDomains ?? []),
+          true
+        );
+        restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
+      });
       const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
       const supportsEnvProxy = nodeMajor === 22 && nodeMinor >= 21 || nodeMajor >= 24;
       if (supportsEnvProxy) {
@@ -8491,6 +9805,7 @@ Check denyWrite in:
       updateSandboxStatus(ctx);
     } catch (err) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify(
         `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
@@ -8499,6 +9814,8 @@ Check denyWrite in:
     }
   });
   pi.on("session_shutdown", async () => {
+    pendingSandboxedBash.clear();
+    stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {
       try {
         await runWithWriteLockBypass(() => SandboxManager.reset());
@@ -8521,8 +9838,8 @@ Check denyWrite in:
       }
       try {
         const configExt = config2;
-        await runWithWriteLockBypass(
-          () => SandboxManager.initialize(
+        await runWithWriteLockBypass(async () => {
+          await SandboxManager.initialize(
             {
               network: config2.network,
               filesystem: config2.filesystem,
@@ -8531,9 +9848,11 @@ Check denyWrite in:
               allowBrowserProcess: configExt.allowBrowserProcess,
               enableWeakerNetworkIsolation: true
             },
-            createNetworkAskCallback(config2.network?.allowedDomains ?? [])
-          )
-        );
+            createNetworkAskCallback(config2.network?.allowedDomains ?? []),
+            true
+          );
+          restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
+        });
         sandboxEnabled = true;
         sandboxInitialized = true;
         updateSandboxStatus(ctx);
@@ -8553,6 +9872,7 @@ Check denyWrite in:
         ctx.ui.notify("Sandbox is already disabled", "info");
         return;
       }
+      stopDirectMacSandboxMonitoring();
       if (sandboxInitialized) {
         try {
           await runWithWriteLockBypass(() => SandboxManager.reset());
@@ -8585,7 +9905,7 @@ Check denyWrite in:
         ...sessionAllowedDomains.length > 0 ? [`  Session allowed: ${sessionAllowedDomains.join(", ")}`] : [],
         "",
         "Filesystem (bash + direct filesystem tools):",
-        `  Read-only locks: ${readOnlyWriteLocks.size > 0 ? [...readOnlyWriteLocks].join(", ") : "(none)"}`,
+        `  Read-only locks: ${describeReadOnlyWriteLocks()}`,
         `  Deny Read:   ${config2.filesystem?.denyRead?.join(", ") || "(none)"}`,
         `  Allow Read:  ${config2.filesystem?.allowRead?.join(", ") || "(none)"}`,
         `  Allow Write: ${config2.filesystem?.allowWrite?.join(", ") || "(none)"}`,

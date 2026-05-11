@@ -3,7 +3,7 @@ import { visibleWidth } from "@mariozechner/pi-tui";
 import { defaultConfig } from "../config.js";
 import { stripControls } from "../format.js";
 import { renderInputSurface } from "../renderer.js";
-import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, TITLE_MAX_WIDTH } from "../title.js";
+import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_MAX_WIDTH } from "../title.js";
 import { testState } from "./helpers.js";
 
 const config = defaultConfig();
@@ -29,6 +29,14 @@ assert.equal(TITLE_MAX_WIDTH, 64, "title budget should allow longer generated ti
 assert.ok(visibleWidth(fallback) <= TITLE_MAX_WIDTH, "fallback title should fit the title budget");
 assert.ok(!fallback.includes("\x1b"), "fallback title should not persist ANSI controls from truncation");
 assert.ok(fallback.startsWith("请帮我修改"), "fallback title should preserve the user's language/content");
+
+assert.equal(shouldSetFallbackTitle({ text: null, generating: false }), true, "fallback mode should set a title for the first prompt");
+assert.equal(
+	shouldSetFallbackTitle({ text: "first prompt title", generating: false }),
+	false,
+	"fallback mode should keep the first prompt title instead of replacing it on later prompts",
+);
+assert.equal(shouldSetFallbackTitle({ text: null, generating: true }), false, "fallback mode should not overwrite while title generation is active");
 
 assert.equal(
 	shouldGenerateTitle({ text: "local fallback", generating: false, source: "fallback" }, "openai/gpt-5.2"),

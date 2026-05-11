@@ -1,13 +1,13 @@
 /**
  * Plan Mode Extension
  *
- * Read-only exploration mode for safe code analysis.
- * When enabled, pi-sandbox is used for read-only enforcement if available.
+ * Exploration mode for safe code analysis.
+ * When enabled, pi-sandbox is used to block writes under the current cwd if available.
  * Without pi-sandbox, falls back to a small read-only tool allowlist.
  *
  * Features:
  * - /plan command or Shift+Tab to toggle
- * - Sandbox read-only lock when pi-sandbox is available
+ * - Sandbox cwd write lock when pi-sandbox is available
  * - Bash restricted to allowlisted read-only commands only in fallback mode
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
@@ -20,7 +20,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Key } from "@earendil-works/pi-tui";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.js";
 
-// Fallback tools used only when pi-sandbox cannot provide a read-only write lock.
+// Fallback tools used only when pi-sandbox cannot provide a cwd-scoped write lock.
 const FALLBACK_PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "AskUserQuestion"];
 
 interface SandboxReadOnlyLockResponse {
@@ -34,6 +34,7 @@ interface SandboxReadOnlyLockRequest {
 	enabled: boolean;
 	reason: string;
 	cwd: string;
+	scope: "cwd";
 	respond?: (response: SandboxReadOnlyLockResponse | Promise<SandboxReadOnlyLockResponse>) => void;
 }
 
@@ -58,7 +59,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let usingSandboxReadOnly = false;
 
 	pi.registerFlag("plan", {
-		description: "Start in plan mode (read-only exploration)",
+		description: "Start in plan mode (protect cwd from writes)",
 		type: "boolean",
 		default: false,
 	});
@@ -108,8 +109,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		const request: SandboxReadOnlyLockRequest = {
 			owner: "plan-mode",
 			enabled,
-			reason: enabled ? "Plan mode active" : "Plan mode inactive",
+			reason: enabled ? "Plan mode active; protect cwd from writes" : "Plan mode inactive",
 			cwd: ctx.cwd,
+			scope: "cwd",
 			respond(response) {
 				responses.push(Promise.resolve(response));
 			},
@@ -151,7 +153,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (planModeEnabled) {
 			await applyPlanModeRestrictions(ctx);
 			if (usingSandboxReadOnly) {
-				ctx.ui.notify("Plan mode enabled. Sandbox read-only lock active; all current tools remain available.");
+				ctx.ui.notify("Plan mode enabled. Sandbox cwd write lock active; all current tools remain available.");
 			} else {
 				ctx.ui.notify(
 					`Plan mode enabled. Sandbox read-only lock unavailable; fallback tools: ${FALLBACK_PLAN_MODE_TOOLS.join(", ")}`,
@@ -159,7 +161,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			}
 		} else {
 			await releasePlanModeRestrictions(ctx);
-			ctx.ui.notify("Plan mode disabled. Read-only restrictions removed.");
+			ctx.ui.notify("Plan mode disabled. Write restrictions removed.");
 		}
 		updateStatus(ctx);
 		persistState();
@@ -183,7 +185,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("plan", {
-		description: "Toggle plan mode (read-only exploration)",
+		description: "Toggle plan mode (protect cwd from writes)",
 		handler: async (_args, ctx) => {
 			await togglePlanMode(ctx);
 		},
@@ -246,11 +248,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	// Inject plan/execution context before agent starts
-	pi.on("before_agent_start", async () => {
+	pi.on("before_agent_start", async (_event, ctx) => {
 		if (planModeEnabled) {
 			const restrictions = usingSandboxReadOnly
-				? `- pi-sandbox read-only lock is active; all current tools remain available for investigation.
-- File modifications are disabled by sandbox policy. Do not attempt any file writes.`
+				? `- pi-sandbox cwd write lock is active; all current tools remain available for investigation.
+- File modifications under the current working directory are disabled by sandbox policy. Do not write under ${ctx.cwd}.`
 				: `- You can only use: ${FALLBACK_PLAN_MODE_TOOLS.join(", ")}
 - You CANNOT use file modification tools
 - Bash is restricted to an allowlist of read-only commands`;
@@ -259,7 +261,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				message: {
 					customType: "plan-mode-context",
 					content: `[PLAN MODE ACTIVE]
-You are in plan mode - a read-only exploration mode for safe code analysis.
+You are in plan mode - an exploration mode that protects the current working directory from writes.
 
 Restrictions:
 ${restrictions}
@@ -286,7 +288,7 @@ Do NOT attempt to make changes - just describe what you would do.`,
 			return {
 				message: {
 					customType: "plan-execution-context",
-					content: `[EXECUTING PLAN - Plan-mode read-only restrictions lifted]
+					content: `[EXECUTING PLAN - Plan-mode write restrictions lifted]
 
 Remaining steps:
 ${todoList}

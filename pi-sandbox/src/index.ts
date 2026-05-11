@@ -4,15 +4,16 @@
  *
  * Sandbox Extension - OS-level sandboxing for bash commands, plus path policy
  * enforcement for pi's direct filesystem tools, with interactive
- * permission prompts and cooperative read-only locks for extensions like plan-mode.
+ * permission prompts and cooperative write locks for extensions like plan-mode.
  *
- * Uses @carderne/sandbox-runtime to enforce filesystem and network
- * restrictions on bash commands at the OS level (sandbox-exec on macOS,
- * bubblewrap on Linux). Also intercepts the read, write, and edit tools to
- * apply the same denyRead/denyWrite/allowWrite filesystem rules, which OS-level
- * sandboxing cannot cover (those tools run directly in Node.js, not in a
- * subprocess). Extensions can request a session read-only lock via
- * `pi-sandbox:set-read-only-lock` to deny writes without disabling tools.
+ * Uses @carderne/sandbox-runtime to initialize filesystem and network
+ * restrictions for bash commands at the OS level (sandbox-exec on macOS,
+ * bubblewrap on Linux), then installs a shared bash operations wrapper so other
+ * bash customizations can compose with sandboxing. Also intercepts the read, write, and edit tools
+ * to apply the same denyRead/denyWrite/allowWrite filesystem rules, which
+ * OS-level sandboxing cannot cover (those tools run directly in Node.js, not in
+ * a subprocess). Extensions can request a session write lock via
+ * `pi-sandbox:set-read-only-lock` to deny writes globally or under a cwd without disabling tools.
  *
  * When a block is triggered, the user is prompted to:
  *   (a) Abort (keep blocked)
@@ -22,7 +23,8 @@
  *
  * What gets prompted vs. hard-blocked:
  *   - domains: prompted if not whitelisted nor explicitly denied
- *   - write: prompted if not whitelisted nor explicitly denied
+ *   - direct write/edit tools: prompted if not whitelisted nor explicitly denied
+ *   - bash writes: blocked by the OS sandbox, then prompted and retried when the blocked path can be detected
  *   - read: if allowRead is empty, only denyRead paths prompt; if allowRead has entries, reads outside allowRead prompt
  *
  * IMPORTANT — read policy:
@@ -63,11 +65,7 @@
  * Linux also requires: bubblewrap, socat, ripgrep
  */
 
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -83,6 +81,7 @@ import {
   type SandboxAskCallback,
   type SandboxRuntimeConfig,
 } from "@carderne/sandbox-runtime";
+import { encodeSandboxedCommand } from "@carderne/sandbox-runtime/dist/sandbox/sandbox-utils.js";
 import {
   type BashOperations,
   createBashToolDefinition,
@@ -93,6 +92,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 import fsPromises from "node:fs/promises";
+
+import { ensureBashToolRegistered, registerBashToolPlugin } from "../../bash-tool-coordinator";
+import { createDirectLinuxSandboxCommand } from "./direct-linux-sandbox";
+import {
+  createDirectMacSandboxCommand,
+  type DirectMacSandboxViolation,
+  type IgnoreViolationsConfig,
+  startDirectMacSandboxLogMonitor,
+} from "./direct-macos-sandbox";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -124,8 +132,8 @@ const DEFAULT_CONFIG: SandboxConfig = {
 };
 
 // @carderne/sandbox-runtime always allows a few diagnostic/temp write paths
-// in addition to configured allowWrite entries. In read-only lock mode, deny
-// the filesystem-backed ones too so bash cannot use those escape hatches.
+// in addition to configured allowWrite entries. In global read-only lock mode,
+// deny the filesystem-backed ones too so bash cannot use those escape hatches.
 const READ_ONLY_LOCK_DENY_WRITE_PATHS = [
   "/tmp/claude",
   "/private/tmp/claude",
@@ -134,8 +142,8 @@ const READ_ONLY_LOCK_DENY_WRITE_PATHS = [
 ];
 
 // Pi must keep writing its own state while plan-mode is active: sessions,
-// checkpoints, config changes, etc. This exception is process-local only;
-// bash still gets the strict OS-level read-only sandbox.
+// checkpoints, config changes, etc. This exception is process-local and only
+// applies to global locks; cwd-scoped locks still protect their requested cwd.
 const PROCESS_READ_ONLY_LOCK_ALLOW_WRITE_PATHS = [join(homedir(), ".pi", "agent")];
 
 interface SandboxReadOnlyLockResponse {
@@ -144,11 +152,14 @@ interface SandboxReadOnlyLockResponse {
   reason?: string;
 }
 
+type SandboxReadOnlyLockScope = "global" | "cwd";
+
 interface SandboxReadOnlyLockRequest {
   owner?: string;
   enabled?: boolean;
   reason?: string;
   cwd?: string;
+  scope?: SandboxReadOnlyLockScope;
   respond?: (response: SandboxReadOnlyLockResponse | Promise<SandboxReadOnlyLockResponse>) => void;
 }
 
@@ -156,7 +167,7 @@ type MutableModule = Record<string, unknown>;
 type AnyFunction = (this: unknown, ...args: any[]) => any;
 
 let fsWriteApisPatched = false;
-let readOnlyWriteLockActive: (() => boolean) | undefined;
+let readOnlyWriteLockDeniesWrite: ((target: unknown) => boolean) | undefined;
 let writeLockBypassDepth = 0;
 
 function describeFsTarget(target: unknown): string | undefined {
@@ -193,11 +204,7 @@ function createReadOnlyWriteError(operation: string, target?: unknown): Error & 
 }
 
 function assertProcessWriteAllowed(operation: string, target?: unknown): void {
-  if (
-    writeLockBypassDepth === 0 &&
-    readOnlyWriteLockActive?.() &&
-    !isProcessWriteAllowedByPath(target)
-  ) {
+  if (writeLockBypassDepth === 0 && readOnlyWriteLockDeniesWrite?.(target)) {
     throw createReadOnlyWriteError(operation, target);
   }
 }
@@ -281,8 +288,8 @@ function patchCreateWriteStream(target: MutableModule): void {
   );
 }
 
-function patchFsWriteApis(isActive: () => boolean): void {
-  readOnlyWriteLockActive = isActive;
+function patchFsWriteApis(deniesWrite: (target: unknown) => boolean): void {
+  readOnlyWriteLockDeniesWrite = deniesWrite;
   if (fsWriteApisPatched) return;
 
   const fsModule = fs as unknown as MutableModule;
@@ -493,14 +500,130 @@ function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback 
   return async ({ host }) => domainIsAllowed(host, allowedDomains);
 }
 
-// ── Output analysis ───────────────────────────────────────────────────────────
+// ── Sandbox violation analysis ───────────────────────────────────────────────
 
-/** Extract a path from a bash "Operation not permitted" OS sandbox error. */
-function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
+type FilesystemAccessKind = "read" | "write";
+
+interface SandboxFilesystemViolation {
+  path: string;
+  access: FilesystemAccessKind;
+}
+
+interface SandboxRuntimeViolation {
+  line: string;
+  command?: string;
+  encodedCommand?: string;
+  timestamp?: Date;
+}
+
+interface SandboxViolationStoreLike {
+  getViolationsForCommand(command: string): SandboxRuntimeViolation[];
+}
+
+interface SandboxManagerWithViolationStore {
+  getSandboxViolationStore?: () => SandboxViolationStoreLike;
+}
+
+const directMacSandboxViolations: SandboxRuntimeViolation[] = [];
+let stopDirectMacSandboxLogMonitor: (() => void) | undefined;
+
+function rememberDirectMacSandboxViolation(violation: DirectMacSandboxViolation): void {
+  directMacSandboxViolations.push(violation);
+  if (directMacSandboxViolations.length > 100) {
+    directMacSandboxViolations.splice(0, directMacSandboxViolations.length - 100);
+  }
+}
+
+function getDirectMacSandboxViolationsForCommand(command: string): SandboxRuntimeViolation[] {
+  const encodedCommand = encodeSandboxedCommand(command);
+  return directMacSandboxViolations.filter(
+    (violation) => violation.command === command || violation.encodedCommand === encodedCommand,
   );
-  return match ? match[1] : null;
+}
+
+function restartDirectMacSandboxLogMonitor(ignoreViolations?: IgnoreViolationsConfig): void {
+  if (process.platform !== "darwin") return;
+  stopDirectMacSandboxLogMonitor?.();
+  directMacSandboxViolations.length = 0;
+  stopDirectMacSandboxLogMonitor = startDirectMacSandboxLogMonitor(
+    rememberDirectMacSandboxViolation,
+    ignoreViolations,
+  );
+}
+
+function stopDirectMacSandboxMonitoring(): void {
+  stopDirectMacSandboxLogMonitor?.();
+  stopDirectMacSandboxLogMonitor = undefined;
+  directMacSandboxViolations.length = 0;
+}
+
+const SANDBOX_DENIAL_OUTPUT_PATTERN =
+  /(?:Operation not permitted|Permission denied|Read-only file system)/i;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function bashOutputLooksLikeSandboxDenial(
+  content: Array<{ type: string; text?: string }>,
+): boolean {
+  return content.some(
+    (part) =>
+      part.type === "text" &&
+      typeof part.text === "string" &&
+      SANDBOX_DENIAL_OUTPUT_PATTERN.test(part.text),
+  );
+}
+
+function getSandboxViolationsForCommand(command: string): SandboxRuntimeViolation[] {
+  return [
+    ...((SandboxManager as unknown as SandboxManagerWithViolationStore)
+      .getSandboxViolationStore?.()
+      .getViolationsForCommand(command) ?? []),
+    ...getDirectMacSandboxViolationsForCommand(command),
+  ];
+}
+
+function parseSandboxFilesystemViolationLine(line: string): SandboxFilesystemViolation | null {
+  // macOS sandbox logs are authoritative here, e.g.:
+  //   bash(12345) deny(1) file-write-create /private/tmp/example
+  //   cat(12345) deny(1) file-read-data /Users/example/secret
+  const match = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
+  if (!match) return null;
+
+  let path = match[3].trim();
+  if (
+    (path.startsWith('"') && path.endsWith('"')) ||
+    (path.startsWith("'") && path.endsWith("'"))
+  ) {
+    path = path.slice(1, -1);
+  }
+  if (!path.startsWith("/")) return null;
+
+  return { path, access: match[2] as FilesystemAccessKind };
+}
+
+function getSandboxFilesystemViolationForCommand(
+  command: string,
+): SandboxFilesystemViolation | null {
+  for (const violation of getSandboxViolationsForCommand(command)) {
+    const filesystemViolation = parseSandboxFilesystemViolationLine(violation.line);
+    if (filesystemViolation) return filesystemViolation;
+  }
+
+  return null;
+}
+
+async function waitForSandboxFilesystemViolationForCommand(
+  command: string,
+): Promise<SandboxFilesystemViolation | null> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(50);
+    const violation = getSandboxFilesystemViolationForCommand(command);
+    if (violation) return violation;
+  }
+
+  return null;
 }
 
 // ── Path pattern matching ─────────────────────────────────────────────────────
@@ -618,75 +741,177 @@ function addWritePathToConfig(configPath: string, pathToAdd: string): void {
 
 // ── Sandboxed bash ops ────────────────────────────────────────────────────────
 
-function createSandboxedBashOps(shellPath?: string): BashOperations {
+function execSpawnedCommand(
+  file: string,
+  args: string[],
+  cwd: string,
+  { onData, signal, timeout, env }: Parameters<BashOperations["exec"]>[2],
+  cleanup?: () => void,
+): Promise<{ exitCode: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      cwd,
+      env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let timedOut = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    let cleanupDone = false;
+
+    const cleanupAfterSpawn = () => {
+      if (cleanupDone) return;
+      cleanupDone = true;
+      try {
+        cleanup?.();
+      } catch {
+        // cleanup is best-effort
+      }
+      try {
+        SandboxManager.cleanupAfterCommand();
+      } catch {
+        // cleanup is best-effort
+      }
+    };
+
+    if (timeout !== undefined && timeout > 0) {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child.kill("SIGKILL");
+          }
+        }
+      }, timeout * 1000);
+    }
+
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+
+    child.on("error", (err) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      cleanupAfterSpawn();
+      reject(err);
+    });
+
+    const onAbort = () => {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.on("close", (code) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onAbort);
+      cleanupAfterSpawn();
+
+      if (signal?.aborted) {
+        reject(new Error("aborted"));
+      } else if (timedOut) {
+        reject(new Error(`timeout:${timeout}`));
+      } else {
+        resolve({ exitCode: code });
+      }
+    });
+  });
+}
+
+function createSandboxedBashOps(
+  shellPath?: string,
+  fallback?: BashOperations,
+  isEnabled: () => boolean = () => SandboxManager.isSandboxingEnabled(),
+): BashOperations {
   return {
-    async exec(command, cwd, { onData, signal, timeout, env }) {
+    async exec(command, cwd, options) {
       if (!existsSync(cwd)) {
         throw new Error(`Working directory does not exist: ${cwd}`);
       }
 
-      const wrappedCommand = await runWithWriteLockBypass(() =>
-        SandboxManager.wrapWithSandbox(command),
-      );
       const { shell, args } = getShellConfig(shellPath);
+      if (!isEnabled() || !SandboxManager.isSandboxingEnabled()) {
+        if (fallback) return fallback.exec(command, cwd, options);
+        return execSpawnedCommand(shell, [...args, command], cwd, options);
+      }
 
-      return new Promise((resolve, reject) => {
-        const child = spawn(shell, [...args, wrappedCommand], {
+      if (process.platform === "darwin") {
+        const runtimeConfig = SandboxManager.getConfig() as
+          | (SandboxRuntimeConfig & {
+              allowPty?: boolean;
+              allowBrowserProcess?: boolean;
+              enableWeakerNetworkIsolation?: boolean;
+              filesystem?: SandboxRuntimeConfig["filesystem"] & { allowGitConfig?: boolean };
+            })
+          | undefined;
+        const commandSpec = createDirectMacSandboxCommand({
+          command,
+          shell,
+          needsNetworkRestriction: runtimeConfig?.network?.allowedDomains !== undefined,
+          httpProxyPort: SandboxManager.getProxyPort(),
+          socksProxyPort: SandboxManager.getSocksProxyPort(),
+          allowUnixSockets: runtimeConfig?.network?.allowUnixSockets,
+          allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
+          allowLocalBinding: runtimeConfig?.network?.allowLocalBinding,
+          allowMachLookup: runtimeConfig?.network?.allowMachLookup,
+          readConfig: SandboxManager.getFsReadConfig(),
+          writeConfig: SandboxManager.getFsWriteConfig(),
+          allowPty: runtimeConfig?.allowPty,
+          allowBrowserProcess: runtimeConfig?.allowBrowserProcess,
+          allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
+          enableWeakerNetworkIsolation: runtimeConfig?.enableWeakerNetworkIsolation,
+        });
+        return execSpawnedCommand(commandSpec.file, commandSpec.args, cwd, options);
+      }
+
+      if (process.platform === "linux") {
+        const runtimeConfig = SandboxManager.getConfig() as
+          | (SandboxRuntimeConfig & {
+              filesystem?: SandboxRuntimeConfig["filesystem"] & { allowGitConfig?: boolean };
+            })
+          | undefined;
+        const needsNetworkRestriction = runtimeConfig?.network?.allowedDomains !== undefined;
+        if (needsNetworkRestriction) await SandboxManager.waitForNetworkInitialization();
+        const commandSpec = await createDirectLinuxSandboxCommand({
+          command,
+          shell,
+          needsNetworkRestriction,
+          httpSocketPath: needsNetworkRestriction
+            ? SandboxManager.getLinuxHttpSocketPath()
+            : undefined,
+          socksSocketPath: needsNetworkRestriction
+            ? SandboxManager.getLinuxSocksSocketPath()
+            : undefined,
+          httpProxyPort: needsNetworkRestriction ? SandboxManager.getProxyPort() : undefined,
+          socksProxyPort: needsNetworkRestriction ? SandboxManager.getSocksProxyPort() : undefined,
+          readConfig: SandboxManager.getFsReadConfig(),
+          writeConfig: SandboxManager.getFsWriteConfig(),
+          enableWeakerNestedSandbox: runtimeConfig?.enableWeakerNestedSandbox,
+          allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
+          ripgrepConfig: runtimeConfig?.ripgrep,
+          mandatoryDenySearchDepth: runtimeConfig?.mandatoryDenySearchDepth,
+          allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
+          seccompConfig: runtimeConfig?.seccomp,
+          abortSignal: options.signal,
+        });
+        return execSpawnedCommand(
+          commandSpec.file,
+          commandSpec.args,
           cwd,
-          env,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+          options,
+          commandSpec.cleanup,
+        );
+      }
 
-        let timedOut = false;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-
-        if (timeout !== undefined && timeout > 0) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            if (child.pid) {
-              try {
-                process.kill(-child.pid, "SIGKILL");
-              } catch {
-                child.kill("SIGKILL");
-              }
-            }
-          }, timeout * 1000);
-        }
-
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
-
-        child.on("error", (err) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          reject(err);
-        });
-
-        const onAbort = () => {
-          if (child.pid) {
-            try {
-              process.kill(-child.pid, "SIGKILL");
-            } catch {
-              child.kill("SIGKILL");
-            }
-          }
-        };
-
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        child.on("close", (code) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          signal?.removeEventListener("abort", onAbort);
-
-          if (signal?.aborted) {
-            reject(new Error("aborted"));
-          } else if (timedOut) {
-            reject(new Error(`timeout:${timeout}`));
-          } else {
-            resolve({ exitCode: code });
-          }
-        });
-      });
+      const directCommand = [shell, ...args, command];
+      return execSpawnedCommand(directCommand[0], directCommand.slice(1), cwd, options);
     },
   };
 }
@@ -702,7 +927,6 @@ export default function (pi: ExtensionAPI) {
 
   const localCwd = process.cwd();
   const userShellPath = SettingsManager.create(localCwd).getShellPath();
-  const localBash = createBashToolDefinition(localCwd, { shellPath: userShellPath });
 
   let sandboxEnabled = true;
   let sandboxInitialized = false;
@@ -713,11 +937,19 @@ export default function (pi: ExtensionAPI) {
   const sessionAllowedReadPaths: string[] = [];
   const sessionAllowedWritePaths: string[] = [];
 
-  // Cooperative read-only locks from other extensions, e.g. plan-mode.
-  // When at least one owner holds a lock, all file writes are denied while
-  // keeping the active tool set unchanged.
-  const readOnlyWriteLocks = new Set<string>();
+  const pendingSandboxedBash = new Map<string, { command: string; timeout?: number }>();
+
+  // Cooperative write locks from other extensions, e.g. plan-mode.
+  // Locks can be global or scoped to a cwd while keeping the active tool set unchanged.
+  const readOnlyWriteLocks = new Map<string, { scope: SandboxReadOnlyLockScope; cwd: string }>();
   let lastStatusContext: ExtensionContext | undefined;
+
+  registerBashToolPlugin(pi, {
+    id: "pi-sandbox",
+    priority: -100,
+    wrapOperations: (next) =>
+      createSandboxedBashOps(userShellPath, next, () => sandboxEnabled && sandboxInitialized),
+  });
 
   // ── Effective config helpers ────────────────────────────────────────────────
 
@@ -729,19 +961,66 @@ export default function (pi: ExtensionAPI) {
     return readOnlyWriteLocks.size > 0;
   }
 
-  patchFsWriteApis(() => sandboxEnabled && isReadOnlyWriteLocked());
+  function hasGlobalReadOnlyWriteLock(): boolean {
+    return [...readOnlyWriteLocks.values()].some((lock) => lock.scope === "global");
+  }
+
+  function getScopedReadOnlyWriteLockPaths(): string[] {
+    return uniqueStrings(
+      [...readOnlyWriteLocks.values()]
+        .filter((lock) => lock.scope === "cwd")
+        .map((lock) => lock.cwd),
+    );
+  }
+
+  function matchesReadOnlyWriteLock(filePath: string): boolean {
+    if (!isReadOnlyWriteLocked()) return false;
+    if (hasGlobalReadOnlyWriteLock()) return true;
+
+    const lockedPaths = getScopedReadOnlyWriteLockPaths();
+    return lockedPaths.length > 0 && matchesPattern(filePath, lockedPaths);
+  }
+
+  function isProcessWriteDeniedByReadOnlyLock(target: unknown): boolean {
+    if (!sandboxEnabled || !isReadOnlyWriteLocked()) return false;
+    if (hasGlobalReadOnlyWriteLock()) return !isProcessWriteAllowedByPath(target);
+
+    const targetPath = getFsTargetPath(target);
+    return targetPath !== undefined && matchesReadOnlyWriteLock(targetPath);
+  }
+
+  function getReadOnlyWriteLockSignature(): string {
+    return [...readOnlyWriteLocks]
+      .map(([owner, lock]) => `${owner}:${lock.scope}:${lock.cwd}`)
+      .sort()
+      .join("|");
+  }
+
+  function describeReadOnlyWriteLocks(): string {
+    if (readOnlyWriteLocks.size === 0) return "(none)";
+
+    return [...readOnlyWriteLocks]
+      .map(([owner, lock]) => `${owner}:${lock.scope === "cwd" ? lock.cwd : "global"}`)
+      .join(", ");
+  }
+
+  patchFsWriteApis((target) => isProcessWriteDeniedByReadOnlyLock(target));
 
   function applyReadOnlyWriteLock(config: SandboxConfig): SandboxConfig {
     if (!isReadOnlyWriteLocked()) return config;
+
+    const scopedDenyWrite = getScopedReadOnlyWriteLockPaths();
+    const globalLocked = hasGlobalReadOnlyWriteLock();
 
     return {
       ...config,
       filesystem: {
         ...config.filesystem,
-        allowWrite: [],
+        allowWrite: globalLocked ? [] : (config.filesystem?.allowWrite ?? []),
         denyWrite: uniqueStrings([
           ...(config.filesystem?.denyWrite ?? []),
-          ...READ_ONLY_LOCK_DENY_WRITE_PATHS,
+          ...scopedDenyWrite,
+          ...(globalLocked ? READ_ONLY_LOCK_DENY_WRITE_PATHS : []),
         ]),
       },
     };
@@ -780,8 +1059,9 @@ export default function (pi: ExtensionAPI) {
     const networkLabel = allowsAllDomains(config.network?.allowedDomains)
       ? "all domains"
       : `${config.network?.allowedDomains?.length ?? 0} domains`;
+    const lockScopeLabel = hasGlobalReadOnlyWriteLock() ? "read-only" : "cwd write lock";
     const writeLabel = isReadOnlyWriteLocked()
-      ? `read-only (${readOnlyWriteLocks.size} lock${readOnlyWriteLocks.size === 1 ? "" : "s"})`
+      ? `${lockScopeLabel} (${readOnlyWriteLocks.size} lock${readOnlyWriteLocks.size === 1 ? "" : "s"})`
       : `${config.filesystem?.allowWrite?.length ?? 0} write paths`;
     ctx.ui.setStatus(
       "sandbox",
@@ -793,6 +1073,7 @@ export default function (pi: ExtensionAPI) {
     enabled: boolean,
     owner: string,
     cwd: string,
+    scope: SandboxReadOnlyLockScope,
   ): Promise<SandboxReadOnlyLockResponse> {
     const availability = canUseSandbox(cwd);
     if (!availability.ok) {
@@ -800,15 +1081,15 @@ export default function (pi: ExtensionAPI) {
       return { accepted: false, active: false, reason: availability.reason };
     }
 
-    const wasLocked = isReadOnlyWriteLocked();
+    const previousLockSignature = getReadOnlyWriteLockSignature();
     if (enabled) {
-      readOnlyWriteLocks.add(owner);
+      readOnlyWriteLocks.set(owner, { scope, cwd: canonicalizePath(cwd) });
     } else {
       readOnlyWriteLocks.delete(owner);
     }
 
     const active = isReadOnlyWriteLocked();
-    if (sandboxInitialized && wasLocked !== active) {
+    if (sandboxInitialized && previousLockSignature !== getReadOnlyWriteLockSignature()) {
       await reinitializeSandbox(cwd);
     }
     if (lastStatusContext) updateSandboxStatus(lastStatusContext);
@@ -816,9 +1097,7 @@ export default function (pi: ExtensionAPI) {
     return {
       accepted: true,
       active,
-      reason: active
-        ? `read-only write lock active: ${[...readOnlyWriteLocks].join(", ")}`
-        : undefined,
+      reason: active ? `write lock active: ${describeReadOnlyWriteLocks()}` : undefined,
     };
   }
 
@@ -826,7 +1105,8 @@ export default function (pi: ExtensionAPI) {
     const request = data as SandboxReadOnlyLockRequest;
     const owner = request.owner || "unknown";
     const cwd = request.cwd || localCwd;
-    request.respond?.(setReadOnlyWriteLock(request.enabled === true, owner, cwd));
+    const scope = request.scope === "cwd" ? "cwd" : "global";
+    request.respond?.(setReadOnlyWriteLock(request.enabled === true, owner, cwd, scope));
   });
 
   function getEffectiveAllowedDomains(cwd: string): string[] {
@@ -835,7 +1115,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getEffectiveAllowWrite(cwd: string): string[] {
-    if (isReadOnlyWriteLocked()) return [];
+    if (hasGlobalReadOnlyWriteLock()) return [];
     const config = getEffectiveConfig(cwd);
     return [...(config.filesystem?.allowWrite ?? []), ...sessionAllowedWritePaths];
   }
@@ -847,7 +1127,10 @@ export default function (pi: ExtensionAPI) {
   async function reinitializeSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     const config = getEffectiveConfig(cwd);
-    const configExt = config as unknown as { allowBrowserProcess?: boolean };
+    const configExt = config as unknown as {
+      ignoreViolations?: Record<string, string[]>;
+      allowBrowserProcess?: boolean;
+    };
     try {
       const network = {
         ...config.network,
@@ -873,7 +1156,9 @@ export default function (pi: ExtensionAPI) {
             enableWeakerNetworkIsolation: true,
           },
           createNetworkAskCallback(network.allowedDomains),
+          true,
         );
+        restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
       });
     } catch (e) {
       console.error(`Warning: Failed to reinitialize sandbox: ${e}`);
@@ -1093,85 +1378,36 @@ export default function (pi: ExtensionAPI) {
     await reinitializeSandbox(cwd);
   }
 
-  // ── Bash tool — with write-block detection and retry ───────────────────────
+  async function retrySandboxedBash(
+    toolCallId: string,
+    params: { command: string; timeout?: number },
+    ctx: ExtensionContext,
+  ) {
+    const sandboxedBash = createBashToolDefinition(ctx.cwd, {
+      operations: createSandboxedBashOps(userShellPath),
+      shellPath: userShellPath,
+    });
 
-  pi.registerTool({
-    ...localBash,
-    label: "bash (sandboxed)",
-    async execute(id, params, signal, onUpdate, ctx) {
-      const runBash = () => {
-        if (!sandboxEnabled || !sandboxInitialized) {
-          return localBash.execute(id, params, signal, onUpdate, ctx);
-        }
-        const sandboxedBash = createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(userShellPath),
-          shellPath: userShellPath,
-        });
-        return sandboxedBash.execute(id, params, signal, onUpdate, ctx);
+    try {
+      const result = await sandboxedBash.execute(toolCallId, params, ctx.signal, undefined, ctx);
+      return {
+        content: result.content,
+        details: result.details,
+        isError: false,
       };
-
-      let result: AgentToolResult<any>;
-      try {
-        result = await runBash();
-      } catch (e) {
-        if (!(e instanceof Error)) throw e;
-        if (!e.message.includes("Operation not permitted")) throw e;
-
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Error: Command failed with OS-level sandbox restriction: ${e.message}`,
-            },
-          ],
-          details: {},
-        };
-      }
-
-      // Post-execution: detect OS-level write block and offer to allow.
-      if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
-        const outputText = result.content
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => c.text)
-          .join("\n");
-
-        const blockedPath = extractBlockedWritePath(outputText);
-        if (blockedPath) {
-          if (isReadOnlyWriteLocked()) return result;
-
-          const choice = await promptWriteBlock(ctx, blockedPath);
-          if (choice !== "abort") {
-            await applyWriteChoice(choice, blockedPath, ctx.cwd);
-
-            // Check if denyWrite would still block it even after allowing.
-            const config = getEffectiveConfig(ctx.cwd);
-            const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
-            if (matchesPattern(blockedPath, config.filesystem?.denyWrite ?? [])) {
-              ctx.ui.notify(
-                `⚠️ "${blockedPath}" was added to allowWrite, but it is also in denyWrite and will remain blocked.\n` +
-                  `Check denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-                "warning",
-              );
-              return result;
-            }
-
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `\n--- Write access granted for "${blockedPath}", retrying ---\n`,
-                },
-              ],
-              details: {},
-            });
-            return runBash();
-          }
-        }
-      }
-
-      return result;
-    },
-  });
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: error instanceof Error ? error.message : String(error),
+          },
+        ],
+        details: undefined,
+        isError: true,
+      };
+    }
+  }
 
   // ── user_bash — network pre-check ──────────────────────────────────────────
 
@@ -1198,10 +1434,16 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    return { operations: createSandboxedBashOps(userShellPath) };
+    return {
+      operations: createSandboxedBashOps(
+        userShellPath,
+        undefined,
+        () => sandboxEnabled && sandboxInitialized,
+      ),
+    };
   });
 
-  // ── tool_call — network pre-check for bash, path policy for direct filesystem tools
+  // ── tool_call — sandbox bash, network pre-check, and path policy for direct filesystem tools
 
   pi.on("tool_call", async (event, ctx) => {
     if (!sandboxEnabled) return;
@@ -1211,9 +1453,11 @@ export default function (pi: ExtensionAPI) {
 
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
-    // Network pre-check for bash tool calls.
+    // Bash tool calls are executed by the shared bash tool operations wrapper.
+    // This hook only does preflight prompting and records original commands for retry.
     if (sandboxInitialized && isToolCallEventType("bash", event)) {
-      const domains = extractDomainsFromCommand(event.input.command);
+      const originalCommand = event.input.command;
+      const domains = extractDomainsFromCommand(originalCommand);
       const effectiveDomains = getEffectiveAllowedDomains(ctx.cwd);
       for (const domain of domains) {
         if (!domainIsAllowed(domain, effectiveDomains)) {
@@ -1227,6 +1471,12 @@ export default function (pi: ExtensionAPI) {
           await applyDomainChoice(choice, domain, ctx.cwd);
         }
       }
+
+      pendingSandboxedBash.set(event.toolCallId, {
+        command: originalCommand,
+        timeout: event.input.timeout,
+      });
+      return;
     }
 
     // Path policy: read tool.
@@ -1257,11 +1507,11 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Read-only locks deny all direct filesystem mutation tools while keeping
-    // non-writing tools available.
-    if (isReadOnlyWriteLocked()) {
-      if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-        const path = canonicalizePath((event.input as { path: string }).path);
+    // Read-only locks deny matching direct filesystem mutation tools while keeping
+    // non-writing and out-of-scope writing tools available.
+    if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
+      const path = canonicalizePath((event.input as { path: string }).path);
+      if (matchesReadOnlyWriteLock(path)) {
         return {
           block: true,
           reason: `Sandbox read-only lock: write access denied for "${path}"`,
@@ -1313,14 +1563,99 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sandboxEnabled || !sandboxInitialized) return;
+    if (event.toolName !== "bash") return;
+    if (!event.isError) return;
+
+    const original = pendingSandboxedBash.get(event.toolCallId);
+    pendingSandboxedBash.delete(event.toolCallId);
+    if (!original) return;
+
+    let violation = getSandboxFilesystemViolationForCommand(original.command);
+    if (!violation) {
+      if (!bashOutputLooksLikeSandboxDenial(event.content)) return;
+      violation = await waitForSandboxFilesystemViolationForCommand(original.command);
+    }
+    if (!violation) return;
+
+    const blockedPath = canonicalizePath(violation.path);
+    const deniedResult = (reason?: string) => ({
+      content: [
+        ...event.content,
+        {
+          type: "text" as const,
+          text: reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`,
+        },
+      ],
+      details: event.details,
+      isError: true,
+    });
+
+    if (!ctx.hasUI || (violation.access === "write" && matchesReadOnlyWriteLock(blockedPath))) {
+      return deniedResult();
+    }
+
+    const config = getEffectiveConfig(ctx.cwd);
+    const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
+
+    if (violation.access === "read") {
+      const readBlockReason = getReadBlockReason(
+        blockedPath,
+        config.filesystem?.denyRead ?? [],
+        config.filesystem?.allowRead ?? [],
+        sessionAllowedReadPaths,
+        matchesPattern,
+      );
+      if (!readBlockReason) {
+        return deniedResult(
+          `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. ` +
+            `Check the OS-level sandbox path normalization.`,
+        );
+      }
+
+      const choice = await promptReadBlock(ctx, blockedPath, readBlockReason);
+      if (choice === "abort") return deniedResult();
+
+      await applyReadChoice(choice, blockedPath, ctx.cwd);
+      ctx.ui.notify(`Read access granted for "${blockedPath}", retrying bash command`, "info");
+      return retrySandboxedBash(event.toolCallId, original, ctx);
+    }
+
+    const denyWrite = config.filesystem?.denyWrite ?? [];
+    if (matchesPattern(blockedPath, denyWrite)) {
+      return deniedResult(
+        `Sandbox: write access denied for "${blockedPath}" (in denyWrite). ` +
+          `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+      );
+    }
+
+    const allowWrite = getEffectiveAllowWrite(ctx.cwd);
+    if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
+      return deniedResult(
+        `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. ` +
+          `Check the OS-level sandbox path normalization.`,
+      );
+    }
+
+    const choice = await promptWriteBlock(ctx, blockedPath);
+    if (choice === "abort") return deniedResult();
+
+    await applyWriteChoice(choice, blockedPath, ctx.cwd);
+    ctx.ui.notify(`Write access granted for "${blockedPath}", retrying bash command`, "info");
+    return retrySandboxedBash(event.toolCallId, original, ctx);
+  });
+
   // ── session_start ───────────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
     lastStatusContext = ctx;
+    ensureBashToolRegistered(pi, ctx.cwd);
     const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
     if (noSandbox) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
       return;
@@ -1330,6 +1665,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!config.enabled) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
@@ -1350,8 +1686,8 @@ export default function (pi: ExtensionAPI) {
         allowBrowserProcess?: boolean;
       };
 
-      await runWithWriteLockBypass(() =>
-        SandboxManager.initialize(
+      await runWithWriteLockBypass(async () => {
+        await SandboxManager.initialize(
           {
             network: config.network,
             filesystem: config.filesystem,
@@ -1361,8 +1697,10 @@ export default function (pi: ExtensionAPI) {
             enableWeakerNetworkIsolation: true,
           },
           createNetworkAskCallback(config.network?.allowedDomains ?? []),
-        ),
-      );
+          true,
+        );
+        restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
+      });
 
       // Make Node's built-in fetch() honour HTTP_PROXY / HTTPS_PROXY in this
       // process and any child processes that inherit the environment.
@@ -1380,6 +1718,7 @@ export default function (pi: ExtensionAPI) {
       updateSandboxStatus(ctx);
     } catch (err) {
       sandboxEnabled = false;
+      stopDirectMacSandboxMonitoring();
       updateSandboxStatus(ctx);
       ctx.ui.notify(
         `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
@@ -1391,6 +1730,8 @@ export default function (pi: ExtensionAPI) {
   // ── session_shutdown ────────────────────────────────────────────────────────
 
   pi.on("session_shutdown", async () => {
+    pendingSandboxedBash.clear();
+    stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {
       try {
         await runWithWriteLockBypass(() => SandboxManager.reset());
@@ -1424,8 +1765,8 @@ export default function (pi: ExtensionAPI) {
           allowBrowserProcess?: boolean;
         };
 
-        await runWithWriteLockBypass(() =>
-          SandboxManager.initialize(
+        await runWithWriteLockBypass(async () => {
+          await SandboxManager.initialize(
             {
               network: config.network,
               filesystem: config.filesystem,
@@ -1435,8 +1776,10 @@ export default function (pi: ExtensionAPI) {
               enableWeakerNetworkIsolation: true,
             },
             createNetworkAskCallback(config.network?.allowedDomains ?? []),
-          ),
-        );
+            true,
+          );
+          restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
+        });
 
         sandboxEnabled = true;
         sandboxInitialized = true;
@@ -1459,6 +1802,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      stopDirectMacSandboxMonitoring();
       if (sandboxInitialized) {
         try {
           await runWithWriteLockBypass(() => SandboxManager.reset());
@@ -1498,7 +1842,7 @@ export default function (pi: ExtensionAPI) {
           : []),
         "",
         "Filesystem (bash + direct filesystem tools):",
-        `  Read-only locks: ${readOnlyWriteLocks.size > 0 ? [...readOnlyWriteLocks].join(", ") : "(none)"}`,
+        `  Read-only locks: ${describeReadOnlyWriteLocks()}`,
         `  Deny Read:   ${config.filesystem?.denyRead?.join(", ") || "(none)"}`,
         `  Allow Read:  ${config.filesystem?.allowRead?.join(", ") || "(none)"}`,
         `  Allow Write: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,

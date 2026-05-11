@@ -22,13 +22,15 @@
     "extensions": [
       "./AskUserQuestion.ts",
       "./bash-grep-output-mode.ts",
-      "./codex-apply-patch.ts",
+      "./bash-tool-coordinator.ts",
       "./copy-code-block.ts",
       "./effort.ts",
       "./hide-code-fence-markers.ts",
       "./hide-read-output.ts",
+      "./keydump.ts",
       "./permission-gate.ts",
       "./path-autocomplete-normalizer.ts",
+      "./pretty-image-paste.ts",
       "./progress-checkpoints.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
@@ -36,9 +38,6 @@
       "./pi-sandbox/index.ts",
       "./plan-mode/index.ts"
     ]
-  },
-  "dependencies": {
-    "diff": "^8.0.4"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

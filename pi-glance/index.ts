@@ -19,7 +19,7 @@ import {
 	type PlanModeSnapshot,
 } from "./state.js";
 import { resolveTitleModelSpec, titleModelKey } from "./title-model.js";
-import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, TITLE_CUSTOM_TYPE } from "./title.js";
+import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_CUSTOM_TYPE } from "./title.js";
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
 import type { GlanceConfig, GlanceState } from "./types.js";
 
@@ -252,13 +252,15 @@ export default function piGlance(pi: ExtensionAPI): void {
 		const titlePrompt = prompt.trim();
 		const fallback = fallbackTitleFromPrompt(titlePrompt);
 		if (!titlePrompt) {
-			persistTitle(ctx, fallback, "fallback", titlePrompt);
+			if (shouldSetFallbackTitle(state.title)) {
+				persistTitle(ctx, fallback, "fallback", titlePrompt);
+			}
 			return;
 		}
 
 		const modelSpec = activeConfig.title.model.trim();
 		if (!modelSpec) {
-			if (!state.title.text || state.title.source === "fallback" || (!state.title.source && !state.title.model)) {
+			if (shouldSetFallbackTitle(state.title)) {
 				persistTitle(ctx, fallback, "fallback", titlePrompt);
 			}
 			return;

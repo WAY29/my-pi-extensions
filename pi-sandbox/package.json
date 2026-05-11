@@ -1,20 +1,10 @@
 {
   "name": "pi-sandbox",
   "version": "0.4.3",
-  "description": "OS-level sandboxing for pi with interactive permission prompts",
-  "keywords": [
-    "pi-package",
-    "pi-extension"
-  ],
+  "description": "OS-level sandboxing for pi bash commands",
   "type": "module",
   "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
-  },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "extensions": ["index.js"]
   },
   "repository": {
     "type": "git",
@@ -28,11 +18,11 @@
   "homepage": "https://github.com/carderne/pi-sandbox",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "fmt": "oxfmt index.ts src/index.ts",
-    "lint": "oxlint src/index.ts",
+    "fmt": "oxfmt index.ts src",
+    "lint": "oxlint src",
     "check": "tsc --noEmit",
     "all": "npm run fmt && npm run lint && npm run check",
-    "ci:fmt": "oxfmt --check index.ts src/index.ts",
+    "ci:fmt": "oxfmt --check index.ts src",
     "ci:lint": "npm run lint",
     "ci:check": "npm run check"
   },

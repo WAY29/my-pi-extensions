@@ -44,6 +44,10 @@ export function fallbackTitleFromPrompt(prompt: string): string {
 	return sanitizeGeneratedTitle(prompt, "New chat");
 }
 
+export function shouldSetFallbackTitle(title: { text: string | null; generating: boolean }): boolean {
+	return !title.generating && !title.text;
+}
+
 export function shouldGenerateTitle(
 	title: { text: string | null; generating: boolean; source?: "fallback" | "llm"; model?: string },
 	targetModel: string | undefined,

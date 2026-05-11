@@ -1,4 +1,4 @@
-import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
+import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { cloneConfig, defaultConfig, moveSegment, toggleSegment } from "./config.js";
 import { renderInputSurface, renderInputSurfacePreview } from "./renderer.js";
@@ -236,6 +236,10 @@ function infoRow(label: string, value: string, hint: string): SettingRow {
 
 function inputRow(label: string, value: string, hint: string, edit: (value: string) => void): SettingRow {
 	return { label, value: value || "fallback", rawValue: value, hint, kind: "input", edit };
+}
+
+function shortcutKey(data: string): string {
+	return decodeKittyPrintable(data) ?? data;
 }
 
 class GlanceConfigPane implements Component {
@@ -528,18 +532,19 @@ class GlanceConfigPane implements Component {
 			return;
 		}
 
-		if (data === "\x15") {
+		if (data === "\x15" || matchesKey(data, Key.ctrl("u"))) {
 			this.editing.value = "";
 			this.requestRender();
 			return;
 		}
 
-		if (!data.includes("\x1b") && !data.includes("\r") && !data.includes("\n") && !data.includes("\t")) {
-			const printable = [...data].filter((char) => char >= " ").join("");
-			if (printable) {
-				this.editing.value += printable;
-				this.requestRender();
-			}
+		const rawPrintable = !data.includes("\x1b") && !data.includes("\r") && !data.includes("\n") && !data.includes("\t")
+			? [...data].filter((char) => char >= " ").join("")
+			: "";
+		const printable = decodeKittyPrintable(data) ?? rawPrintable;
+		if (printable) {
+			this.editing.value += printable;
+			this.requestRender();
 		}
 	}
 
@@ -549,11 +554,13 @@ class GlanceConfigPane implements Component {
 			return;
 		}
 
+		const key = shortcutKey(data);
+
 		if (matchesKey(data, Key.ctrl("c"))) {
 			this.done({ action: "cancel" });
 			return;
 		}
-		if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
+		if (matchesKey(data, Key.escape) || key === "q" || key === "Q") {
 			if (this.focus === "categories") {
 				this.done({ action: "cancel" });
 			} else {
@@ -583,11 +590,11 @@ class GlanceConfigPane implements Component {
 			this.requestRender();
 			return;
 		}
-		if (data === "s" || data === "S") {
+		if (key === "s" || key === "S") {
 			this.done({ action: "save", config: cloneConfig(this.draft) });
 			return;
 		}
-		if (data === "r" || data === "R") {
+		if (key === "r" || key === "R") {
 			this.draft = defaultConfig();
 			this.focus = "categories";
 			this.catIndex = 0;
@@ -634,12 +641,12 @@ class GlanceConfigPane implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.space)) return;
-		if (this.focus === "categories" && (data === "k" || data === "K")) {
+		if (this.focus === "categories" && (key === "k" || key === "K")) {
 			this.moveCurrentSegment(-1);
 			this.requestRender();
 			return;
 		}
-		if (this.focus === "categories" && (data === "j" || data === "J")) {
+		if (this.focus === "categories" && (key === "j" || key === "J")) {
 			this.moveCurrentSegment(1);
 			this.requestRender();
 		}

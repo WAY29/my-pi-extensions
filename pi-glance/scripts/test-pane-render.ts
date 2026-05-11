@@ -29,6 +29,16 @@ function press(component: Component, data: string): void {
 	component.handleInput?.(data);
 }
 
+function kittyKey(char: string): string {
+	return `\x1b[${char.codePointAt(0)}u`;
+}
+
+function typeKittyText(component: Component, text: string): void {
+	for (const char of text) {
+		press(component, kittyKey(char));
+	}
+}
+
 function makeState(): GlanceState {
 	return testState({
 		git: {
@@ -272,14 +282,28 @@ press(titleConfigPane.component, "\x1b[B");
 assertLineContainsAll(plainText(titleConfigPane.component), ["Title model", "fallback"], "empty title model should render fallback mode");
 press(titleConfigPane.component, "\r");
 assertContains(plainText(titleConfigPane.component), "Edit Title model", "enter on title model should open an input editor");
-press(titleConfigPane.component, "internal/gpt-4o-mini");
+typeKittyText(titleConfigPane.component, "internal/gpt-4o-mini");
 press(titleConfigPane.component, "\r");
 assertContains(plainText(titleConfigPane.component), "Title model", "title model row should still render after editing");
-press(titleConfigPane.component, "s");
+press(titleConfigPane.component, kittyKey("s"));
 const titleSave = titleConfigPane.done() as { action?: string; config?: GlanceConfig };
 assert.equal(titleSave.action, "save", "title config pane should save");
 assert.equal(titleSave.config?.title.enabled, false, "saved config should include title enabled toggle");
 assert.equal(titleSave.config?.title.model, "internal/gpt-4o-mini", "saved config should include edited title model");
+
+const kittyShortcutPane = await makePane();
+press(kittyShortcutPane.component, "\x1b[B");
+press(kittyShortcutPane.component, kittyKey("j"));
+assertContains(plainText(kittyShortcutPane.component), "Segment order updated", "Kitty j should move the selected segment down");
+press(kittyShortcutPane.component, kittyKey("k"));
+press(kittyShortcutPane.component, kittyKey("s"));
+const kittyShortcutSave = kittyShortcutPane.done() as { action?: string; config?: GlanceConfig };
+assert.equal(kittyShortcutSave.action, "save", "Kitty s should save the pane");
+assert.deepEqual(
+	kittyShortcutSave.config?.segments.map((segment) => segment.id),
+	defaultConfig().segments.map((segment) => segment.id),
+	"Kitty k should move the selected segment back up",
+);
 
 const gitPane = await makePane();
 press(gitPane.component, "\x1b[B");
