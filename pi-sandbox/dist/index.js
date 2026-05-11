@@ -8594,14 +8594,11 @@ function startDirectMacSandboxLogMonitor(callback, ignoreViolations) {
   ]);
   logProcess.stdout?.on("data", (data) => {
     const lines = data.toString().split("\n");
-    const violationLine = lines.find(
+    const violationLines = lines.filter(
       (line) => line.includes("Sandbox:") && line.includes("deny")
     );
     const commandLine = lines.find((line) => line.startsWith("CMD64_"));
-    if (!violationLine) return;
-    const sandboxMatch = violationLine.match(sandboxExtractRegex);
-    if (!sandboxMatch?.[1]) return;
-    const violationDetails = sandboxMatch[1];
+    if (violationLines.length === 0) return;
     let command;
     let encodedCommand;
     if (commandLine) {
@@ -8614,18 +8611,26 @@ function startDirectMacSandboxLogMonitor(callback, ignoreViolations) {
         }
       }
     }
-    if (violationDetails.includes("mDNSResponder") || violationDetails.includes("mach-lookup com.apple.diagnosticd") || violationDetails.includes("mach-lookup com.apple.analyticsd")) {
-      return;
-    }
-    if (ignoreViolations && command) {
-      if (wildcardPaths.some((ignoredPath) => violationDetails.includes(ignoredPath))) return;
-      for (const [pattern, paths] of commandPatterns) {
-        if (command.includes(pattern) && paths.some((ignoredPath) => violationDetails.includes(ignoredPath))) {
-          return;
-        }
+    for (const violationLine of violationLines) {
+      const sandboxMatch = violationLine.match(sandboxExtractRegex);
+      if (!sandboxMatch?.[1]) continue;
+      const violationDetails = sandboxMatch[1];
+      if (violationDetails.includes("mDNSResponder") || violationDetails.includes("mach-lookup com.apple.diagnosticd") || violationDetails.includes("mach-lookup com.apple.analyticsd")) {
+        continue;
       }
+      if (ignoreViolations && command) {
+        if (wildcardPaths.some((ignoredPath) => violationDetails.includes(ignoredPath))) continue;
+        let ignoredByCommandPattern = false;
+        for (const [pattern, paths] of commandPatterns) {
+          if (command.includes(pattern) && paths.some((ignoredPath) => violationDetails.includes(ignoredPath))) {
+            ignoredByCommandPattern = true;
+            break;
+          }
+        }
+        if (ignoredByCommandPattern) continue;
+      }
+      callback({ line: violationDetails, command, encodedCommand, timestamp: /* @__PURE__ */ new Date() });
     }
-    callback({ line: violationDetails, command, encodedCommand, timestamp: /* @__PURE__ */ new Date() });
   });
   logProcess.stderr?.on("data", () => {
   });
@@ -8942,6 +8947,7 @@ function stopDirectMacSandboxMonitoring() {
   directMacSandboxViolations.length = 0;
 }
 var SANDBOX_DENIAL_OUTPUT_PATTERN = /(?:Operation not permitted|Permission denied|Read-only file system)/i;
+var MAX_SANDBOX_PERMISSION_RETRIES = 20;
 function sleep(ms) {
   return new Promise((resolve5) => setTimeout(resolve5, ms));
 }
@@ -8950,11 +8956,23 @@ function bashOutputLooksLikeSandboxDenial(content) {
     (part) => part.type === "text" && typeof part.text === "string" && SANDBOX_DENIAL_OUTPUT_PATTERN.test(part.text)
   );
 }
-function getSandboxViolationsForCommand(command) {
-  return [
+function getViolationTimestampMs(violation) {
+  if (violation.timestamp === void 0) return void 0;
+  if (violation.timestamp instanceof Date) return violation.timestamp.getTime();
+  if (typeof violation.timestamp === "number") return violation.timestamp;
+  const parsed = Date.parse(violation.timestamp);
+  return Number.isNaN(parsed) ? void 0 : parsed;
+}
+function getSandboxViolationsForCommand(command, sinceMs) {
+  const violations = [
     ...SandboxManager.getSandboxViolationStore?.().getViolationsForCommand(command) ?? [],
     ...getDirectMacSandboxViolationsForCommand(command)
   ];
+  if (sinceMs === void 0) return violations;
+  return violations.filter((violation) => {
+    const timestampMs = getViolationTimestampMs(violation);
+    return timestampMs !== void 0 && timestampMs >= sinceMs;
+  });
 }
 function parseSandboxFilesystemViolationLine(line) {
   const match = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
@@ -8966,20 +8984,42 @@ function parseSandboxFilesystemViolationLine(line) {
   if (!path6.startsWith("/")) return null;
   return { path: path6, access: match[2] };
 }
-function getSandboxFilesystemViolationForCommand(command) {
-  for (const violation of getSandboxViolationsForCommand(command)) {
+function getSandboxFilesystemViolationsForCommand(command, sinceMs) {
+  const filesystemViolations = [];
+  for (const violation of getSandboxViolationsForCommand(command, sinceMs)) {
     const filesystemViolation = parseSandboxFilesystemViolationLine(violation.line);
-    if (filesystemViolation) return filesystemViolation;
+    if (filesystemViolation) filesystemViolations.push(filesystemViolation);
   }
-  return null;
+  return filesystemViolations;
 }
-async function waitForSandboxFilesystemViolationForCommand(command) {
+async function waitForSandboxFilesystemViolationsForCommand(command, sinceMs) {
   for (let attempt = 0; attempt < 5; attempt++) {
     await sleep(50);
-    const violation = getSandboxFilesystemViolationForCommand(command);
-    if (violation) return violation;
+    const violations = getSandboxFilesystemViolationsForCommand(command, sinceMs);
+    if (violations.length > 0) return violations;
   }
-  return null;
+  return [];
+}
+function getFilesystemViolationKey(violation) {
+  return `${violation.access}:${canonicalizePath(violation.path)}`;
+}
+function dedupeFilesystemViolations(violations) {
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = [];
+  for (const violation of violations) {
+    const key = getFilesystemViolationKey(violation);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(violation);
+  }
+  return deduped;
+}
+async function getFilesystemViolationsForFailedBashResult(command, content, sinceMs) {
+  let violations = getSandboxFilesystemViolationsForCommand(command, sinceMs);
+  if (violations.length > 0) return dedupeFilesystemViolations(violations);
+  if (!bashOutputLooksLikeSandboxDenial(content)) return null;
+  violations = await waitForSandboxFilesystemViolationsForCommand(command, sinceMs);
+  return dedupeFilesystemViolations(violations);
 }
 function expandPath(filePath) {
   const expanded = filePath.replace(/^~(?=$|\/)/, homedir3());
@@ -9611,7 +9651,8 @@ function index_default(pi) {
       }
       pendingSandboxedBash.set(event.toolCallId, {
         command: originalCommand,
-        timeout: event.input.timeout
+        timeout: event.input.timeout,
+        startedAt: Date.now()
       });
       return;
     }
@@ -9683,33 +9724,32 @@ Check denyWrite in:
       }
     }
   });
-  pi.on("tool_result", async (event, ctx) => {
-    if (!sandboxEnabled || !sandboxInitialized) return;
-    if (event.toolName !== "bash") return;
-    if (!event.isError) return;
-    const original = pendingSandboxedBash.get(event.toolCallId);
-    pendingSandboxedBash.delete(event.toolCallId);
-    if (!original) return;
-    let violation = getSandboxFilesystemViolationForCommand(original.command);
-    if (!violation) {
-      if (!bashOutputLooksLikeSandboxDenial(event.content)) return;
-      violation = await waitForSandboxFilesystemViolationForCommand(original.command);
-    }
-    if (!violation) return;
-    const blockedPath = canonicalizePath(violation.path);
-    const deniedResult = (reason) => ({
+  function appendSandboxErrorResult(result, text2) {
+    return {
       content: [
-        ...event.content,
+        ...result.content,
         {
           type: "text",
-          text: reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`
+          text: text2
         }
       ],
-      details: event.details,
+      details: result.details,
       isError: true
-    });
+    };
+  }
+  function deniedFilesystemViolationResult(result, violation, blockedPath, reason) {
+    return appendSandboxErrorResult(
+      result,
+      reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`
+    );
+  }
+  async function allowSandboxFilesystemViolation(violation, result, ctx) {
+    const blockedPath = canonicalizePath(violation.path);
     if (!ctx.hasUI || violation.access === "write" && matchesReadOnlyWriteLock(blockedPath)) {
-      return deniedResult();
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(result, violation, blockedPath)
+      };
     }
     const config2 = getEffectiveConfig(ctx.cwd);
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
@@ -9722,35 +9762,108 @@ Check denyWrite in:
         matchesPattern
       );
       if (!readBlockReason) {
-        return deniedResult(
-          `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. Check the OS-level sandbox path normalization.`
-        );
+        return {
+          allowed: false,
+          result: deniedFilesystemViolationResult(
+            result,
+            violation,
+            blockedPath,
+            `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. Check the OS-level sandbox path normalization.`
+          )
+        };
       }
       const choice2 = await promptReadBlock(ctx, blockedPath, readBlockReason);
-      if (choice2 === "abort") return deniedResult();
+      if (choice2 === "abort") {
+        return {
+          allowed: false,
+          result: deniedFilesystemViolationResult(result, violation, blockedPath)
+        };
+      }
       await applyReadChoice(choice2, blockedPath, ctx.cwd);
-      ctx.ui.notify(`Read access granted for "${blockedPath}", retrying bash command`, "info");
-      return retrySandboxedBash(event.toolCallId, original, ctx);
+      return { allowed: true, granted: { access: "read", path: blockedPath } };
     }
     const denyWrite = config2.filesystem?.denyWrite ?? [];
     if (matchesPattern(blockedPath, denyWrite)) {
-      return deniedResult(
-        `Sandbox: write access denied for "${blockedPath}" (in denyWrite). To change this, edit denyWrite in:
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(
+          result,
+          violation,
+          blockedPath,
+          `Sandbox: write access denied for "${blockedPath}" (in denyWrite). To change this, edit denyWrite in:
   ${projectPath}
   ${globalPath}`
-      );
+        )
+      };
     }
     const allowWrite = getEffectiveAllowWrite(ctx.cwd);
     if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
-      return deniedResult(
-        `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. Check the OS-level sandbox path normalization.`
-      );
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(
+          result,
+          violation,
+          blockedPath,
+          `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. Check the OS-level sandbox path normalization.`
+        )
+      };
     }
     const choice = await promptWriteBlock(ctx, blockedPath);
-    if (choice === "abort") return deniedResult();
+    if (choice === "abort") {
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(result, violation, blockedPath)
+      };
+    }
     await applyWriteChoice(choice, blockedPath, ctx.cwd);
-    ctx.ui.notify(`Write access granted for "${blockedPath}", retrying bash command`, "info");
-    return retrySandboxedBash(event.toolCallId, original, ctx);
+    return { allowed: true, granted: { access: "write", path: blockedPath } };
+  }
+  function notifySandboxRetry(ctx, granted) {
+    if (granted.length === 1) {
+      const [{ access, path: path6 }] = granted;
+      const label = access === "read" ? "Read" : "Write";
+      ctx.ui.notify(`${label} access granted for "${path6}", retrying bash command`, "info");
+      return;
+    }
+    ctx.ui.notify(`${granted.length} sandbox accesses granted, retrying bash command`, "info");
+  }
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sandboxEnabled || !sandboxInitialized) return;
+    if (event.toolName !== "bash") return;
+    if (!event.isError) return;
+    const original = pendingSandboxedBash.get(event.toolCallId);
+    pendingSandboxedBash.delete(event.toolCallId);
+    if (!original) return;
+    let currentResult = {
+      content: event.content,
+      details: event.details,
+      isError: true
+    };
+    let executionStartedAt = original.startedAt;
+    for (let attempt = 0; attempt < MAX_SANDBOX_PERMISSION_RETRIES; attempt++) {
+      const violations = await getFilesystemViolationsForFailedBashResult(
+        original.command,
+        currentResult.content,
+        executionStartedAt
+      );
+      if (violations === null || violations.length === 0) {
+        return attempt === 0 ? void 0 : currentResult;
+      }
+      const granted = [];
+      for (const violation of violations) {
+        const decision = await allowSandboxFilesystemViolation(violation, currentResult, ctx);
+        if (!decision.allowed) return decision.result;
+        granted.push(decision.granted);
+      }
+      notifySandboxRetry(ctx, granted);
+      executionStartedAt = Date.now();
+      currentResult = await retrySandboxedBash(event.toolCallId, original, ctx);
+      if (!currentResult.isError) return currentResult;
+    }
+    return appendSandboxErrorResult(
+      currentResult,
+      `Sandbox: permission retry limit (${MAX_SANDBOX_PERMISSION_RETRIES}) reached for bash command.`
+    );
   });
   pi.on("session_start", async (_event, ctx) => {
     lastStatusContext = ctx;

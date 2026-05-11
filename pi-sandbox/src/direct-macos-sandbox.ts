@@ -607,15 +607,11 @@ export function startDirectMacSandboxLogMonitor(
 
   logProcess.stdout?.on("data", (data) => {
     const lines = data.toString().split("\n");
-    const violationLine = lines.find(
+    const violationLines = lines.filter(
       (line: string) => line.includes("Sandbox:") && line.includes("deny"),
     );
     const commandLine = lines.find((line: string) => line.startsWith("CMD64_"));
-    if (!violationLine) return;
-
-    const sandboxMatch = violationLine.match(sandboxExtractRegex);
-    if (!sandboxMatch?.[1]) return;
-    const violationDetails = sandboxMatch[1];
+    if (violationLines.length === 0) return;
 
     let command: string | undefined;
     let encodedCommand: string | undefined;
@@ -631,27 +627,36 @@ export function startDirectMacSandboxLogMonitor(
       }
     }
 
-    if (
-      violationDetails.includes("mDNSResponder") ||
-      violationDetails.includes("mach-lookup com.apple.diagnosticd") ||
-      violationDetails.includes("mach-lookup com.apple.analyticsd")
-    ) {
-      return;
-    }
+    for (const violationLine of violationLines) {
+      const sandboxMatch = violationLine.match(sandboxExtractRegex);
+      if (!sandboxMatch?.[1]) continue;
+      const violationDetails = sandboxMatch[1];
 
-    if (ignoreViolations && command) {
-      if (wildcardPaths.some((ignoredPath) => violationDetails.includes(ignoredPath))) return;
-      for (const [pattern, paths] of commandPatterns) {
-        if (
-          command.includes(pattern) &&
-          paths.some((ignoredPath) => violationDetails.includes(ignoredPath))
-        ) {
-          return;
-        }
+      if (
+        violationDetails.includes("mDNSResponder") ||
+        violationDetails.includes("mach-lookup com.apple.diagnosticd") ||
+        violationDetails.includes("mach-lookup com.apple.analyticsd")
+      ) {
+        continue;
       }
-    }
 
-    callback({ line: violationDetails, command, encodedCommand, timestamp: new Date() });
+      if (ignoreViolations && command) {
+        if (wildcardPaths.some((ignoredPath) => violationDetails.includes(ignoredPath))) continue;
+        let ignoredByCommandPattern = false;
+        for (const [pattern, paths] of commandPatterns) {
+          if (
+            command.includes(pattern) &&
+            paths.some((ignoredPath) => violationDetails.includes(ignoredPath))
+          ) {
+            ignoredByCommandPattern = true;
+            break;
+          }
+        }
+        if (ignoredByCommandPattern) continue;
+      }
+
+      callback({ line: violationDetails, command, encodedCommand, timestamp: new Date() });
+    }
   });
 
   logProcess.stderr?.on("data", () => {

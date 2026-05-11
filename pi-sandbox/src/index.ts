@@ -65,6 +65,7 @@
  * Linux also requires: bubblewrap, socat, ripgrep
  */
 
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { spawn } from "node:child_process";
@@ -513,7 +514,13 @@ interface SandboxRuntimeViolation {
   line: string;
   command?: string;
   encodedCommand?: string;
-  timestamp?: Date;
+  timestamp?: Date | number | string;
+}
+
+interface BashResultLike {
+  content: Array<TextContent | ImageContent>;
+  details: unknown;
+  isError: boolean;
 }
 
 interface SandboxViolationStoreLike {
@@ -559,14 +566,13 @@ function stopDirectMacSandboxMonitoring(): void {
 
 const SANDBOX_DENIAL_OUTPUT_PATTERN =
   /(?:Operation not permitted|Permission denied|Read-only file system)/i;
+const MAX_SANDBOX_PERMISSION_RETRIES = 20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function bashOutputLooksLikeSandboxDenial(
-  content: Array<{ type: string; text?: string }>,
-): boolean {
+function bashOutputLooksLikeSandboxDenial(content: Array<TextContent | ImageContent>): boolean {
   return content.some(
     (part) =>
       part.type === "text" &&
@@ -575,13 +581,30 @@ function bashOutputLooksLikeSandboxDenial(
   );
 }
 
-function getSandboxViolationsForCommand(command: string): SandboxRuntimeViolation[] {
-  return [
+function getViolationTimestampMs(violation: SandboxRuntimeViolation): number | undefined {
+  if (violation.timestamp === undefined) return undefined;
+  if (violation.timestamp instanceof Date) return violation.timestamp.getTime();
+  if (typeof violation.timestamp === "number") return violation.timestamp;
+  const parsed = Date.parse(violation.timestamp);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function getSandboxViolationsForCommand(
+  command: string,
+  sinceMs?: number,
+): SandboxRuntimeViolation[] {
+  const violations = [
     ...((SandboxManager as unknown as SandboxManagerWithViolationStore)
       .getSandboxViolationStore?.()
       .getViolationsForCommand(command) ?? []),
     ...getDirectMacSandboxViolationsForCommand(command),
   ];
+
+  if (sinceMs === undefined) return violations;
+  return violations.filter((violation) => {
+    const timestampMs = getViolationTimestampMs(violation);
+    return timestampMs !== undefined && timestampMs >= sinceMs;
+  });
 }
 
 function parseSandboxFilesystemViolationLine(line: string): SandboxFilesystemViolation | null {
@@ -603,27 +626,64 @@ function parseSandboxFilesystemViolationLine(line: string): SandboxFilesystemVio
   return { path, access: match[2] as FilesystemAccessKind };
 }
 
-function getSandboxFilesystemViolationForCommand(
+function getSandboxFilesystemViolationsForCommand(
   command: string,
-): SandboxFilesystemViolation | null {
-  for (const violation of getSandboxViolationsForCommand(command)) {
+  sinceMs?: number,
+): SandboxFilesystemViolation[] {
+  const filesystemViolations: SandboxFilesystemViolation[] = [];
+  for (const violation of getSandboxViolationsForCommand(command, sinceMs)) {
     const filesystemViolation = parseSandboxFilesystemViolationLine(violation.line);
-    if (filesystemViolation) return filesystemViolation;
+    if (filesystemViolation) filesystemViolations.push(filesystemViolation);
   }
 
-  return null;
+  return filesystemViolations;
 }
 
-async function waitForSandboxFilesystemViolationForCommand(
+async function waitForSandboxFilesystemViolationsForCommand(
   command: string,
-): Promise<SandboxFilesystemViolation | null> {
+  sinceMs?: number,
+): Promise<SandboxFilesystemViolation[]> {
   for (let attempt = 0; attempt < 5; attempt++) {
     await sleep(50);
-    const violation = getSandboxFilesystemViolationForCommand(command);
-    if (violation) return violation;
+    const violations = getSandboxFilesystemViolationsForCommand(command, sinceMs);
+    if (violations.length > 0) return violations;
   }
 
-  return null;
+  return [];
+}
+
+function getFilesystemViolationKey(violation: SandboxFilesystemViolation): string {
+  return `${violation.access}:${canonicalizePath(violation.path)}`;
+}
+
+function dedupeFilesystemViolations(
+  violations: SandboxFilesystemViolation[],
+): SandboxFilesystemViolation[] {
+  const seen = new Set<string>();
+  const deduped: SandboxFilesystemViolation[] = [];
+
+  for (const violation of violations) {
+    const key = getFilesystemViolationKey(violation);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(violation);
+  }
+
+  return deduped;
+}
+
+async function getFilesystemViolationsForFailedBashResult(
+  command: string,
+  content: Array<TextContent | ImageContent>,
+  sinceMs: number,
+): Promise<SandboxFilesystemViolation[] | null> {
+  let violations = getSandboxFilesystemViolationsForCommand(command, sinceMs);
+  if (violations.length > 0) return dedupeFilesystemViolations(violations);
+
+  if (!bashOutputLooksLikeSandboxDenial(content)) return null;
+
+  violations = await waitForSandboxFilesystemViolationsForCommand(command, sinceMs);
+  return dedupeFilesystemViolations(violations);
 }
 
 // ── Path pattern matching ─────────────────────────────────────────────────────
@@ -937,7 +997,10 @@ export default function (pi: ExtensionAPI) {
   const sessionAllowedReadPaths: string[] = [];
   const sessionAllowedWritePaths: string[] = [];
 
-  const pendingSandboxedBash = new Map<string, { command: string; timeout?: number }>();
+  const pendingSandboxedBash = new Map<
+    string,
+    { command: string; timeout?: number; startedAt: number }
+  >();
 
   // Cooperative write locks from other extensions, e.g. plan-mode.
   // Locks can be global or scoped to a cwd while keeping the active tool set unchanged.
@@ -1475,6 +1538,7 @@ export default function (pi: ExtensionAPI) {
       pendingSandboxedBash.set(event.toolCallId, {
         command: originalCommand,
         timeout: event.input.timeout,
+        startedAt: Date.now(),
       });
       return;
     }
@@ -1563,37 +1627,48 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("tool_result", async (event, ctx) => {
-    if (!sandboxEnabled || !sandboxInitialized) return;
-    if (event.toolName !== "bash") return;
-    if (!event.isError) return;
+  type GrantedFilesystemAccess = { access: FilesystemAccessKind; path: string };
 
-    const original = pendingSandboxedBash.get(event.toolCallId);
-    pendingSandboxedBash.delete(event.toolCallId);
-    if (!original) return;
-
-    let violation = getSandboxFilesystemViolationForCommand(original.command);
-    if (!violation) {
-      if (!bashOutputLooksLikeSandboxDenial(event.content)) return;
-      violation = await waitForSandboxFilesystemViolationForCommand(original.command);
-    }
-    if (!violation) return;
-
-    const blockedPath = canonicalizePath(violation.path);
-    const deniedResult = (reason?: string) => ({
+  function appendSandboxErrorResult(result: BashResultLike, text: string): BashResultLike {
+    return {
       content: [
-        ...event.content,
+        ...result.content,
         {
           type: "text" as const,
-          text: reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`,
+          text,
         },
       ],
-      details: event.details,
+      details: result.details,
       isError: true,
-    });
+    };
+  }
+
+  function deniedFilesystemViolationResult(
+    result: BashResultLike,
+    violation: SandboxFilesystemViolation,
+    blockedPath: string,
+    reason?: string,
+  ): BashResultLike {
+    return appendSandboxErrorResult(
+      result,
+      reason ?? `Sandbox: ${violation.access} access denied for "${blockedPath}"`,
+    );
+  }
+
+  async function allowSandboxFilesystemViolation(
+    violation: SandboxFilesystemViolation,
+    result: BashResultLike,
+    ctx: ExtensionContext,
+  ): Promise<
+    { allowed: true; granted: GrantedFilesystemAccess } | { allowed: false; result: BashResultLike }
+  > {
+    const blockedPath = canonicalizePath(violation.path);
 
     if (!ctx.hasUI || (violation.access === "write" && matchesReadOnlyWriteLock(blockedPath))) {
-      return deniedResult();
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(result, violation, blockedPath),
+      };
     }
 
     const config = getEffectiveConfig(ctx.cwd);
@@ -1608,42 +1683,125 @@ export default function (pi: ExtensionAPI) {
         matchesPattern,
       );
       if (!readBlockReason) {
-        return deniedResult(
-          `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. ` +
-            `Check the OS-level sandbox path normalization.`,
-        );
+        return {
+          allowed: false,
+          result: deniedFilesystemViolationResult(
+            result,
+            violation,
+            blockedPath,
+            `Sandbox: read access denied for "${blockedPath}", but this path already matches the read policy. ` +
+              `Check the OS-level sandbox path normalization.`,
+          ),
+        };
       }
 
       const choice = await promptReadBlock(ctx, blockedPath, readBlockReason);
-      if (choice === "abort") return deniedResult();
+      if (choice === "abort") {
+        return {
+          allowed: false,
+          result: deniedFilesystemViolationResult(result, violation, blockedPath),
+        };
+      }
 
       await applyReadChoice(choice, blockedPath, ctx.cwd);
-      ctx.ui.notify(`Read access granted for "${blockedPath}", retrying bash command`, "info");
-      return retrySandboxedBash(event.toolCallId, original, ctx);
+      return { allowed: true, granted: { access: "read", path: blockedPath } };
     }
 
     const denyWrite = config.filesystem?.denyWrite ?? [];
     if (matchesPattern(blockedPath, denyWrite)) {
-      return deniedResult(
-        `Sandbox: write access denied for "${blockedPath}" (in denyWrite). ` +
-          `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
-      );
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(
+          result,
+          violation,
+          blockedPath,
+          `Sandbox: write access denied for "${blockedPath}" (in denyWrite). ` +
+            `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+        ),
+      };
     }
 
     const allowWrite = getEffectiveAllowWrite(ctx.cwd);
     if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
-      return deniedResult(
-        `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. ` +
-          `Check the OS-level sandbox path normalization.`,
-      );
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(
+          result,
+          violation,
+          blockedPath,
+          `Sandbox: write access denied for "${blockedPath}", but this path already matches allowWrite. ` +
+            `Check the OS-level sandbox path normalization.`,
+        ),
+      };
     }
 
     const choice = await promptWriteBlock(ctx, blockedPath);
-    if (choice === "abort") return deniedResult();
+    if (choice === "abort") {
+      return {
+        allowed: false,
+        result: deniedFilesystemViolationResult(result, violation, blockedPath),
+      };
+    }
 
     await applyWriteChoice(choice, blockedPath, ctx.cwd);
-    ctx.ui.notify(`Write access granted for "${blockedPath}", retrying bash command`, "info");
-    return retrySandboxedBash(event.toolCallId, original, ctx);
+    return { allowed: true, granted: { access: "write", path: blockedPath } };
+  }
+
+  function notifySandboxRetry(ctx: ExtensionContext, granted: GrantedFilesystemAccess[]): void {
+    if (granted.length === 1) {
+      const [{ access, path }] = granted;
+      const label = access === "read" ? "Read" : "Write";
+      ctx.ui.notify(`${label} access granted for "${path}", retrying bash command`, "info");
+      return;
+    }
+
+    ctx.ui.notify(`${granted.length} sandbox accesses granted, retrying bash command`, "info");
+  }
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (!sandboxEnabled || !sandboxInitialized) return;
+    if (event.toolName !== "bash") return;
+    if (!event.isError) return;
+
+    const original = pendingSandboxedBash.get(event.toolCallId);
+    pendingSandboxedBash.delete(event.toolCallId);
+    if (!original) return;
+
+    let currentResult: BashResultLike = {
+      content: event.content,
+      details: event.details,
+      isError: true,
+    };
+    let executionStartedAt = original.startedAt;
+
+    for (let attempt = 0; attempt < MAX_SANDBOX_PERMISSION_RETRIES; attempt++) {
+      const violations = await getFilesystemViolationsForFailedBashResult(
+        original.command,
+        currentResult.content,
+        executionStartedAt,
+      );
+
+      if (violations === null || violations.length === 0) {
+        return attempt === 0 ? undefined : currentResult;
+      }
+
+      const granted: GrantedFilesystemAccess[] = [];
+      for (const violation of violations) {
+        const decision = await allowSandboxFilesystemViolation(violation, currentResult, ctx);
+        if (!decision.allowed) return decision.result;
+        granted.push(decision.granted);
+      }
+
+      notifySandboxRetry(ctx, granted);
+      executionStartedAt = Date.now();
+      currentResult = await retrySandboxedBash(event.toolCallId, original, ctx);
+      if (!currentResult.isError) return currentResult;
+    }
+
+    return appendSandboxErrorResult(
+      currentResult,
+      `Sandbox: permission retry limit (${MAX_SANDBOX_PERMISSION_RETRIES}) reached for bash command.`,
+    );
   });
 
   // ── session_start ───────────────────────────────────────────────────────────
