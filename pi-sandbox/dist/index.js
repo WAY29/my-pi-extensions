@@ -604,10 +604,10 @@ var require_shell_quote = __commonJS({
 // src/index.ts
 import { spawn as spawn5 } from "node:child_process";
 import fs7 from "node:fs";
-import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync2, realpathSync as realpathSync4, writeFileSync } from "node:fs";
+import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync2, realpathSync as realpathSync5, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { BlockList as BlockList2, isIP as isIP3 } from "node:net";
-import { homedir as homedir3 } from "node:os";
+import { homedir as homedir4 } from "node:os";
 import { basename, dirname as dirname5, join as join4, resolve as resolve4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -7598,6 +7598,12 @@ function ensureBashToolRegistered(pi, cwd) {
     state.ownerPi.registerTool(createComposedBashTool(cwd, state));
   }
 }
+function releaseBashToolOwner(pi) {
+  const state = getState();
+  if (state.ownerPi !== pi) return;
+  state.ownerPi = void 0;
+  state.cwd = void 0;
+}
 
 // src/direct-linux-sandbox.ts
 import * as fs6 from "node:fs";
@@ -8104,6 +8110,8 @@ async function createDirectLinuxSandboxCommand(params) {
 
 // src/direct-macos-sandbox.ts
 import { spawn as spawn4 } from "node:child_process";
+import { realpathSync as realpathSync4 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
 import * as path5 from "node:path";
 var directSessionSuffix = `_${Math.random().toString(36).slice(2, 11)}_PI_SBX`;
 function generateLogTag2(command) {
@@ -8128,11 +8136,42 @@ function macGetMandatoryDenyPatterns2(allowGitConfig = false) {
   }
   return [...new Set(denyPaths)];
 }
-function getAncestorDirectories2(pathStr) {
+function normalizeSandboxPath(pathPattern) {
+  let normalizedPath = pathPattern;
+  if (pathPattern === "~") {
+    normalizedPath = homedir3();
+  } else if (pathPattern.startsWith("~/")) {
+    normalizedPath = homedir3() + pathPattern.slice(1);
+  } else if (pathPattern.startsWith("./") || pathPattern.startsWith("../")) {
+    normalizedPath = path5.resolve(process.cwd(), pathPattern);
+  } else if (!path5.isAbsolute(pathPattern)) {
+    normalizedPath = path5.resolve(process.cwd(), pathPattern);
+  }
+  if (containsGlobChars(normalizedPath)) {
+    const staticPrefix = normalizedPath.split(/[*?[\]]/)[0];
+    if (!staticPrefix || staticPrefix === "/") return normalizedPath;
+    const baseDir = staticPrefix.endsWith("/") ? staticPrefix.slice(0, -1) : path5.dirname(staticPrefix);
+    try {
+      const resolvedBaseDir = realpathSync4(baseDir);
+      return resolvedBaseDir + normalizedPath.slice(baseDir.length);
+    } catch {
+      return normalizedPath;
+    }
+  }
+  try {
+    return realpathSync4(normalizedPath);
+  } catch {
+    return normalizedPath;
+  }
+}
+function getAncestorDirectoriesWithinCwd(pathStr) {
+  const cwd = normalizeSandboxPath(process.cwd());
   const ancestors = [];
   let currentPath = path5.dirname(pathStr);
   while (currentPath !== "/" && currentPath !== ".") {
-    ancestors.push(currentPath);
+    if (currentPath === cwd || currentPath.startsWith(cwd + "/")) {
+      ancestors.push(currentPath);
+    }
     const parentPath = path5.dirname(currentPath);
     if (parentPath === currentPath) break;
     currentPath = parentPath;
@@ -8146,7 +8185,7 @@ function generateMoveBlockingRules2(pathPatterns, logTag) {
   const rules = [];
   const ops = ["file-write-unlink", "file-write-create"];
   for (const pathPattern of pathPatterns) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       for (const op of ops) {
@@ -8166,7 +8205,7 @@ function generateMoveBlockingRules2(pathPatterns, logTag) {
             `  (with message "${logTag}"))`
           );
         }
-        for (const ancestorDir of getAncestorDirectories2(baseDir)) {
+        for (const ancestorDir of getAncestorDirectoriesWithinCwd(baseDir)) {
           for (const op of ops) {
             rules.push(
               `(deny ${op}`,
@@ -8184,7 +8223,7 @@ function generateMoveBlockingRules2(pathPatterns, logTag) {
           `  (with message "${logTag}"))`
         );
       }
-      for (const ancestorDir of getAncestorDirectories2(normalizedPath)) {
+      for (const ancestorDir of getAncestorDirectoriesWithinCwd(normalizedPath)) {
         for (const op of ops) {
           rules.push(
             `(deny ${op}`,
@@ -8203,7 +8242,7 @@ function generateReadRules2(config2, logTag, writeAllowPaths) {
   let deniesRoot = false;
   rules.push("(allow file-read*)");
   for (const pathPattern of config2.denyOnly || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (normalizedPath === "/") deniesRoot = true;
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
@@ -8222,7 +8261,7 @@ function generateReadRules2(config2, logTag, writeAllowPaths) {
   }
   if (deniesRoot) rules.push('(allow file-read* (literal "/"))');
   for (const pathPattern of config2.allowWithinDeny || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -8244,7 +8283,7 @@ function generateReadRules2(config2, logTag, writeAllowPaths) {
   rules.push(...generateMoveBlockingRules2(config2.denyOnly || [], logTag));
   if (writeAllowPaths && writeAllowPaths.length > 0) {
     for (const pathPattern of writeAllowPaths) {
-      const normalizedPath = normalizePathForSandbox(pathPattern);
+      const normalizedPath = normalizeSandboxPath(pathPattern);
       for (const op of ["file-write-unlink", "file-write-create"]) {
         if (containsGlobChars(normalizedPath)) {
           const regexPattern = globToRegex(normalizedPath);
@@ -8269,7 +8308,7 @@ function generateWriteRules2(config2, logTag, allowGitConfig = false) {
   if (!config2) return ["(allow file-write*)"];
   const rules = [];
   for (const pathPattern of config2.allowOnly || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -8290,7 +8329,7 @@ function generateWriteRules2(config2, logTag, allowGitConfig = false) {
     ...macGetMandatoryDenyPatterns2(allowGitConfig)
   ];
   for (const pathPattern of denyPaths) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -8497,7 +8536,7 @@ function generateSandboxProfile2({
     } else if (allowUnixSockets && allowUnixSockets.length > 0) {
       profile.push("(allow system-socket (socket-domain AF_UNIX))");
       for (const socketPath of allowUnixSockets) {
-        const normalizedPath = normalizePathForSandbox(socketPath);
+        const normalizedPath = normalizeSandboxPath(socketPath);
         profile.push(
           `(allow network-bind (local unix-socket (subpath ${escapePath2(normalizedPath)})))`
         );
@@ -8665,10 +8704,10 @@ var DEFAULT_CONFIG = {
 var READ_ONLY_LOCK_DENY_WRITE_PATHS = [
   "/tmp/claude",
   "/private/tmp/claude",
-  join4(homedir3(), ".npm", "_logs"),
-  join4(homedir3(), ".claude", "debug")
+  join4(homedir4(), ".npm", "_logs"),
+  join4(homedir4(), ".claude", "debug")
 ];
-var PROCESS_READ_ONLY_LOCK_ALLOW_WRITE_PATHS = [join4(homedir3(), ".pi", "agent")];
+var PROCESS_READ_ONLY_LOCK_ALLOW_WRITE_PATHS = [join4(homedir4(), ".pi", "agent")];
 var fsWriteApisPatched = false;
 var readOnlyWriteLockDeniesWrite;
 var writeLockBypassDepth = 0;
@@ -8679,7 +8718,7 @@ function describeFsTarget(target) {
   return void 0;
 }
 function getFsTargetPath(target) {
-  if (typeof target === "string") return resolve4(target.replace(/^~(?=$|\/)/, homedir3()));
+  if (typeof target === "string") return resolve4(target.replace(/^~(?=$|\/)/, homedir4()));
   if (target instanceof URL && target.protocol === "file:") return resolve4(fileURLToPath2(target));
   if (Buffer.isBuffer(target)) return resolve4(target.toString("utf8"));
   return void 0;
@@ -9022,13 +9061,13 @@ async function getFilesystemViolationsForFailedBashResult(command, content, sinc
   return dedupeFilesystemViolations(violations);
 }
 function expandPath(filePath) {
-  const expanded = filePath.replace(/^~(?=$|\/)/, homedir3());
+  const expanded = filePath.replace(/^~(?=$|\/)/, homedir4());
   return resolve4(expanded);
 }
 function canonicalizePath(filePath) {
   const abs = expandPath(filePath);
   try {
-    return realpathSync4.native(abs);
+    return realpathSync5.native(abs);
   } catch {
     const tail = [];
     let probe = abs;
@@ -9039,7 +9078,7 @@ function canonicalizePath(filePath) {
       probe = parent;
     }
     try {
-      return resolve4(realpathSync4.native(probe), ...tail);
+      return resolve4(realpathSync5.native(probe), ...tail);
     } catch {
       return abs;
     }
@@ -9059,7 +9098,7 @@ function matchesPattern(filePath, patterns) {
 }
 function getConfigPaths(cwd) {
   return {
-    globalPath: join4(homedir3(), ".pi", "agent", "sandbox.json"),
+    globalPath: join4(homedir4(), ".pi", "agent", "sandbox.json"),
     projectPath: join4(cwd, ".pi", "sandbox.json")
   };
 }
@@ -9784,6 +9823,9 @@ Check denyWrite in:
         matchesPattern
       );
       if (!readBlockReason) {
+        if (matchesPattern(blockedPath, sessionAllowedReadPaths)) {
+          return { allowed: true, granted: { access: "read", path: blockedPath } };
+        }
         return {
           allowed: false,
           result: deniedFilesystemViolationResult(
@@ -9821,6 +9863,9 @@ Check denyWrite in:
     }
     const allowWrite = getEffectiveAllowWrite(ctx.cwd);
     if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
+      if (matchesPattern(blockedPath, sessionAllowedWritePaths)) {
+        return { allowed: true, granted: { access: "write", path: blockedPath } };
+      }
       return {
         allowed: false,
         result: deniedFilesystemViolationResult(
@@ -9951,6 +9996,7 @@ Check denyWrite in:
     }
   });
   pi.on("session_shutdown", async () => {
+    releaseBashToolOwner(pi);
     pendingSandboxedBash.clear();
     stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {

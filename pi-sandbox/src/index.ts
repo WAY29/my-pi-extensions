@@ -94,7 +94,11 @@ import {
 import { matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 import fsPromises from "node:fs/promises";
 
-import { ensureBashToolRegistered, registerBashToolPlugin } from "../../bash-tool-coordinator";
+import {
+  ensureBashToolRegistered,
+  registerBashToolPlugin,
+  releaseBashToolOwner,
+} from "../../bash-tool-coordinator";
 import { createDirectLinuxSandboxCommand } from "./direct-linux-sandbox";
 import {
   createDirectMacSandboxCommand,
@@ -1713,6 +1717,9 @@ export default function (pi: ExtensionAPI) {
         matchesPattern,
       );
       if (!readBlockReason) {
+        if (matchesPattern(blockedPath, sessionAllowedReadPaths)) {
+          return { allowed: true, granted: { access: "read", path: blockedPath } };
+        }
         return {
           allowed: false,
           result: deniedFilesystemViolationResult(
@@ -1754,6 +1761,9 @@ export default function (pi: ExtensionAPI) {
 
     const allowWrite = getEffectiveAllowWrite(ctx.cwd);
     if (!shouldPromptForWrite(blockedPath, allowWrite, matchesPattern)) {
+      if (matchesPattern(blockedPath, sessionAllowedWritePaths)) {
+        return { allowed: true, granted: { access: "write", path: blockedPath } };
+      }
       return {
         allowed: false,
         result: deniedFilesystemViolationResult(
@@ -1920,6 +1930,7 @@ export default function (pi: ExtensionAPI) {
   // ── session_shutdown ────────────────────────────────────────────────────────
 
   pi.on("session_shutdown", async () => {
+    releaseBashToolOwner(pi);
     pendingSandboxedBash.clear();
     stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {

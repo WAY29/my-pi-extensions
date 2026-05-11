@@ -5,6 +5,7 @@ import {
   ensureBashToolRegistered,
   refreshBashTool,
   registerBashToolPlugin,
+  releaseBashToolOwner,
 } from "./bash-tool-coordinator";
 
 type OutputMode = "hidden" | "compact" | "full";
@@ -89,7 +90,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand(COMMAND, {
     description: "Cycle or set bash/grep output mode: hidden, compact, full",
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const requestedMode = args.trim() ? parseMode(args) : nextMode(outputMode);
       if (!requestedMode) {
         ctx.ui.notify(`Usage: /${COMMAND} [hidden|compact|full]`, "warning");
@@ -110,7 +111,14 @@ export default function (pi: ExtensionAPI) {
       ...grep,
       renderResult(result, options, theme, context) {
         if (outputMode === "hidden") {
-          return new Container();
+          return (
+            grep.renderResult?.(
+              { ...result, content: [] },
+              { ...options, expanded: false },
+              theme,
+              context,
+            ) ?? new Container()
+          );
         }
 
         return (
@@ -126,6 +134,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    releaseBashToolOwner(pi);
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 }

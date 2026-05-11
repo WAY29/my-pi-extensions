@@ -106,6 +106,13 @@ export function refreshBashTool(): void {
   registerWithCurrentOwner(getState());
 }
 
+export function releaseBashToolOwner(pi: ExtensionAPI): void {
+  const state = getState();
+  if (state.ownerPi !== pi) return;
+  state.ownerPi = undefined;
+  state.cwd = undefined;
+}
+
 export default function bashToolCoordinator(_pi: ExtensionAPI): void {
   // This file is also discovered as a standalone pi extension when placed in
   // the extensions directory. It intentionally registers nothing by itself;

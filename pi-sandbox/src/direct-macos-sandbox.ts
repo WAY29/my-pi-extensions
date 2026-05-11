@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 
 import {
@@ -9,7 +11,6 @@ import {
   generateProxyEnvVars,
   getDangerousDirectories,
   globToRegex,
-  normalizePathForSandbox,
 } from "@carderne/sandbox-runtime/dist/sandbox/sandbox-utils.js";
 
 export type FilesystemAccessKind = "read" | "write";
@@ -87,12 +88,49 @@ function macGetMandatoryDenyPatterns(allowGitConfig = false): string[] {
   return [...new Set(denyPaths)];
 }
 
-function getAncestorDirectories(pathStr: string): string[] {
+function normalizeSandboxPath(pathPattern: string): string {
+  let normalizedPath = pathPattern;
+  if (pathPattern === "~") {
+    normalizedPath = homedir();
+  } else if (pathPattern.startsWith("~/")) {
+    normalizedPath = homedir() + pathPattern.slice(1);
+  } else if (pathPattern.startsWith("./") || pathPattern.startsWith("../")) {
+    normalizedPath = path.resolve(process.cwd(), pathPattern);
+  } else if (!path.isAbsolute(pathPattern)) {
+    normalizedPath = path.resolve(process.cwd(), pathPattern);
+  }
+
+  if (containsGlobChars(normalizedPath)) {
+    const staticPrefix = normalizedPath.split(/[*?[\]]/)[0];
+    if (!staticPrefix || staticPrefix === "/") return normalizedPath;
+
+    const baseDir = staticPrefix.endsWith("/")
+      ? staticPrefix.slice(0, -1)
+      : path.dirname(staticPrefix);
+    try {
+      const resolvedBaseDir = realpathSync(baseDir);
+      return resolvedBaseDir + normalizedPath.slice(baseDir.length);
+    } catch {
+      return normalizedPath;
+    }
+  }
+
+  try {
+    return realpathSync(normalizedPath);
+  } catch {
+    return normalizedPath;
+  }
+}
+
+function getAncestorDirectoriesWithinCwd(pathStr: string): string[] {
+  const cwd = normalizeSandboxPath(process.cwd());
   const ancestors: string[] = [];
   let currentPath = path.dirname(pathStr);
 
   while (currentPath !== "/" && currentPath !== ".") {
-    ancestors.push(currentPath);
+    if (currentPath === cwd || currentPath.startsWith(cwd + "/")) {
+      ancestors.push(currentPath);
+    }
     const parentPath = path.dirname(currentPath);
     if (parentPath === currentPath) break;
     currentPath = parentPath;
@@ -110,7 +148,7 @@ function generateMoveBlockingRules(pathPatterns: string[], logTag: string): stri
   const ops = ["file-write-unlink", "file-write-create"];
 
   for (const pathPattern of pathPatterns) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       for (const op of ops) {
@@ -133,7 +171,7 @@ function generateMoveBlockingRules(pathPatterns: string[], logTag: string): stri
             `  (with message "${logTag}"))`,
           );
         }
-        for (const ancestorDir of getAncestorDirectories(baseDir)) {
+        for (const ancestorDir of getAncestorDirectoriesWithinCwd(baseDir)) {
           for (const op of ops) {
             rules.push(
               `(deny ${op}`,
@@ -151,7 +189,7 @@ function generateMoveBlockingRules(pathPatterns: string[], logTag: string): stri
           `  (with message "${logTag}"))`,
         );
       }
-      for (const ancestorDir of getAncestorDirectories(normalizedPath)) {
+      for (const ancestorDir of getAncestorDirectoriesWithinCwd(normalizedPath)) {
         for (const op of ops) {
           rules.push(
             `(deny ${op}`,
@@ -178,7 +216,7 @@ function generateReadRules(
   rules.push("(allow file-read*)");
 
   for (const pathPattern of config.denyOnly || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (normalizedPath === "/") deniesRoot = true;
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
@@ -199,7 +237,7 @@ function generateReadRules(
   if (deniesRoot) rules.push('(allow file-read* (literal "/"))');
 
   for (const pathPattern of config.allowWithinDeny || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -224,7 +262,7 @@ function generateReadRules(
 
   if (writeAllowPaths && writeAllowPaths.length > 0) {
     for (const pathPattern of writeAllowPaths) {
-      const normalizedPath = normalizePathForSandbox(pathPattern);
+      const normalizedPath = normalizeSandboxPath(pathPattern);
       for (const op of ["file-write-unlink", "file-write-create"]) {
         if (containsGlobChars(normalizedPath)) {
           const regexPattern = globToRegex(normalizedPath);
@@ -256,7 +294,7 @@ function generateWriteRules(
 
   const rules: string[] = [];
   for (const pathPattern of config.allowOnly || []) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -278,7 +316,7 @@ function generateWriteRules(
     ...macGetMandatoryDenyPatterns(allowGitConfig),
   ];
   for (const pathPattern of denyPaths) {
-    const normalizedPath = normalizePathForSandbox(pathPattern);
+    const normalizedPath = normalizeSandboxPath(pathPattern);
     if (containsGlobChars(normalizedPath)) {
       const regexPattern = globToRegex(normalizedPath);
       rules.push(
@@ -494,7 +532,7 @@ function generateSandboxProfile({
     } else if (allowUnixSockets && allowUnixSockets.length > 0) {
       profile.push("(allow system-socket (socket-domain AF_UNIX))");
       for (const socketPath of allowUnixSockets) {
-        const normalizedPath = normalizePathForSandbox(socketPath);
+        const normalizedPath = normalizeSandboxPath(socketPath);
         profile.push(
           `(allow network-bind (local unix-socket (subpath ${escapePath(normalizedPath)})))`,
         );
