@@ -123,9 +123,6 @@ export function cleanStepText(text: string): string {
 	if (cleaned.length > 0) {
 		cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 	}
-	if (cleaned.length > 50) {
-		cleaned = `${cleaned.slice(0, 47)}...`;
-	}
 	return cleaned;
 }
 
@@ -135,15 +132,21 @@ export function extractTodoItems(message: string): TodoItem[] {
 	if (!headerMatch) return items;
 
 	const planSection = message.slice(message.indexOf(headerMatch[0]) + headerMatch[0].length);
-	const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
+	let currentLines: string[] = [];
 
-	for (const match of planSection.matchAll(numberedPattern)) {
-		if (items.length >= MAX_TODO_ITEMS) break;
+	function flushCurrent(): void {
+		if (items.length >= MAX_TODO_ITEMS || currentLines.length === 0) {
+			currentLines = [];
+			return;
+		}
 
-		const text = match[2]
+		const text = currentLines
+			.join(" ")
 			.trim()
 			.replace(/\*{1,2}$/, "")
 			.trim();
+		currentLines = [];
+
 		if (text.length > 5 && !text.startsWith("`") && !text.startsWith("/") && !text.startsWith("-")) {
 			const cleaned = cleanStepText(text);
 			if (cleaned.length > 3) {
@@ -151,6 +154,28 @@ export function extractTodoItems(message: string): TodoItem[] {
 			}
 		}
 	}
+
+	for (const line of planSection.split(/\r?\n/)) {
+		if (items.length >= MAX_TODO_ITEMS) break;
+
+		const numbered = line.match(/^\s*(\d+)[.)]\s+\*{0,2}(.+)$/);
+		if (numbered) {
+			flushCurrent();
+			currentLines = [numbered[2].trim()];
+			continue;
+		}
+
+		if (currentLines.length === 0) continue;
+		const trimmed = line.trim();
+		if (trimmed.length === 0) {
+			flushCurrent();
+			continue;
+		}
+
+		currentLines.push(trimmed);
+	}
+
+	flushCurrent();
 	return items;
 }
 

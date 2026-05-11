@@ -9429,8 +9429,27 @@ function index_default(pi) {
       console.error(`Warning: Failed to reinitialize sandbox: ${e}`);
     }
   }
-  const PERMISSION_OPTIONS = [
+  const DOMAIN_PERMISSION_OPTIONS = [
     { label: "Allow for this session only", key: "s", action: "session" },
+    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
+    {
+      label: "Allow for this project",
+      key: "P",
+      action: "project",
+      confirm: true,
+      hint: "\u2192 .pi/sandbox.json"
+    },
+    {
+      label: "Allow for all projects",
+      key: "A",
+      action: "global",
+      confirm: true,
+      hint: "\u2192 ~/.pi/agent/sandbox.json"
+    }
+  ];
+  const FILESYSTEM_PERMISSION_OPTIONS = [
+    { label: "Allow this file for this session only", key: "s", action: "session-file" },
+    { label: "Allow containing folder for this session only", key: "d", action: "session-dir" },
     { label: "Abort (keep blocked)", key: "esc", action: "abort" },
     {
       label: "Allow for this project",
@@ -9449,94 +9468,92 @@ function index_default(pi) {
   ];
   async function showPermissionPrompt(ctx, title, options) {
     if (!ctx.hasUI) return "abort";
-    const result = await ctx.ui.custom(
-      (tui, theme, _kb, done) => {
-        let selectedIndex = 0;
-        let pendingAction = null;
-        function resolve5(action) {
-          done(action);
-        }
-        return {
-          render(width) {
-            const lines = [];
-            lines.push(truncateToWidth(theme.fg("warning", title), width));
-            lines.push("");
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              const isSelected = i === selectedIndex;
-              const isPending = pendingAction === opt.action;
-              const prefix = isSelected ? " \u2192 " : "   ";
-              const keyHint = theme.fg("accent", `[${opt.key}]`);
-              let label = opt.label;
-              if (opt.hint) {
-                label += `  ${theme.fg("dim", opt.hint)}`;
-              }
-              if (isPending) {
-                label += `  ${theme.fg("warning", "\u2192 press Enter to confirm")}`;
-              }
-              const line = `${prefix}${keyHint} ${label}`;
-              lines.push(truncateToWidth(line, width));
-            }
-            lines.push("");
-            const footer = pendingAction ? "\u2191\u2193 navigate  enter confirm  esc cancel" : "\u2191\u2193 navigate  enter select  esc/ctrl+c cancel";
-            lines.push(truncateToWidth(theme.fg("dim", footer), width));
-            return lines;
-          },
-          handleInput(data) {
-            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-              resolve5("abort");
-              return;
-            }
-            if (matchesKey(data, Key.enter)) {
-              if (pendingAction) {
-                resolve5(pendingAction);
-              } else {
-                resolve5(options[selectedIndex]?.action ?? "abort");
-              }
-              return;
-            }
-            if (matchesKey(data, Key.up)) {
-              selectedIndex = Math.max(0, selectedIndex - 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.down)) {
-              selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              if (data === opt.key) {
-                resolve5(opt.action);
-                return;
-              }
-              if (data.toLowerCase() === opt.key.toLowerCase()) {
-                if (opt.confirm) {
-                  pendingAction = opt.action;
-                  selectedIndex = i;
-                } else {
-                  resolve5(opt.action);
-                }
-                tui.requestRender();
-                return;
-              }
-            }
-          },
-          invalidate() {
-          }
-        };
+    const result = await ctx.ui.custom((tui, theme, _kb, done) => {
+      let selectedIndex = 0;
+      let pendingAction = null;
+      function resolve5(action) {
+        done(action);
       }
-    );
+      return {
+        render(width) {
+          const lines = [];
+          lines.push(truncateToWidth(theme.fg("warning", title), width));
+          lines.push("");
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            const isSelected = i === selectedIndex;
+            const isPending = pendingAction === opt.action;
+            const prefix = isSelected ? " \u2192 " : "   ";
+            const keyHint = theme.fg("accent", `[${opt.key}]`);
+            let label = opt.label;
+            if (opt.hint) {
+              label += `  ${theme.fg("dim", opt.hint)}`;
+            }
+            if (isPending) {
+              label += `  ${theme.fg("warning", "\u2192 press Enter to confirm")}`;
+            }
+            const line = `${prefix}${keyHint} ${label}`;
+            lines.push(truncateToWidth(line, width));
+          }
+          lines.push("");
+          const footer = pendingAction ? "\u2191\u2193 navigate  enter confirm  esc cancel" : "\u2191\u2193 navigate  enter select  esc/ctrl+c cancel";
+          lines.push(truncateToWidth(theme.fg("dim", footer), width));
+          return lines;
+        },
+        handleInput(data) {
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+            resolve5("abort");
+            return;
+          }
+          if (matchesKey(data, Key.enter)) {
+            if (pendingAction) {
+              resolve5(pendingAction);
+            } else {
+              resolve5(options[selectedIndex]?.action ?? "abort");
+            }
+            return;
+          }
+          if (matchesKey(data, Key.up)) {
+            selectedIndex = Math.max(0, selectedIndex - 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.down)) {
+            selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            if (data === opt.key) {
+              resolve5(opt.action);
+              return;
+            }
+            if (data.toLowerCase() === opt.key.toLowerCase()) {
+              if (opt.confirm) {
+                pendingAction = opt.action;
+                selectedIndex = i;
+              } else {
+                resolve5(opt.action);
+              }
+              tui.requestRender();
+              return;
+            }
+          }
+        },
+        invalidate() {
+        }
+      };
+    });
     return result ?? "abort";
   }
   async function promptDomainBlock(ctx, domain) {
     return showPermissionPrompt(
       ctx,
       `\u{1F310} Network blocked: "${domain}" is not in allowedDomains`,
-      PERMISSION_OPTIONS
+      DOMAIN_PERMISSION_OPTIONS
     );
   }
   async function promptReadBlock(ctx, filePath, reason) {
@@ -9544,14 +9561,14 @@ function index_default(pi) {
     return showPermissionPrompt(
       ctx,
       `\u{1F4D6} Read blocked: "${filePath}" ${reasonText}`,
-      PERMISSION_OPTIONS
+      FILESYSTEM_PERMISSION_OPTIONS
     );
   }
   async function promptWriteBlock(ctx, filePath) {
     return showPermissionPrompt(
       ctx,
       `\u{1F4DD} Write blocked: "${filePath}" is not in allowWrite`,
-      PERMISSION_OPTIONS
+      FILESYSTEM_PERMISSION_OPTIONS
     );
   }
   async function applyDomainChoice(choice, domain, cwd) {
@@ -9561,16 +9578,21 @@ function index_default(pi) {
     if (choice === "global") addDomainToConfig(globalPath, domain);
     await reinitializeSandbox(cwd);
   }
+  function getSessionFilesystemAllowancePath(choice, filePath) {
+    return choice === "session-dir" ? dirname5(filePath) : filePath;
+  }
   async function applyReadChoice(choice, filePath, cwd) {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (!sessionAllowedReadPaths.includes(filePath)) sessionAllowedReadPaths.push(filePath);
+    const sessionPath = getSessionFilesystemAllowancePath(choice, filePath);
+    if (!sessionAllowedReadPaths.includes(sessionPath)) sessionAllowedReadPaths.push(sessionPath);
     if (choice === "project") addReadPathToConfig(projectPath, filePath);
     if (choice === "global") addReadPathToConfig(globalPath, filePath);
     await reinitializeSandbox(cwd);
   }
   async function applyWriteChoice(choice, filePath, cwd) {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (!sessionAllowedWritePaths.includes(filePath)) sessionAllowedWritePaths.push(filePath);
+    const sessionPath = getSessionFilesystemAllowancePath(choice, filePath);
+    if (!sessionAllowedWritePaths.includes(sessionPath)) sessionAllowedWritePaths.push(sessionPath);
     if (choice === "project") addWritePathToConfig(projectPath, filePath);
     if (choice === "global") addWritePathToConfig(globalPath, filePath);
     await reinitializeSandbox(cwd);
@@ -9779,8 +9801,9 @@ Check denyWrite in:
           result: deniedFilesystemViolationResult(result, violation, blockedPath)
         };
       }
+      const grantedPath2 = getSessionFilesystemAllowancePath(choice2, blockedPath);
       await applyReadChoice(choice2, blockedPath, ctx.cwd);
-      return { allowed: true, granted: { access: "read", path: blockedPath } };
+      return { allowed: true, granted: { access: "read", path: grantedPath2 } };
     }
     const denyWrite = config2.filesystem?.denyWrite ?? [];
     if (matchesPattern(blockedPath, denyWrite)) {
@@ -9815,8 +9838,9 @@ Check denyWrite in:
         result: deniedFilesystemViolationResult(result, violation, blockedPath)
       };
     }
+    const grantedPath = getSessionFilesystemAllowancePath(choice, blockedPath);
     await applyWriteChoice(choice, blockedPath, ctx.cwd);
-    return { allowed: true, granted: { access: "write", path: blockedPath } };
+    return { allowed: true, granted: { access: "write", path: grantedPath } };
   }
   function notifySandboxRetry(ctx, granted) {
     if (granted.length === 1) {
@@ -10023,12 +10047,13 @@ Check denyWrite in:
         `  Allow Read:  ${config2.filesystem?.allowRead?.join(", ") || "(none)"}`,
         `  Allow Write: ${config2.filesystem?.allowWrite?.join(", ") || "(none)"}`,
         `  Deny Write:  ${config2.filesystem?.denyWrite?.join(", ") || "(none)"}`,
-        ...sessionAllowedReadPaths.length > 0 ? [`  Session read:  ${sessionAllowedReadPaths.join(", ")}`] : [],
-        ...sessionAllowedWritePaths.length > 0 ? [`  Session write: ${sessionAllowedWritePaths.join(", ")}`] : [],
+        ...sessionAllowedReadPaths.length > 0 ? [`  Session read files/dirs:  ${sessionAllowedReadPaths.join(", ")}`] : [],
+        ...sessionAllowedWritePaths.length > 0 ? [`  Session write files/dirs: ${sessionAllowedWritePaths.join(", ")}`] : [],
         "",
         "Note: If Allow Read is empty, reads are only prompted when matching Deny Read.",
         "Note: If Allow Read has entries, reads are prompted unless the path matches Allow Read.",
         "Note: denyRead prompts can be overridden by granting read access.",
+        "Note: session filesystem grants may apply to a single file or its containing folder.",
         "Note: denyWrite takes PRECEDENCE over allowWrite and is never prompted."
       ];
       ctx.ui.notify(lines.join("\n"), "info");

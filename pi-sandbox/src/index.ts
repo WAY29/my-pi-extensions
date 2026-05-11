@@ -1230,15 +1230,18 @@ export default function (pi: ExtensionAPI) {
 
   // ── UI prompts ──────────────────────────────────────────────────────────────
 
-  interface PromptOption {
+  type DomainPermissionAction = "abort" | "session" | "project" | "global";
+  type FilesystemPermissionAction = "abort" | "session-file" | "session-dir" | "project" | "global";
+
+  interface PromptOption<TAction extends string = DomainPermissionAction> {
     label: string;
     key: string;
-    action: "abort" | "session" | "project" | "global";
+    action: TAction;
     confirm?: boolean;
     hint?: string;
   }
 
-  const PERMISSION_OPTIONS: PromptOption[] = [
+  const DOMAIN_PERMISSION_OPTIONS: Array<PromptOption<DomainPermissionAction>> = [
     { label: "Allow for this session only", key: "s", action: "session" },
     { label: "Abort (keep blocked)", key: "esc", action: "abort" },
     {
@@ -1257,21 +1260,40 @@ export default function (pi: ExtensionAPI) {
     },
   ];
 
-  async function showPermissionPrompt(
+  const FILESYSTEM_PERMISSION_OPTIONS: Array<PromptOption<FilesystemPermissionAction>> = [
+    { label: "Allow this file for this session only", key: "s", action: "session-file" },
+    { label: "Allow containing folder for this session only", key: "d", action: "session-dir" },
+    { label: "Abort (keep blocked)", key: "esc", action: "abort" },
+    {
+      label: "Allow for this project",
+      key: "P",
+      action: "project",
+      confirm: true,
+      hint: "→ .pi/sandbox.json",
+    },
+    {
+      label: "Allow for all projects",
+      key: "A",
+      action: "global",
+      confirm: true,
+      hint: "→ ~/.pi/agent/sandbox.json",
+    },
+  ];
+
+  async function showPermissionPrompt<TAction extends string>(
     ctx: ExtensionContext,
     title: string,
-    options: PromptOption[],
-  ): Promise<"abort" | "session" | "project" | "global"> {
+    options: Array<PromptOption<TAction>>,
+  ): Promise<TAction | "abort"> {
     if (!ctx.hasUI) return "abort";
 
-    const result = await ctx.ui.custom<"abort" | "session" | "project" | "global">(
-      (tui, theme, _kb, done) => {
-        let selectedIndex = 0;
-        let pendingAction: "abort" | "session" | "project" | "global" | null = null;
+    const result = await ctx.ui.custom<TAction | "abort">((tui, theme, _kb, done) => {
+      let selectedIndex = 0;
+      let pendingAction: TAction | "abort" | null = null;
 
-        function resolve(action: "abort" | "session" | "project" | "global") {
-          done(action);
-        }
+      function resolve(action: TAction | "abort") {
+        done(action);
+      }
 
         return {
           render(width: number): string[] {
@@ -1362,8 +1384,7 @@ export default function (pi: ExtensionAPI) {
             // no-op
           },
         };
-      },
-    );
+      });
 
     return result ?? "abort";
   }
@@ -1371,11 +1392,11 @@ export default function (pi: ExtensionAPI) {
   async function promptDomainBlock(
     ctx: ExtensionContext,
     domain: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<DomainPermissionAction> {
     return showPermissionPrompt(
       ctx,
       `🌐 Network blocked: "${domain}" is not in allowedDomains`,
-      PERMISSION_OPTIONS,
+      DOMAIN_PERMISSION_OPTIONS,
     );
   }
 
@@ -1383,30 +1404,30 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
     filePath: string,
     reason: ReadBlockReason,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<FilesystemPermissionAction> {
     const reasonText = reason === "denyRead" ? "is in denyRead" : "is not in allowRead";
     return showPermissionPrompt(
       ctx,
       `📖 Read blocked: "${filePath}" ${reasonText}`,
-      PERMISSION_OPTIONS,
+      FILESYSTEM_PERMISSION_OPTIONS,
     );
   }
 
   async function promptWriteBlock(
     ctx: ExtensionContext,
     filePath: string,
-  ): Promise<"abort" | "session" | "project" | "global"> {
+  ): Promise<FilesystemPermissionAction> {
     return showPermissionPrompt(
       ctx,
       `📝 Write blocked: "${filePath}" is not in allowWrite`,
-      PERMISSION_OPTIONS,
+      FILESYSTEM_PERMISSION_OPTIONS,
     );
   }
 
   // ── Apply allowance choices ─────────────────────────────────────────────────
 
   async function applyDomainChoice(
-    choice: "session" | "project" | "global",
+    choice: Exclude<DomainPermissionAction, "abort">,
     domain: string,
     cwd: string,
   ): Promise<void> {
@@ -1417,25 +1438,34 @@ export default function (pi: ExtensionAPI) {
     await reinitializeSandbox(cwd);
   }
 
+  function getSessionFilesystemAllowancePath(
+    choice: FilesystemPermissionAction,
+    filePath: string,
+  ): string {
+    return choice === "session-dir" ? dirname(filePath) : filePath;
+  }
+
   async function applyReadChoice(
-    choice: "session" | "project" | "global",
+    choice: Exclude<FilesystemPermissionAction, "abort">,
     filePath: string,
     cwd: string,
   ): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (!sessionAllowedReadPaths.includes(filePath)) sessionAllowedReadPaths.push(filePath);
+    const sessionPath = getSessionFilesystemAllowancePath(choice, filePath);
+    if (!sessionAllowedReadPaths.includes(sessionPath)) sessionAllowedReadPaths.push(sessionPath);
     if (choice === "project") addReadPathToConfig(projectPath, filePath);
     if (choice === "global") addReadPathToConfig(globalPath, filePath);
     await reinitializeSandbox(cwd);
   }
 
   async function applyWriteChoice(
-    choice: "session" | "project" | "global",
+    choice: Exclude<FilesystemPermissionAction, "abort">,
     filePath: string,
     cwd: string,
   ): Promise<void> {
     const { globalPath, projectPath } = getConfigPaths(cwd);
-    if (!sessionAllowedWritePaths.includes(filePath)) sessionAllowedWritePaths.push(filePath);
+    const sessionPath = getSessionFilesystemAllowancePath(choice, filePath);
+    if (!sessionAllowedWritePaths.includes(sessionPath)) sessionAllowedWritePaths.push(sessionPath);
     if (choice === "project") addWritePathToConfig(projectPath, filePath);
     if (choice === "global") addWritePathToConfig(globalPath, filePath);
     await reinitializeSandbox(cwd);
@@ -1703,8 +1733,9 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const grantedPath = getSessionFilesystemAllowancePath(choice, blockedPath);
       await applyReadChoice(choice, blockedPath, ctx.cwd);
-      return { allowed: true, granted: { access: "read", path: blockedPath } };
+      return { allowed: true, granted: { access: "read", path: grantedPath } };
     }
 
     const denyWrite = config.filesystem?.denyWrite ?? [];
@@ -1743,8 +1774,9 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
+    const grantedPath = getSessionFilesystemAllowancePath(choice, blockedPath);
     await applyWriteChoice(choice, blockedPath, ctx.cwd);
-    return { allowed: true, granted: { access: "write", path: blockedPath } };
+    return { allowed: true, granted: { access: "write", path: grantedPath } };
   }
 
   function notifySandboxRetry(ctx: ExtensionContext, granted: GrantedFilesystemAccess[]): void {
@@ -2006,15 +2038,16 @@ export default function (pi: ExtensionAPI) {
         `  Allow Write: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,
         `  Deny Write:  ${config.filesystem?.denyWrite?.join(", ") || "(none)"}`,
         ...(sessionAllowedReadPaths.length > 0
-          ? [`  Session read:  ${sessionAllowedReadPaths.join(", ")}`]
+          ? [`  Session read files/dirs:  ${sessionAllowedReadPaths.join(", ")}`]
           : []),
         ...(sessionAllowedWritePaths.length > 0
-          ? [`  Session write: ${sessionAllowedWritePaths.join(", ")}`]
+          ? [`  Session write files/dirs: ${sessionAllowedWritePaths.join(", ")}`]
           : []),
         "",
         "Note: If Allow Read is empty, reads are only prompted when matching Deny Read.",
         "Note: If Allow Read has entries, reads are prompted unless the path matches Allow Read.",
         "Note: denyRead prompts can be overridden by granting read access.",
+        "Note: session filesystem grants may apply to a single file or its containing folder.",
         "Note: denyWrite takes PRECEDENCE over allowWrite and is never prompted.",
       ];
       ctx.ui.notify(lines.join("\n"), "info");
