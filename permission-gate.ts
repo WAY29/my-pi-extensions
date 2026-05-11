@@ -11,6 +11,26 @@ type MatchRange = { start: number; end: number };
 
 const RED = "\x1b[31m";
 
+type PermissionGateStateRequest = {
+	respond?: (response: PermissionGateStateResponse | Promise<PermissionGateStateResponse>) => void;
+};
+
+type PermissionGateSetRequest = {
+	enabled?: boolean;
+	respond?: (response: PermissionGateSetResponse | Promise<PermissionGateSetResponse>) => void;
+};
+
+type PermissionGateStateResponse = {
+	available: true;
+	enabled: boolean;
+};
+
+type PermissionGateSetResponse = {
+	accepted: boolean;
+	enabled: boolean;
+	reason?: string;
+};
+
 function getDangerousMatches(command: string, patterns: RegExp[]): MatchRange[] {
 	const ranges: MatchRange[] = [];
 
@@ -79,8 +99,26 @@ async function selectWithStableScroll(
 
 export default function (pi: ExtensionAPI) {
 	const dangerousPatterns = [/\brm\b/i, /\bsudo\b/i, /\b(chmod|chown)\b.*777/i];
+	let enabled = true;
+
+	pi.events.on("permission-gate:request-state", (data: unknown) => {
+		const request = data && typeof data === "object" ? (data as PermissionGateStateRequest) : {};
+		request.respond?.({ available: true, enabled });
+	});
+
+	pi.events.on("permission-gate:set-enabled", (data: unknown) => {
+		const request = data && typeof data === "object" ? (data as PermissionGateSetRequest) : {};
+		if (typeof request.enabled !== "boolean") {
+			request.respond?.({ accepted: false, enabled, reason: "Missing boolean enabled value" });
+			return;
+		}
+
+		enabled = request.enabled;
+		request.respond?.({ accepted: true, enabled });
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		if (!enabled) return undefined;
 		if (event.toolName !== "bash") return undefined;
 
 		const command = event.input.command as string;

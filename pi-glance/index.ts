@@ -1,6 +1,6 @@
 import { completeSimple, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { loadConfig, saveConfig } from "./config.js";
+import { cloneConfig, loadConfig, saveConfig } from "./config.js";
 import { GlanceEditor } from "./editor.js";
 import { GlanceFooterBridge } from "./footer-bridge.js";
 import { GitRefresher } from "./git.js";
@@ -22,6 +22,35 @@ import { resolveTitleModelSpec, titleModelKey } from "./title-model.js";
 import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_CUSTOM_TYPE } from "./title.js";
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
 import type { GlanceConfig, GlanceState } from "./types.js";
+
+type PermissionGateStateResponse = {
+	available?: boolean;
+	enabled?: boolean;
+	reason?: string;
+};
+
+type PermissionGateSetResponse = {
+	accepted?: boolean;
+	enabled?: boolean;
+	reason?: string;
+};
+
+type SandboxStateResponse = {
+	available?: boolean;
+	enabled?: boolean;
+	initialized?: boolean;
+	configured?: boolean;
+	noSandbox?: boolean;
+	supported?: boolean;
+	reason?: string;
+};
+
+type SandboxSetResponse = {
+	accepted?: boolean;
+	enabled?: boolean;
+	initialized?: boolean;
+	reason?: string;
+};
 
 export default function piGlance(pi: ExtensionAPI): void {
 	let config: GlanceConfig | undefined;
@@ -88,6 +117,47 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (!snapshot) return;
 		pendingPlanModeState = snapshot;
 		if (state && setPlanModeSnapshot(state, snapshot)) renderNow();
+	}
+
+	async function emitWithResponses<T>(channel: string, payload: Record<string, unknown> = {}): Promise<T[]> {
+		const responses: Promise<T>[] = [];
+		pi.events.emit(channel, {
+			...payload,
+			respond(response: T | Promise<T>) {
+				responses.push(Promise.resolve(response));
+			},
+		});
+		const settled = await Promise.allSettled(responses);
+		return settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+	}
+
+	function lastResponse<T>(responses: T[]): T | undefined {
+		return responses.length > 0 ? responses[responses.length - 1] : undefined;
+	}
+
+	async function configWithLiveSecurityState(ctx: ExtensionContext, base: GlanceConfig): Promise<GlanceConfig> {
+		const draft = cloneConfig(base);
+		const [permissionGateResponses, sandboxResponses] = await Promise.all([
+			emitWithResponses<PermissionGateStateResponse>("permission-gate:request-state"),
+			emitWithResponses<SandboxStateResponse>("pi-sandbox:request-state", { cwd: ctx.cwd }),
+		]);
+		const permissionGateState = lastResponse(permissionGateResponses);
+		const sandboxState = lastResponse(sandboxResponses);
+		if (typeof permissionGateState?.enabled === "boolean") {
+			draft.permissionGate.enabled = permissionGateState.enabled;
+		}
+		if (typeof sandboxState?.enabled === "boolean") {
+			draft.sandbox.enabled = sandboxState.enabled;
+		}
+		return draft;
+	}
+
+	async function setPermissionGateEnabled(enabled: boolean): Promise<PermissionGateSetResponse | undefined> {
+		return lastResponse(await emitWithResponses<PermissionGateSetResponse>("permission-gate:set-enabled", { enabled }));
+	}
+
+	async function setSandboxEnabled(enabled: boolean, ctx: ExtensionContext): Promise<SandboxSetResponse | undefined> {
+		return lastResponse(await emitWithResponses<SandboxSetResponse>("pi-sandbox:set-enabled", { enabled, cwd: ctx.cwd, ctx }));
 	}
 
 	type TitleEntryData = StoredTitle;
@@ -314,6 +384,43 @@ export default function piGlance(pi: ExtensionAPI): void {
 		requestRender = undefined;
 	}
 
+	async function applyConfiguredSecurityState(ctx: ExtensionContext): Promise<void> {
+		const activeConfig = getConfig();
+		await Promise.all([
+			setPermissionGateEnabled(activeConfig.permissionGate.enabled),
+			setSandboxEnabled(activeConfig.sandbox.enabled, ctx),
+		]);
+	}
+
+	async function applySecurityChanges(ctx: ExtensionContext, previous: GlanceConfig, next: GlanceConfig): Promise<GlanceConfig> {
+		const applied = cloneConfig(next);
+
+		if (previous.permissionGate.enabled !== next.permissionGate.enabled) {
+			const response = await setPermissionGateEnabled(next.permissionGate.enabled);
+			if (response?.accepted === false) {
+				applied.permissionGate.enabled = previous.permissionGate.enabled;
+				ctx.ui.notify(response.reason ?? "Permission Gate could not be updated", "warning");
+			} else if (!response) {
+				ctx.ui.notify("Permission Gate extension did not respond; saved setting will apply when it is available.", "warning");
+			}
+		}
+
+		if (previous.sandbox.enabled !== next.sandbox.enabled) {
+			const response = await setSandboxEnabled(next.sandbox.enabled, ctx);
+			if (response?.accepted === false) {
+				applied.sandbox.enabled = previous.sandbox.enabled;
+				const type: "warning" | "error" = response.reason?.startsWith("Sandbox initialization failed") ? "error" : "warning";
+				ctx.ui.notify(response.reason ?? "Sandbox could not be updated", type);
+			} else if (!response) {
+				ctx.ui.notify("pi-sandbox did not respond; saved setting will apply when it is available.", "warning");
+			} else if (typeof response.enabled === "boolean") {
+				applied.sandbox.enabled = response.enabled;
+			}
+		}
+
+		return applied;
+	}
+
 	function installInputSurface(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		ensureState(ctx);
@@ -354,13 +461,14 @@ export default function piGlance(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => {
 			const current = await ensureConfig();
 			ensureState(ctx);
-			const result = await showGlancePane(current, ctx, state);
+			const paneConfig = await configWithLiveSecurityState(ctx, current);
+			const result = await showGlancePane(paneConfig, ctx, state);
 			if (result.action === "cancel") {
 				ctx.ui.notify("pi-glance configuration cancelled", "info");
 				return;
 			}
 
-			config = result.config;
+			config = await applySecurityChanges(ctx, current, result.config);
 			await saveConfig(config);
 			if (!config.title.enabled) {
 				cancelTitleGeneration();
@@ -385,6 +493,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
 		await restoreTitle(ctx, config);
 		installInputSurface(ctx);
+		await applyConfiguredSecurityState(ctx);
 		pi.events.emit("plan-mode:request-state", { from: "pi-glance" });
 	});
 

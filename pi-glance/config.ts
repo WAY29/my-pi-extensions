@@ -53,6 +53,12 @@ export function defaultConfig(): GlanceConfig {
 			enabled: true,
 			model: "",
 		},
+		permissionGate: {
+			enabled: true,
+		},
+		sandbox: {
+			enabled: true,
+		},
 		display: {
 			adaptive: true,
 			showProvider: "auto",
@@ -91,6 +97,8 @@ export function cloneConfig(config: GlanceConfig): GlanceConfig {
 		editor: { ...config.editor },
 		display: { ...config.display },
 		title: { ...config.title },
+		permissionGate: { ...config.permissionGate },
+		sandbox: { ...config.sandbox },
 		segments: config.segments.map((s) => ({ ...s })),
 		model: { customNames: { ...config.model.customNames }, showThinking: config.model.showThinking },
 		git: { ...config.git },
@@ -160,6 +168,8 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 	const record = raw as Record<string, unknown>;
 	const editor = record.editor && typeof record.editor === "object" ? (record.editor as Record<string, unknown>) : {};
 	const title = record.title && typeof record.title === "object" ? (record.title as Record<string, unknown>) : {};
+	const permissionGate = record.permissionGate && typeof record.permissionGate === "object" ? (record.permissionGate as Record<string, unknown>) : {};
+	const sandbox = record.sandbox && typeof record.sandbox === "object" ? (record.sandbox as Record<string, unknown>) : {};
 	const display = record.display && typeof record.display === "object" ? (record.display as Record<string, unknown>) : {};
 	const model = record.model && typeof record.model === "object" ? (record.model as Record<string, unknown>) : {};
 	const git = record.git && typeof record.git === "object" ? (record.git as Record<string, unknown>) : {};
@@ -178,6 +188,12 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 		title: {
 			enabled: parseBool(title.enabled, defaults.title.enabled),
 			model: typeof title.model === "string" ? title.model.trim() : defaults.title.model,
+		},
+		permissionGate: {
+			enabled: parseBool(permissionGate.enabled, defaults.permissionGate.enabled),
+		},
+		sandbox: {
+			enabled: parseBool(sandbox.enabled, defaults.sandbox.enabled),
 		},
 		display: {
 			adaptive: parseBool(display.adaptive, defaults.display.adaptive),

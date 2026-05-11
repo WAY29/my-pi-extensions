@@ -168,6 +168,35 @@ interface SandboxReadOnlyLockRequest {
   respond?: (response: SandboxReadOnlyLockResponse | Promise<SandboxReadOnlyLockResponse>) => void;
 }
 
+interface SandboxStateResponse {
+  available: true;
+  enabled: boolean;
+  initialized: boolean;
+  configured: boolean;
+  noSandbox: boolean;
+  supported: boolean;
+  reason?: string;
+}
+
+interface SandboxStateRequest {
+  cwd?: string;
+  respond?: (response: SandboxStateResponse | Promise<SandboxStateResponse>) => void;
+}
+
+interface SandboxSetResponse {
+  accepted: boolean;
+  enabled: boolean;
+  initialized: boolean;
+  reason?: string;
+}
+
+interface SandboxSetRequest {
+  enabled?: boolean;
+  cwd?: string;
+  ctx?: ExtensionContext;
+  respond?: (response: SandboxSetResponse | Promise<SandboxSetResponse>) => void;
+}
+
 type MutableModule = Record<string, unknown>;
 type AnyFunction = (this: unknown, ...args: any[]) => any;
 
@@ -1010,6 +1039,7 @@ export default function (pi: ExtensionAPI) {
   // Locks can be global or scoped to a cwd while keeping the active tool set unchanged.
   const readOnlyWriteLocks = new Map<string, { scope: SandboxReadOnlyLockScope; cwd: string }>();
   let lastStatusContext: ExtensionContext | undefined;
+  let sandboxConfigEnabledOverride: boolean | undefined;
 
   registerBashToolPlugin(pi, {
     id: "pi-sandbox",
@@ -1094,7 +1124,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   function getEffectiveConfig(cwd: string): SandboxConfig {
-    return applyReadOnlyWriteLock(loadConfig(cwd));
+    const config = applyReadOnlyWriteLock(loadConfig(cwd));
+    if (sandboxConfigEnabledOverride === undefined) return config;
+    return { ...config, enabled: sandboxConfigEnabledOverride };
   }
 
   function canUseSandbox(cwd: string): { ok: boolean; reason?: string } {
@@ -1104,7 +1136,7 @@ export default function (pi: ExtensionAPI) {
       return { ok: false, reason: "sandbox disabled for this session" };
     }
 
-    const config = loadConfig(cwd);
+    const config = getEffectiveConfig(cwd);
     if (!config.enabled) return { ok: false, reason: "sandbox disabled via config" };
 
     const platform = process.platform;
@@ -1134,6 +1166,166 @@ export default function (pi: ExtensionAPI) {
       "sandbox",
       ctx.ui.theme.fg("accent", `🔒 Sandbox: ${networkLabel}, ${writeLabel}`),
     );
+  }
+
+  function setNodeEnvProxyIfSupported(): void {
+    const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+    const supportsEnvProxy = (nodeMajor === 22 && (nodeMinor ?? 0) >= 21) || (nodeMajor ?? 0) >= 24;
+    if (supportsEnvProxy) {
+      process.env.NODE_USE_ENV_PROXY ??= "1";
+    }
+  }
+
+  async function initializeSandboxFromConfig(config: SandboxConfig): Promise<void> {
+    const configExt = config as unknown as {
+      ignoreViolations?: Record<string, string[]>;
+      enableWeakerNestedSandbox?: boolean;
+      allowBrowserProcess?: boolean;
+    };
+
+    await runWithWriteLockBypass(async () => {
+      await SandboxManager.initialize(
+        {
+          network: config.network,
+          filesystem: config.filesystem,
+          ignoreViolations: configExt.ignoreViolations,
+          enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
+          allowBrowserProcess: configExt.allowBrowserProcess,
+          enableWeakerNetworkIsolation: true,
+        },
+        createNetworkAskCallback(config.network?.allowedDomains ?? []),
+        true,
+      );
+      restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
+    });
+
+    setNodeEnvProxyIfSupported();
+  }
+
+  async function enableSandbox(
+    ctx: ExtensionContext,
+    options: { overrideConfig?: boolean } = {},
+  ): Promise<SandboxSetResponse> {
+    const platform = process.platform;
+    if (pi.getFlag("no-sandbox") === true) {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      stopDirectMacSandboxMonitoring();
+      updateSandboxStatus(ctx);
+      return {
+        accepted: false,
+        enabled: false,
+        initialized: false,
+        reason: "sandbox disabled via --no-sandbox",
+      };
+    }
+    if (platform !== "darwin" && platform !== "linux") {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      updateSandboxStatus(ctx);
+      return {
+        accepted: false,
+        enabled: false,
+        initialized: false,
+        reason: `sandbox not supported on ${platform}`,
+      };
+    }
+
+    const previousOverride = sandboxConfigEnabledOverride;
+    if (options.overrideConfig) sandboxConfigEnabledOverride = true;
+
+    const config = getEffectiveConfig(ctx.cwd);
+    if (!config.enabled) {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      stopDirectMacSandboxMonitoring();
+      updateSandboxStatus(ctx);
+      return {
+        accepted: false,
+        enabled: false,
+        initialized: false,
+        reason: "sandbox disabled via config",
+      };
+    }
+
+    if (sandboxInitialized) {
+      try {
+        await runWithWriteLockBypass(() => SandboxManager.reset());
+      } catch {
+        // Ignore cleanup errors before reinitializing.
+      }
+      stopDirectMacSandboxMonitoring();
+      sandboxInitialized = false;
+    }
+
+    try {
+      await initializeSandboxFromConfig(config);
+      sandboxEnabled = true;
+      sandboxInitialized = true;
+      updateSandboxStatus(ctx);
+      return { accepted: true, enabled: true, initialized: true };
+    } catch (err) {
+      sandboxConfigEnabledOverride = previousOverride;
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+      stopDirectMacSandboxMonitoring();
+      updateSandboxStatus(ctx);
+      return {
+        accepted: false,
+        enabled: false,
+        initialized: false,
+        reason: `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
+      };
+    }
+  }
+
+  async function disableSandbox(
+    ctx: ExtensionContext,
+    options: { overrideConfig?: boolean } = {},
+  ): Promise<SandboxSetResponse> {
+    if (options.overrideConfig) sandboxConfigEnabledOverride = false;
+    stopDirectMacSandboxMonitoring();
+    if (sandboxInitialized) {
+      try {
+        await runWithWriteLockBypass(() => SandboxManager.reset());
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+
+    sandboxEnabled = false;
+    sandboxInitialized = false;
+    updateSandboxStatus(ctx);
+    return { accepted: true, enabled: false, initialized: false };
+  }
+
+  function getSandboxState(cwd: string): SandboxStateResponse {
+    const config = getEffectiveConfig(cwd);
+    const noSandbox = pi.getFlag("no-sandbox") === true;
+    const supported = process.platform === "darwin" || process.platform === "linux";
+    const configured = config.enabled ?? true;
+    const enabled = sandboxEnabled && sandboxInitialized && configured && !noSandbox && supported;
+    const reason = noSandbox
+      ? "sandbox disabled via --no-sandbox"
+      : !supported
+        ? `sandbox not supported on ${process.platform}`
+        : !config.enabled
+          ? "sandbox disabled via config"
+          : !sandboxEnabled
+            ? "sandbox disabled for this session"
+            : !sandboxInitialized
+              ? "sandbox not initialized"
+              : undefined;
+
+    return {
+      available: true,
+      enabled,
+      initialized: sandboxInitialized,
+      configured,
+      noSandbox,
+      supported,
+      reason,
+    };
   }
 
   async function setReadOnlyWriteLock(
@@ -1167,6 +1359,42 @@ export default function (pi: ExtensionAPI) {
       reason: active ? `write lock active: ${describeReadOnlyWriteLocks()}` : undefined,
     };
   }
+
+  pi.events.on("pi-sandbox:request-state", (data: unknown) => {
+    const request = data && typeof data === "object" ? (data as SandboxStateRequest) : {};
+    const cwd = request.cwd || lastStatusContext?.cwd || localCwd;
+    request.respond?.(getSandboxState(cwd));
+  });
+
+  pi.events.on("pi-sandbox:set-enabled", (data: unknown) => {
+    const request = data && typeof data === "object" ? (data as SandboxSetRequest) : {};
+    const ctx = request.ctx ?? lastStatusContext;
+    if (typeof request.enabled !== "boolean") {
+      const state = getSandboxState(request.cwd || ctx?.cwd || localCwd);
+      request.respond?.({
+        accepted: false,
+        enabled: state.enabled,
+        initialized: state.initialized,
+        reason: "Missing boolean enabled value",
+      });
+      return;
+    }
+
+    if (!ctx) {
+      request.respond?.({
+        accepted: false,
+        enabled: sandboxEnabled && sandboxInitialized,
+        initialized: sandboxInitialized,
+        reason: "No active sandbox session",
+      });
+      return;
+    }
+
+    const result = request.enabled
+      ? enableSandbox(ctx, { overrideConfig: true })
+      : disableSandbox(ctx, { overrideConfig: true });
+    request.respond?.(result);
+  });
 
   pi.events.on("pi-sandbox:set-read-only-lock", (data: unknown) => {
     const request = data as SandboxReadOnlyLockRequest;
@@ -1851,80 +2079,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     lastStatusContext = ctx;
     ensureBashToolRegistered(pi, ctx.cwd);
-    const noSandbox = pi.getFlag("no-sandbox") as boolean;
 
-    if (noSandbox) {
-      sandboxEnabled = false;
-      stopDirectMacSandboxMonitoring();
-      updateSandboxStatus(ctx);
-      ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
-      return;
-    }
+    const result = await enableSandbox(ctx);
+    if (result.accepted) return;
 
-    const config = getEffectiveConfig(ctx.cwd);
-
-    if (!config.enabled) {
-      sandboxEnabled = false;
-      stopDirectMacSandboxMonitoring();
-      updateSandboxStatus(ctx);
-      ctx.ui.notify("Sandbox disabled via config", "info");
-      return;
-    }
-
-    const platform = process.platform;
-    if (platform !== "darwin" && platform !== "linux") {
-      sandboxEnabled = false;
-      updateSandboxStatus(ctx);
-      ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
-      return;
-    }
-
-    try {
-      const configExt = config as unknown as {
-        ignoreViolations?: Record<string, string[]>;
-        enableWeakerNestedSandbox?: boolean;
-        allowBrowserProcess?: boolean;
-      };
-
-      await runWithWriteLockBypass(async () => {
-        await SandboxManager.initialize(
-          {
-            network: config.network,
-            filesystem: config.filesystem,
-            ignoreViolations: configExt.ignoreViolations,
-            enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
-            allowBrowserProcess: configExt.allowBrowserProcess,
-            enableWeakerNetworkIsolation: true,
-          },
-          createNetworkAskCallback(config.network?.allowedDomains ?? []),
-          true,
-        );
-        restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
-      });
-
-      // Make Node's built-in fetch() honour HTTP_PROXY / HTTPS_PROXY in this
-      // process and any child processes that inherit the environment.
-      // NODE_USE_ENV_PROXY avoids NODE_OPTIONS allowlisting issues on older Node
-      // versions while still propagating naturally to child `node` processes.
-      // fetch() supports this on Node 22.21.0+ and 24.0.0+.
-      const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
-      const supportsEnvProxy = (nodeMajor === 22 && nodeMinor >= 21) || nodeMajor >= 24;
-      if (supportsEnvProxy) {
-        process.env.NODE_USE_ENV_PROXY ??= "1";
-      }
-
-      sandboxEnabled = true;
-      sandboxInitialized = true;
-      updateSandboxStatus(ctx);
-    } catch (err) {
-      sandboxEnabled = false;
-      stopDirectMacSandboxMonitoring();
-      updateSandboxStatus(ctx);
-      ctx.ui.notify(
-        `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
-        "error",
-      );
-    }
+    const type = result.reason?.startsWith("Sandbox initialization failed")
+      ? "error"
+      : result.reason?.includes("config")
+        ? "info"
+        : "warning";
+    ctx.ui.notify(result.reason ?? "Sandbox disabled", type);
   });
 
   // ── session_shutdown ────────────────────────────────────────────────────────
@@ -1947,50 +2111,17 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("sandbox-enable", {
     description: "Enable the sandbox for this session",
     handler: async (_args, ctx) => {
-      if (sandboxEnabled) {
+      if (sandboxEnabled && sandboxInitialized) {
         ctx.ui.notify("Sandbox is already enabled", "info");
         return;
       }
 
-      const config = getEffectiveConfig(ctx.cwd);
-      const platform = process.platform;
-      if (platform !== "darwin" && platform !== "linux") {
-        ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
-        return;
-      }
-
-      try {
-        const configExt = config as unknown as {
-          ignoreViolations?: Record<string, string[]>;
-          enableWeakerNestedSandbox?: boolean;
-          allowBrowserProcess?: boolean;
-        };
-
-        await runWithWriteLockBypass(async () => {
-          await SandboxManager.initialize(
-            {
-              network: config.network,
-              filesystem: config.filesystem,
-              ignoreViolations: configExt.ignoreViolations,
-              enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
-              allowBrowserProcess: configExt.allowBrowserProcess,
-              enableWeakerNetworkIsolation: true,
-            },
-            createNetworkAskCallback(config.network?.allowedDomains ?? []),
-            true,
-          );
-          restartDirectMacSandboxLogMonitor(configExt.ignoreViolations);
-        });
-
-        sandboxEnabled = true;
-        sandboxInitialized = true;
-        updateSandboxStatus(ctx);
+      const result = await enableSandbox(ctx, { overrideConfig: true });
+      if (result.accepted) {
         ctx.ui.notify("Sandbox enabled", "info");
-      } catch (err) {
-        ctx.ui.notify(
-          `Sandbox initialization failed: ${err instanceof Error ? err.message : err}`,
-          "error",
-        );
+      } else {
+        const type = result.reason?.startsWith("Sandbox initialization failed") ? "error" : "warning";
+        ctx.ui.notify(result.reason ?? "Sandbox could not be enabled", type);
       }
     },
   });
@@ -1999,22 +2130,12 @@ export default function (pi: ExtensionAPI) {
     description: "Disable the sandbox for this session",
     handler: async (_args, ctx) => {
       if (!sandboxEnabled) {
+        await disableSandbox(ctx, { overrideConfig: true });
         ctx.ui.notify("Sandbox is already disabled", "info");
         return;
       }
 
-      stopDirectMacSandboxMonitoring();
-      if (sandboxInitialized) {
-        try {
-          await runWithWriteLockBypass(() => SandboxManager.reset());
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
-
-      sandboxEnabled = false;
-      sandboxInitialized = false;
-      updateSandboxStatus(ctx);
+      await disableSandbox(ctx, { overrideConfig: true });
       ctx.ui.notify("Sandbox disabled", "info");
     },
   });

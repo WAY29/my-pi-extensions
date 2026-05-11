@@ -19,7 +19,7 @@ import type {
 } from "./types.js";
 
 type PaneFocus = "categories" | "settings" | "values";
-type CategoryId = "general" | SegmentId;
+type CategoryId = "general" | "permissionGate" | "sandbox" | SegmentId;
 type Category = { id: CategoryId; label: string };
 type PaneResult = { action: "save"; config: GlanceConfig } | { action: "cancel" };
 type Done = (result: PaneResult) => void;
@@ -86,7 +86,7 @@ const PANE_FOCUS_ORDER: PaneFocus[] = ["categories", "settings", "values"];
 const PANE_SPACING = {
 	outerPadding: 2,
 	contentInset: 4,
-	categoryWidth: 14,
+	categoryWidth: 16,
 	settingLabelWidth: 20,
 	valueWidth: 16,
 	minValueWidth: 8,
@@ -276,12 +276,13 @@ class GlanceConfigPane implements Component {
 			dirty: this.isDirty(),
 			status: this.status,
 			categories: categories.map((cat, index) => {
-				const segment = cat.id === "general" ? undefined : this.draft.segments.find((s) => s.id === cat.id);
+				const segment = cat.id === "general" || cat.id === "permissionGate" || cat.id === "sandbox" ? undefined : this.draft.segments.find((s) => s.id === cat.id);
+				const enabled = cat.id === "permissionGate" ? this.draft.permissionGate.enabled : cat.id === "sandbox" ? this.draft.sandbox.enabled : segment?.enabled;
 				return {
 					...cat,
 					selected: index === this.catIndex,
 					hasFocus: this.focus === "categories",
-					enabled: segment?.enabled,
+					enabled,
 				};
 			}),
 			selectedCategory,
@@ -332,6 +333,8 @@ class GlanceConfigPane implements Component {
 				id: segment.id,
 				label: segmentLabel(segment.id),
 			})),
+			{ id: "permissionGate", label: "Permission Gate" },
+			{ id: "sandbox", label: "Sandbox" },
 		];
 	}
 
@@ -339,6 +342,10 @@ class GlanceConfigPane implements Component {
 		switch (id) {
 			case "general":
 				return this.generalRows();
+			case "permissionGate":
+				return this.permissionGateRows();
+			case "sandbox":
+				return this.sandboxRows();
 			case "git":
 				return this.gitRows();
 			case "plan":
@@ -381,6 +388,22 @@ class GlanceConfigPane implements Component {
 			}),
 			inputRow("Title model", this.draft.title.model, "Use model or provider/model. Empty uses local fallback.", (value) => {
 				this.draft.title.model = value.trim();
+			}),
+		];
+	}
+
+	private permissionGateRows(): SettingRow[] {
+		return [
+			toggleRow("Enabled", this.draft.permissionGate.enabled, "Prompt before dangerous bash commands like rm, sudo, chmod/chown 777.", () => {
+				this.draft.permissionGate.enabled = !this.draft.permissionGate.enabled;
+			}),
+		];
+	}
+
+	private sandboxRows(): SettingRow[] {
+		return [
+			toggleRow("Enabled", this.draft.sandbox.enabled, "Enable or disable pi-sandbox after saving. --no-sandbox still takes priority.", () => {
+				this.draft.sandbox.enabled = !this.draft.sandbox.enabled;
 			}),
 		];
 	}
@@ -489,15 +512,19 @@ class GlanceConfigPane implements Component {
 	}
 
 	private moveCurrentSegment(direction: -1 | 1): void {
-		if (this.catIndex === 0) {
-			this.status = "Cannot move General settings.";
+		const categories = this.getCategories();
+		const cat = categories[this.catIndex];
+		if (!cat || cat.id === "general" || cat.id === "permissionGate" || cat.id === "sandbox") {
+			this.status = "Only status segments can be moved.";
 			return;
 		}
-		const segment = this.draft.segments[this.catIndex - 1];
+		const segment = this.draft.segments.find((s) => s.id === cat.id);
 		if (!segment) return;
 
+		const firstSegmentIndex = categories.findIndex((item) => item.id !== "general" && item.id !== "permissionGate" && item.id !== "sandbox");
+		const lastSegmentIndex = firstSegmentIndex + this.draft.segments.length - 1;
 		const targetCatIndex = this.catIndex + direction;
-		if (targetCatIndex < 1 || targetCatIndex > this.draft.segments.length) {
+		if (targetCatIndex < firstSegmentIndex || targetCatIndex > lastSegmentIndex) {
 			this.status = direction < 0 ? "Already at the top." : "Already at the bottom.";
 			return;
 		}

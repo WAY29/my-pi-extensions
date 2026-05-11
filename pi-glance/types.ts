@@ -32,6 +32,14 @@ interface TitleConfig {
 	model: string;
 }
 
+interface PermissionGateConfig {
+	enabled: boolean;
+}
+
+interface SandboxConfig {
+	enabled: boolean;
+}
+
 export interface GitConfig {
 	showDirty: boolean;
 	showAheadBehind: boolean;
@@ -63,6 +71,8 @@ export interface GlanceConfig {
 	editor: EditorConfig;
 	display: DisplayConfig;
 	title: TitleConfig;
+	permissionGate: PermissionGateConfig;
+	sandbox: SandboxConfig;
 	segments: SegmentConfig[];
 	model: {
 		customNames: Record<string, string>;

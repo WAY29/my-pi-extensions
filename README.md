@@ -56,14 +56,14 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `hide-code-fence-markers.ts` | UI patch | automatic | Cleans up markdown code block rendering by hiding extra code fence marker lines in the terminal UI. |
 | `hide-read-output.ts` | UI/tool renderer | automatic | Hides all rendered result output from the built-in `read` tool in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
 | `keydump.ts` | command/debug UI | `/keydump` | Shows raw key sequences received by pi. Useful when debugging terminal keybindings. |
-| `permission-gate.ts` | safety gate | automatic | Prompts before potentially dangerous bash commands such as `rm`, `sudo`, or `chmod/chown ... 777`. Blocks by default when no UI is available. |
+| `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm`, `sudo`, or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
 | `path-autocomplete-normalizer.ts` | autocomplete patch | automatic | Normalizes repeated `/./` path segments produced by some file-completion flows. |
 | `pretty-image-paste.ts` | input/image helper | automatic | Replaces pasted pi clipboard image paths with readable `[Image #n]` labels, then attaches the referenced images when the prompt is submitted. |
 | `progress-checkpoints.ts` | prompt helper | `/progress`, `/progress-checkpoints` | Injects a progress-checkpoint policy so the assistant gives short status updates around multi-step or tool-heavy work. |
-| `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. |
+| `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also toggle `permission-gate.ts` and `pi-sandbox/` when those extensions are installed. |
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates Git-based checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. |
-| `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox` | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/` and uses `bash-tool-coordinator.ts` for bash wrapping. |
+| `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, and `[DONE:n]` transcript fallback. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
 
 ## Extension Relationships
@@ -88,13 +88,23 @@ These three extensions cooperate but have separate responsibilities:
 5. When `pi-sandbox/` is unavailable, plan mode falls back to a smaller read-only tool set (`read`, `bash`, `grep`, `find`, `ls`, `AskUserQuestion`) and an internal bash allowlist.
 6. When the plan is executed, `plan-mode/` lifts the read-only lock and sends execution context so the agent can work through numbered steps, call `plan_complete_step` as each step finishes, and also leave `[DONE:n]` markers for transcript-based recovery.
 
+### Security controls: `pi-glance/` + `permission-gate.ts` + `pi-sandbox/`
+
+`pi-glance/` can act as a control surface for the two security extensions without owning their enforcement logic:
+
+- `permission-gate.ts` answers `permission-gate:request-state` and `permission-gate:set-enabled` events. `/glance` uses those hooks to show and save its enabled state.
+- `pi-sandbox/` answers `pi-sandbox:request-state` and `pi-sandbox:set-enabled` events. `/glance` can enable or disable the sandbox for the current session and saves the preferred setting in pi-glance config.
+- `--no-sandbox` still takes priority. If pi was started with `--no-sandbox`, pi-glance cannot force the sandbox on.
+- If a security extension is unavailable when `/glance` is saved, pi-glance keeps the setting and applies it when that extension responds in a later session/reload.
+- Enforcement remains in `permission-gate.ts` and `pi-sandbox/`; pi-glance only requests state changes over the shared event bus.
+
 ### Safety and recovery layers
 
 - `permission-gate.ts` is a prompt-based safety net for obviously dangerous bash commands. It is independent of `pi-sandbox/` and still useful when the sandbox is disabled.
 - `pi-sandbox/` is the stronger policy layer. It controls OS-level bash sandboxing and direct-tool filesystem/network prompts.
 - `plan-mode/` is a workflow layer. It requests read-only behavior from `pi-sandbox/`, but falls back gracefully when no sandbox is present.
 - `pi-rewind/` is a recovery layer, not a prevention layer. Use it to roll back file and/or conversation state after an agent change goes wrong.
-- `pi-glance/` and `progress-checkpoints.ts` are visibility layers. They help you see current state and progress; they do not enforce safety by themselves.
+- `pi-glance/` and `progress-checkpoints.ts` are visibility/control layers. They help you see current state and request changes; security enforcement stays in the security extensions themselves.
 
 ## Common Workflows
 
@@ -104,7 +114,7 @@ Use these together:
 
 - `pi-sandbox/` for filesystem/network permission gates and cwd-scoped read-only locks.
 - `plan-mode/` for read-only planning before edits.
-- `pi-glance/` to show plan state in the input surface.
+- `pi-glance/` to show plan state and toggle `permission-gate.ts` / `pi-sandbox/` from one settings pane.
 - `pi-rewind/` to recover from bad file changes.
 - `permission-gate.ts` as a simple confirmation layer for risky bash commands.
 

@@ -56,14 +56,14 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `hide-code-fence-markers.ts` | UI patch | 自动 | 通过隐藏终端 UI 中额外的代码块 fence 标记行，清理 markdown 代码块渲染效果。 |
 | `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
-| `permission-gate.ts` | 安全门禁 | 自动 | 对 `rm`、`sudo`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。 |
+| `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`sudo`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
 | `path-autocomplete-normalizer.ts` | 自动补全 patch | 自动 | 规范化部分文件补全流程产生的重复 `/./` 路径片段。 |
 | `pretty-image-paste.ts` | 输入/图片辅助 | 自动 | 将粘贴进编辑器的 pi 剪贴板图片路径替换为易读的 `[Image #n]` 标签，并在提交时附加对应图片。 |
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
-| `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。 |
+| `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以在相关扩展已安装时切换 `permission-gate.ts` 和 `pi-sandbox/`。 |
 | `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建基于 Git 的检查点，并在 agent 改错时回退文件和/或会话状态。 |
-| `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox` | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，并通过 `bash-tool-coordinator.ts` 包装 bash。 |
+| `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度和 `[DONE:n]` transcript 兜底的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 
 ## 扩展之间的关系
@@ -88,13 +88,23 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 5. 当 `pi-sandbox/` 不可用时，plan mode 会降级到较小的只读工具集合（`read`、`bash`、`grep`、`find`、`ls`、`AskUserQuestion`）以及内部 bash allowlist。
 6. 当开始执行计划时，`plan-mode/` 会解除只读锁并发送执行上下文，让 agent 按编号步骤推进，在每步完成时调用 `plan_complete_step`，并额外留下 `[DONE:n]` 标记以便从 transcript 恢复进度。
 
+### 安全控制：`pi-glance/` + `permission-gate.ts` + `pi-sandbox/`
+
+`pi-glance/` 可以作为两个安全扩展的控制界面，但不接管实际安全执行逻辑：
+
+- `permission-gate.ts` 响应 `permission-gate:request-state` 和 `permission-gate:set-enabled` 事件。`/glance` 通过这些钩子显示并保存它的启用状态。
+- `pi-sandbox/` 响应 `pi-sandbox:request-state` 和 `pi-sandbox:set-enabled` 事件。`/glance` 可以为当前会话启用或禁用沙箱，并把偏好保存在 pi-glance 配置中。
+- `--no-sandbox` 仍然优先。如果启动 pi 时传入了 `--no-sandbox`，pi-glance 不能强制打开沙箱。
+- 如果保存 `/glance` 设置时某个安全扩展不可用，pi-glance 会保留该设置，并在后续会话或 reload 中等扩展响应后应用。
+- 执行安全策略的仍然是 `permission-gate.ts` 和 `pi-sandbox/`；pi-glance 只是通过共享事件总线请求状态变更。
+
 ### 安全与恢复分层
 
 - `permission-gate.ts` 是基于提示确认的安全网，用于明显危险的 bash 命令。它独立于 `pi-sandbox/`，即使关闭沙箱也有用。
 - `pi-sandbox/` 是更强的策略层，负责 OS 级 bash 沙箱以及直接工具的文件系统/网络提示。
 - `plan-mode/` 是工作流层，会向 `pi-sandbox/` 请求只读行为；如果没有沙箱，也会优雅降级。
 - `pi-rewind/` 是恢复层，不是预防层。agent 改坏文件或会话状态后，用它回退。
-- `pi-glance/` 和 `progress-checkpoints.ts` 是可见性层，帮助你看到当前状态和进度；它们本身不执行安全策略。
+- `pi-glance/` 和 `progress-checkpoints.ts` 是可见性/控制层，帮助你看到当前状态并请求状态变更；安全执行仍由安全扩展本身负责。
 
 ## 常见工作流
 
@@ -104,7 +114,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 
 - `pi-sandbox/`：文件系统/网络权限门禁，以及 cwd 范围的只读锁。
 - `plan-mode/`：编辑前的只读规划。
-- `pi-glance/`：在输入界面中显示计划状态。
+- `pi-glance/`：在输入界面中显示计划状态，并从同一个设置面板切换 `permission-gate.ts` / `pi-sandbox/`。
 - `pi-rewind/`：从错误文件改动中恢复。
 - `permission-gate.ts`：为高风险 bash 命令提供简单确认层。
 
