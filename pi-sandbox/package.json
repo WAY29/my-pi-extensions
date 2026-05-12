@@ -18,13 +18,15 @@
   "homepage": "https://github.com/carderne/pi-sandbox",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "fmt": "oxfmt index.ts src",
-    "lint": "oxlint src",
+    "fmt": "oxfmt index.ts src test",
+    "lint": "oxlint src test",
     "check": "tsc --noEmit",
-    "all": "npm run fmt && npm run lint && npm run check",
-    "ci:fmt": "oxfmt --check index.ts src",
+    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "all": "npm run fmt && npm run lint && npm run check && npm run test",
+    "ci:fmt": "oxfmt --check index.ts src test",
     "ci:lint": "npm run lint",
-    "ci:check": "npm run check"
+    "ci:check": "npm run check",
+    "ci:test": "npm run test"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0"

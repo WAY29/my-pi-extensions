@@ -106,6 +106,11 @@ import {
   type IgnoreViolationsConfig,
   startDirectMacSandboxLogMonitor,
 } from "./direct-macos-sandbox";
+import {
+  parseSandboxFilesystemViolationLine,
+  type FilesystemAccessKind,
+  type SandboxFilesystemViolation,
+} from "./sandbox-violation-parser";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -207,9 +212,9 @@ interface FsWritePatchState {
 }
 
 const FS_WRITE_PATCH_STATE_KEY = Symbol.for("pi-sandbox.fs-write-patch-state");
-const fsWritePatchState = ((globalThis as typeof globalThis & Record<symbol, FsWritePatchState | undefined>)[
-  FS_WRITE_PATCH_STATE_KEY
-] ??= { patched: false, bypassDepth: 0 });
+const fsWritePatchState = ((
+  globalThis as typeof globalThis & Record<symbol, FsWritePatchState | undefined>
+)[FS_WRITE_PATCH_STATE_KEY] ??= { patched: false, bypassDepth: 0 });
 
 function describeFsTarget(target: unknown): string | undefined {
   if (typeof target === "string") return target;
@@ -543,13 +548,6 @@ function createNetworkAskCallback(allowedDomains: string[]): SandboxAskCallback 
 
 // ── Sandbox violation analysis ───────────────────────────────────────────────
 
-type FilesystemAccessKind = "read" | "write";
-
-interface SandboxFilesystemViolation {
-  path: string;
-  access: FilesystemAccessKind;
-}
-
 interface SandboxRuntimeViolation {
   line: string;
   command?: string;
@@ -645,25 +643,6 @@ function getSandboxViolationsForCommand(
     const timestampMs = getViolationTimestampMs(violation);
     return timestampMs !== undefined && timestampMs >= sinceMs;
   });
-}
-
-function parseSandboxFilesystemViolationLine(line: string): SandboxFilesystemViolation | null {
-  // macOS sandbox logs are authoritative here, e.g.:
-  //   bash(12345) deny(1) file-write-create /private/tmp/example
-  //   cat(12345) deny(1) file-read-data /Users/example/secret
-  const match = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
-  if (!match) return null;
-
-  let path = match[3].trim();
-  if (
-    (path.startsWith('"') && path.endsWith('"')) ||
-    (path.startsWith("'") && path.endsWith("'"))
-  ) {
-    path = path.slice(1, -1);
-  }
-  if (!path.startsWith("/")) return null;
-
-  return { path, access: match[2] as FilesystemAccessKind };
 }
 
 function getSandboxFilesystemViolationsForCommand(
@@ -1550,96 +1529,96 @@ export default function (pi: ExtensionAPI) {
         done(action);
       }
 
-        return {
-          render(width: number): string[] {
-            const lines: string[] = [];
-            lines.push(truncateToWidth(theme.fg("warning", title), width));
-            lines.push("");
+      return {
+        render(width: number): string[] {
+          const lines: string[] = [];
+          lines.push(truncateToWidth(theme.fg("warning", title), width));
+          lines.push("");
 
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              const isSelected = i === selectedIndex;
-              const isPending = pendingAction === opt.action;
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            const isSelected = i === selectedIndex;
+            const isPending = pendingAction === opt.action;
 
-              const prefix = isSelected ? " → " : "   ";
-              const keyHint = theme.fg("accent", `[${opt.key}]`);
-              let label = opt.label;
+            const prefix = isSelected ? " → " : "   ";
+            const keyHint = theme.fg("accent", `[${opt.key}]`);
+            let label = opt.label;
 
-              if (opt.hint) {
-                label += `  ${theme.fg("dim", opt.hint)}`;
-              }
-
-              if (isPending) {
-                label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
-              }
-
-              const line = `${prefix}${keyHint} ${label}`;
-              lines.push(truncateToWidth(line, width));
+            if (opt.hint) {
+              label += `  ${theme.fg("dim", opt.hint)}`;
             }
 
-            lines.push("");
-            const footer = pendingAction
-              ? "↑↓ navigate  enter confirm  esc cancel"
-              : "↑↓ navigate  enter select  esc/ctrl+c cancel";
-            lines.push(truncateToWidth(theme.fg("dim", footer), width));
+            if (isPending) {
+              label += `  ${theme.fg("warning", "→ press Enter to confirm")}`;
+            }
 
-            return lines;
-          },
+            const line = `${prefix}${keyHint} ${label}`;
+            lines.push(truncateToWidth(line, width));
+          }
 
-          handleInput(data: string): void {
-            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-              resolve("abort");
+          lines.push("");
+          const footer = pendingAction
+            ? "↑↓ navigate  enter confirm  esc cancel"
+            : "↑↓ navigate  enter select  esc/ctrl+c cancel";
+          lines.push(truncateToWidth(theme.fg("dim", footer), width));
+
+          return lines;
+        },
+
+        handleInput(data: string): void {
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+            resolve("abort");
+            return;
+          }
+
+          if (matchesKey(data, Key.enter)) {
+            if (pendingAction) {
+              resolve(pendingAction);
+            } else {
+              resolve(options[selectedIndex]?.action ?? "abort");
+            }
+            return;
+          }
+
+          if (matchesKey(data, Key.up)) {
+            selectedIndex = Math.max(0, selectedIndex - 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, Key.down)) {
+            selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+            pendingAction = null;
+            tui.requestRender();
+            return;
+          }
+
+          for (let i = 0; i < options.length; i++) {
+            const opt = options[i];
+            if (data === opt.key) {
+              // Exact case match (uppercase P/A) → immediate
+              resolve(opt.action);
               return;
             }
-
-            if (matchesKey(data, Key.enter)) {
-              if (pendingAction) {
-                resolve(pendingAction);
+            if (data.toLowerCase() === opt.key.toLowerCase()) {
+              // Lowercase match → confirmation required for P/A
+              if (opt.confirm) {
+                pendingAction = opt.action;
+                selectedIndex = i;
               } else {
-                resolve(options[selectedIndex]?.action ?? "abort");
-              }
-              return;
-            }
-
-            if (matchesKey(data, Key.up)) {
-              selectedIndex = Math.max(0, selectedIndex - 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-            if (matchesKey(data, Key.down)) {
-              selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
-              pendingAction = null;
-              tui.requestRender();
-              return;
-            }
-
-            for (let i = 0; i < options.length; i++) {
-              const opt = options[i];
-              if (data === opt.key) {
-                // Exact case match (uppercase P/A) → immediate
                 resolve(opt.action);
-                return;
               }
-              if (data.toLowerCase() === opt.key.toLowerCase()) {
-                // Lowercase match → confirmation required for P/A
-                if (opt.confirm) {
-                  pendingAction = opt.action;
-                  selectedIndex = i;
-                } else {
-                  resolve(opt.action);
-                }
-                tui.requestRender();
-                return;
-              }
+              tui.requestRender();
+              return;
             }
-          },
+          }
+        },
 
-          invalidate(): void {
-            // no-op
-          },
-        };
-      });
+        invalidate(): void {
+          // no-op
+        },
+      };
+    });
 
     return result ?? "abort";
   }
@@ -2147,7 +2126,9 @@ export default function (pi: ExtensionAPI) {
       if (result.accepted) {
         ctx.ui.notify("Sandbox enabled", "info");
       } else {
-        const type = result.reason?.startsWith("Sandbox initialization failed") ? "error" : "warning";
+        const type = result.reason?.startsWith("Sandbox initialization failed")
+          ? "error"
+          : "warning";
         ctx.ui.notify(result.reason ?? "Sandbox could not be enabled", type);
       }
     },

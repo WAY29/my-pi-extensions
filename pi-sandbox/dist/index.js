@@ -8676,6 +8676,36 @@ function startDirectMacSandboxLogMonitor(callback, ignoreViolations) {
   return () => logProcess.kill("SIGTERM");
 }
 
+// src/sandbox-violation-parser.ts
+function parseSandboxPaths(pathText) {
+  const matches = pathText.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\/\S+/g) ?? [];
+  return matches.map((match) => {
+    const trimmed = match.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1);
+    }
+    return trimmed;
+  }).filter((match) => match.startsWith("/"));
+}
+function parseSandboxFilesystemViolationLine(line) {
+  const directMatch = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
+  if (directMatch) {
+    const [path6] = parseSandboxPaths(directMatch[3]);
+    if (!path6) return null;
+    return { path: path6, access: directMatch[2] };
+  }
+  const forbiddenLinkMatch = line.match(
+    /\bdeny(?:\(\d+\))?\s+forbidden-link-priv<(file-(read|write)[^>]*)>\s+(.+)$/
+  );
+  if (!forbiddenLinkMatch) return null;
+  const [sourcePath] = parseSandboxPaths(forbiddenLinkMatch[3]);
+  if (!sourcePath) return null;
+  return {
+    path: sourcePath,
+    access: forbiddenLinkMatch[2]
+  };
+}
+
 // src/index.ts
 var DEFAULT_CONFIG = {
   enabled: true,
@@ -9011,16 +9041,6 @@ function getSandboxViolationsForCommand(command, sinceMs) {
     const timestampMs = getViolationTimestampMs(violation);
     return timestampMs !== void 0 && timestampMs >= sinceMs;
   });
-}
-function parseSandboxFilesystemViolationLine(line) {
-  const match = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
-  if (!match) return null;
-  let path6 = match[3].trim();
-  if (path6.startsWith('"') && path6.endsWith('"') || path6.startsWith("'") && path6.endsWith("'")) {
-    path6 = path6.slice(1, -1);
-  }
-  if (!path6.startsWith("/")) return null;
-  return { path: path6, access: match[2] };
 }
 function getSandboxFilesystemViolationsForCommand(command, sinceMs) {
   const filesystemViolations = [];
