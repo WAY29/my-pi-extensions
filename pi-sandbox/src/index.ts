@@ -200,9 +200,16 @@ interface SandboxSetRequest {
 type MutableModule = Record<string, unknown>;
 type AnyFunction = (this: unknown, ...args: any[]) => any;
 
-let fsWriteApisPatched = false;
-let readOnlyWriteLockDeniesWrite: ((target: unknown) => boolean) | undefined;
-let writeLockBypassDepth = 0;
+interface FsWritePatchState {
+  patched: boolean;
+  deniesWrite?: (target: unknown) => boolean;
+  bypassDepth: number;
+}
+
+const FS_WRITE_PATCH_STATE_KEY = Symbol.for("pi-sandbox.fs-write-patch-state");
+const fsWritePatchState = ((globalThis as typeof globalThis & Record<symbol, FsWritePatchState | undefined>)[
+  FS_WRITE_PATCH_STATE_KEY
+] ??= { patched: false, bypassDepth: 0 });
 
 function describeFsTarget(target: unknown): string | undefined {
   if (typeof target === "string") return target;
@@ -238,24 +245,24 @@ function createReadOnlyWriteError(operation: string, target?: unknown): Error & 
 }
 
 function assertProcessWriteAllowed(operation: string, target?: unknown): void {
-  if (writeLockBypassDepth === 0 && readOnlyWriteLockDeniesWrite?.(target)) {
+  if (fsWritePatchState.bypassDepth === 0 && fsWritePatchState.deniesWrite?.(target)) {
     throw createReadOnlyWriteError(operation, target);
   }
 }
 
 function runWithWriteLockBypass<T>(fn: () => T): T {
-  writeLockBypassDepth++;
+  fsWritePatchState.bypassDepth++;
   try {
     const result = fn();
     if (result && typeof (result as { finally?: unknown }).finally === "function") {
       return (result as unknown as Promise<unknown>).finally(() => {
-        writeLockBypassDepth--;
+        fsWritePatchState.bypassDepth--;
       }) as T;
     }
-    writeLockBypassDepth--;
+    fsWritePatchState.bypassDepth--;
     return result;
   } catch (error) {
-    writeLockBypassDepth--;
+    fsWritePatchState.bypassDepth--;
     throw error;
   }
 }
@@ -323,8 +330,8 @@ function patchCreateWriteStream(target: MutableModule): void {
 }
 
 function patchFsWriteApis(deniesWrite: (target: unknown) => boolean): void {
-  readOnlyWriteLockDeniesWrite = deniesWrite;
-  if (fsWriteApisPatched) return;
+  fsWritePatchState.deniesWrite = deniesWrite;
+  if (fsWritePatchState.patched) return;
 
   const fsModule = fs as unknown as MutableModule;
   const fsPromisesModule = fsPromises as unknown as MutableModule;
@@ -363,7 +370,7 @@ function patchFsWriteApis(deniesWrite: (target: unknown) => boolean): void {
   patchCreateWriteStream(fsModule);
 
   syncBuiltinESMExports();
-  fsWriteApisPatched = true;
+  fsWritePatchState.patched = true;
 }
 
 function loadConfig(cwd: string): SandboxConfig {
@@ -1101,6 +1108,10 @@ export default function (pi: ExtensionAPI) {
       .join(", ");
   }
 
+  function clearReadOnlyWriteLocks(): void {
+    readOnlyWriteLocks.clear();
+  }
+
   patchFsWriteApis((target) => isProcessWriteDeniedByReadOnlyLock(target));
 
   function applyReadOnlyWriteLock(config: SandboxConfig): SandboxConfig {
@@ -1284,6 +1295,7 @@ export default function (pi: ExtensionAPI) {
     options: { overrideConfig?: boolean } = {},
   ): Promise<SandboxSetResponse> {
     if (options.overrideConfig) sandboxConfigEnabledOverride = false;
+    clearReadOnlyWriteLocks();
     stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {
       try {
@@ -1334,18 +1346,29 @@ export default function (pi: ExtensionAPI) {
     cwd: string,
     scope: SandboxReadOnlyLockScope,
   ): Promise<SandboxReadOnlyLockResponse> {
+    const previousLockSignature = getReadOnlyWriteLockSignature();
+
+    if (!enabled) {
+      readOnlyWriteLocks.delete(owner);
+      const active = isReadOnlyWriteLocked();
+      if (sandboxInitialized && previousLockSignature !== getReadOnlyWriteLockSignature()) {
+        await reinitializeSandbox(cwd);
+      }
+      if (lastStatusContext) updateSandboxStatus(lastStatusContext);
+      return {
+        accepted: true,
+        active,
+        reason: active ? `write lock active: ${describeReadOnlyWriteLocks()}` : undefined,
+      };
+    }
+
     const availability = canUseSandbox(cwd);
     if (!availability.ok) {
       readOnlyWriteLocks.delete(owner);
-      return { accepted: false, active: false, reason: availability.reason };
+      return { accepted: false, active: isReadOnlyWriteLocked(), reason: availability.reason };
     }
 
-    const previousLockSignature = getReadOnlyWriteLockSignature();
-    if (enabled) {
-      readOnlyWriteLocks.set(owner, { scope, cwd: canonicalizePath(cwd) });
-    } else {
-      readOnlyWriteLocks.delete(owner);
-    }
+    readOnlyWriteLocks.set(owner, { scope, cwd: canonicalizePath(cwd) });
 
     const active = isReadOnlyWriteLocked();
     if (sandboxInitialized && previousLockSignature !== getReadOnlyWriteLockSignature()) {
@@ -2096,6 +2119,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     releaseBashToolOwner(pi);
     pendingSandboxedBash.clear();
+    clearReadOnlyWriteLocks();
     stopDirectMacSandboxMonitoring();
     if (sandboxInitialized) {
       try {
@@ -2104,6 +2128,9 @@ export default function (pi: ExtensionAPI) {
         // Ignore cleanup errors
       }
     }
+    sandboxEnabled = false;
+    sandboxInitialized = false;
+    lastStatusContext = undefined;
   });
 
   // ── /sandbox command ────────────────────────────────────────────────────────

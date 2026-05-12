@@ -5,6 +5,7 @@
 
 export const MIN_TODO_ITEMS = 1;
 export const MAX_TODO_ITEMS = 10;
+export const VISIBLE_TODO_ITEMS = 3;
 
 // Destructive commands blocked in plan mode
 const DESTRUCTIVE_PATTERNS = [
@@ -109,17 +110,71 @@ export interface TodoItem {
 	completed: boolean;
 }
 
-export function cleanStepText(text: string): string {
-	let cleaned = text
-		.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1") // Remove bold/italic
-		.replace(/`([^`]+)`/g, "$1") // Remove code
-		.replace(
-			/^(Use|Run|Execute|Create|Write|Read|Check|Verify|Update|Modify|Add|Remove|Delete|Install)\s+(the\s+)?/i,
-			"",
-		)
-		.replace(/\s+/g, " ")
-		.trim();
+export interface TodoWindow {
+	items: TodoItem[];
+	start: number;
+	end: number;
+	total: number;
+}
 
+export function getVisibleTodoWindow(items: TodoItem[], limit = VISIBLE_TODO_ITEMS): TodoWindow {
+	const total = items.length;
+	if (total === 0 || limit <= 0) return { items: [], start: 0, end: 0, total };
+
+	const maxStart = Math.max(0, total - limit);
+	const firstIncompleteIndex = items.findIndex((item) => !item.completed);
+	const start =
+		firstIncompleteIndex === -1 ? maxStart : Math.min(maxStart, Math.max(0, firstIncompleteIndex - 1));
+	const end = Math.min(total, start + limit);
+	return { items: items.slice(start, end), start, end, total };
+}
+
+export function splitTodoText(text: string): string[] {
+	const lines = text.split(/\r?\n/);
+	return lines.length > 0 ? lines : [""];
+}
+
+export function formatPlainTodoItem(item: TodoItem, marker: string): string {
+	const [firstLine = "", ...rest] = splitTodoText(item.text);
+	const markerText = marker ? `${marker} ` : "";
+	const continuation = rest.map((line) => `   ${line}`);
+	return [`${item.step}. ${markerText}${firstLine}`, ...continuation].join("\n");
+}
+
+export function formatPlanList(items: TodoItem[]): string {
+	return items.map((item) => formatPlainTodoItem(item, "")).join("\n");
+}
+
+export function buildPlanExecutionMessage(items: TodoItem[], clearContext: boolean): string {
+	if (items.length === 0) return "Execute the plan you just created from start to finish.";
+
+	const first = (items.find((item) => !item.completed) ?? items[0])!;
+	const baseInstruction = `Execute the entire plan from start to finish. Begin with step ${first.step}: ${first.text}. After completing each step, mark it done and continue to the next step until the full plan is complete.`;
+	const progressInstruction = `\n\nProgress tracking:\n- As soon as step n is complete, call plan_complete_step with that step number.\n- Do not print raw progress markers in user-facing text; the tool updates progress.\n- After marking a step complete, immediately continue with the next remaining step.\n- Only provide a final summary after all plan steps are complete.`;
+	const executionInstruction = `${baseInstruction}${progressInstruction}`;
+
+	if (!clearContext) return executionInstruction;
+
+	return `A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.\n\nPlan:\n${formatPlanList(items)}\n\n${executionInstruction}`;
+}
+
+export function cleanStepText(text: string): string {
+	const cleanedLines = text
+		.split(/\r?\n/)
+		.map((line) =>
+			line
+				.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1") // Remove bold/italic
+				.replace(/`([^`]+)`/g, "$1") // Remove code
+				.replace(
+					/^(Use|Run|Execute|Create|Write|Read|Check|Verify|Update|Modify|Add|Remove|Delete|Install)\s+(the\s+)?/i,
+					"",
+				)
+				.replace(/[ \t]+/g, " ")
+				.trim(),
+		)
+		.filter((line) => line.length > 0);
+
+	let cleaned = cleanedLines.join("\n").trim();
 	if (cleaned.length > 0) {
 		cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 	}
@@ -141,7 +196,7 @@ export function extractTodoItems(message: string): TodoItem[] {
 		}
 
 		const text = currentLines
-			.join(" ")
+			.join("\n")
 			.trim()
 			.replace(/\*{1,2}$/, "")
 			.trim();

@@ -64,7 +64,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates Git-based checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
-| `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, and `[DONE:n]` transcript fallback. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
+| `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
 
 ## Extension Relationships
 
@@ -81,12 +81,13 @@ Pi has a single active tool named `bash`. If several extensions independently re
 
 These three extensions cooperate but have separate responsibilities:
 
-1. `plan-mode/` owns the planning state. It registers `/plan`, `/plan-todos`, `Shift+Tab`, and `--plan`, tracks todo items, emits `plan-mode:state`, and responds to `plan-mode:request-state`.
+1. `plan-mode/` owns the planning state. It registers `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, and `--plan`, tracks todo items, emits `plan-mode:state`, and responds to `plan-mode:request-state`.
 2. `pi-glance/` is display-only for planning. It listens for `plan-mode:state` events and shows a Plan segment in the input surface when plan mode is active or executing. It does not enforce read-only behavior.
 3. `plan-mode/` asks `pi-sandbox/` to enforce read-only planning by emitting `pi-sandbox:set-read-only-lock` with owner `plan-mode`.
 4. When `pi-sandbox/` is available, plan mode keeps the current active tool set unchanged, but writes under the current working directory are denied by sandbox policy.
 5. When `pi-sandbox/` is unavailable, plan mode falls back to a smaller read-only tool set (`read`, `bash`, `grep`, `find`, `ls`, `AskUserQuestion`) and an internal bash allowlist.
-6. When the plan is executed, `plan-mode/` lifts the read-only lock and sends execution context so the agent can work through numbered steps, call `plan_complete_step` as each step finishes, and also leave `[DONE:n]` markers for transcript-based recovery.
+6. When the plan is executed, `plan-mode/` lifts the read-only lock and sends execution context so the agent can work through numbered steps and call `plan_complete_step` as each step finishes. `[DONE:n]` markers are now fallback-only recovery markers when the tool is unavailable.
+7. If you choose clear-context execution, `plan-mode/` creates a fresh session, persists the approved plan there, and kicks off execution with only the approved plan as the handoff context.
 
 ### Security controls: `pi-glance/` + `permission-gate.ts` + `pi-sandbox/`
 
@@ -113,7 +114,7 @@ These three extensions cooperate but have separate responsibilities:
 Use these together:
 
 - `pi-sandbox/` for filesystem/network permission gates and cwd-scoped read-only locks.
-- `plan-mode/` for read-only planning before edits.
+- `plan-mode/` for read-only planning before edits, including optional clear-context execution of the approved plan.
 - `pi-glance/` to show plan state and toggle `permission-gate.ts` / `pi-sandbox/` from one settings pane.
 - `pi-rewind/` to recover from bad file changes.
 - `permission-gate.ts` as a simple confirmation layer for risky bash commands.

@@ -8,9 +8,10 @@ Exploration mode for safe code analysis. With pi-sandbox, plan mode only blocks 
 - **Fallback read-only tools**: If pi-sandbox is unavailable, restricts available tools to read, bash, grep, find, ls, question
 - **Fallback bash allowlist**: Only read-only bash commands are allowed when sandbox locking is unavailable
 - **Plan extraction**: Extracts 1-10 numbered steps from `Plan:` sections
-- **Progress tracking**: Widget shows completion status during execution
+- **Progress tracking**: Widget shows completion status and the current 3-step todo window during execution
+- **Clear-context execution**: Create a fresh session and kick it off with only the approved plan
 - **`plan_complete_step` tool**: Execution-time tool marks completed steps immediately
-- **[DONE:n] markers**: Transcript fallback for completion tracking (spaces/full-width colon are tolerated)
+- **[DONE:n] markers**: Fallback-only transcript markers if `plan_complete_step` is unavailable (spaces/full-width colon are tolerated)
 - **Session persistence**: State survives session resume
 - **pi-glance integration**: Emits `plan-mode:state` events for display in pi-glance
 
@@ -18,6 +19,7 @@ Exploration mode for safe code analysis. With pi-sandbox, plan mode only blocks 
 
 - `/plan` - Toggle plan mode (protect cwd from writes)
 - `/plan-todos` - Show current plan progress
+- `/plan-execute-clear-context` - Create a fresh session and execute the approved plan
 - `Shift+Tab` - Toggle plan mode (shortcut)
 
 ## Usage
@@ -35,9 +37,9 @@ Plan:
 
 Use between 1 and 10 steps. Never include step 11 or beyond.
 
-4. Choose "Execute the plan" when prompted
-5. During execution, the agent marks steps complete with `plan_complete_step` and `[DONE:n]` tags such as `[DONE:1]`
-6. Progress widget shows completion status
+4. Choose "Execute the plan" or "Clear context and execute the plan" when prompted
+5. During execution, the agent marks steps complete with `plan_complete_step`; raw `[DONE:n]` tags are only a fallback if the tool cannot be used
+6. Progress widget shows completion status and up to 3 current todo items
 
 ## How It Works
 
@@ -50,9 +52,10 @@ Use between 1 and 10 steps. Never include step 11 or beyond.
 ### Execution Mode
 - Plan-mode write restrictions are lifted
 - Agent executes steps in order
-- The `plan_complete_step` tool marks completed steps immediately during execution
-- `[DONE:n]` markers rebuild completion from the transcript; `[DONE: 1]`, `[DONE：1]`, and grouped markers such as `[DONE:1,2]` are accepted
-- Widget shows progress
+- Choose clear-context execution to create a new session whose kickoff prompt contains the approved plan
+- The `plan_complete_step` tool marks completed steps immediately during execution and returns a readable success/progress message
+- `[DONE:n]` markers rebuild completion from the transcript only as a fallback; `[DONE: 1]`, `[DONE：1]`, and grouped markers such as `[DONE:1,2]` are accepted
+- Widget shows progress plus a sliding 3-todo window: 1-3, then 2-4, then 3-5, etc.
 
 ### Fallback Command Allowlist
 

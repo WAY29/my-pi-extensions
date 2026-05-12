@@ -64,7 +64,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建基于 Git 的检查点，并在 agent 改错时回退文件和/或会话状态。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
-| `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度和 `[DONE:n]` transcript 兜底的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
+| `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 
 ## 扩展之间的关系
 
@@ -81,12 +81,13 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 
 这三个扩展会协作，但职责不同：
 
-1. `plan-mode/` 负责计划状态。它注册 `/plan`、`/plan-todos`、`Shift+Tab` 和 `--plan`，跟踪 todo 项，发出 `plan-mode:state`，并响应 `plan-mode:request-state`。
+1. `plan-mode/` 负责计划状态。它注册 `/plan`、`/plan-todos`、`/plan-execute-clear-context`、`Shift+Tab` 和 `--plan`，跟踪 todo 项，发出 `plan-mode:state`，并响应 `plan-mode:request-state`。
 2. `pi-glance/` 只负责展示计划状态。它监听 `plan-mode:state` 事件，并在 plan mode 激活或执行时在输入界面显示 Plan segment。它不负责强制只读。
 3. `plan-mode/` 会通过发出 owner 为 `plan-mode` 的 `pi-sandbox:set-read-only-lock` 事件，请求 `pi-sandbox/` 执行只读规划。
 4. 当 `pi-sandbox/` 可用时，plan mode 会保持当前活动工具集合不变，但由沙箱策略拒绝当前工作目录下的写入。
 5. 当 `pi-sandbox/` 不可用时，plan mode 会降级到较小的只读工具集合（`read`、`bash`、`grep`、`find`、`ls`、`AskUserQuestion`）以及内部 bash allowlist。
-6. 当开始执行计划时，`plan-mode/` 会解除只读锁并发送执行上下文，让 agent 按编号步骤推进，在每步完成时调用 `plan_complete_step`，并额外留下 `[DONE:n]` 标记以便从 transcript 恢复进度。
+6. 当开始执行计划时，`plan-mode/` 会解除只读锁并发送执行上下文，让 agent 按编号步骤推进，并在每步完成时调用 `plan_complete_step`。`[DONE:n]` 现在只是工具不可用时的兜底恢复标记。
+7. 如果选择清上下文执行，`plan-mode/` 会创建新会话，在其中持久化已批准计划，并只用该计划作为交接上下文启动执行。
 
 ### 安全控制：`pi-glance/` + `permission-gate.ts` + `pi-sandbox/`
 
@@ -113,7 +114,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 搭配使用：
 
 - `pi-sandbox/`：文件系统/网络权限门禁，以及 cwd 范围的只读锁。
-- `plan-mode/`：编辑前的只读规划。
+- `plan-mode/`：编辑前的只读规划，包括可选的已批准计划清上下文执行。
 - `pi-glance/`：在输入界面中显示计划状态，并从同一个设置面板切换 `permission-gate.ts` / `pi-sandbox/`。
 - `pi-rewind/`：从错误文件改动中恢复。
 - `permission-gate.ts`：为高风险 bash 命令提供简单确认层。
