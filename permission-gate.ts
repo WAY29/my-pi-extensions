@@ -98,7 +98,7 @@ async function selectWithStableScroll(
 }
 
 export default function (pi: ExtensionAPI) {
-	const dangerousPatterns = [/\brm\b/i, /\bsudo\b/i, /\b(chmod|chown)\b.*777/i];
+	const dangerousPatterns = [/(?<!-)\brm\b/i, /\bsudo\b/i, /\b(chmod|chown)\b.*777/i];
 	let enabled = true;
 
 	pi.events.on("permission-gate:request-state", (data: unknown) => {
