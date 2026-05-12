@@ -119,6 +119,14 @@ Use these together:
 - `pi-rewind/` to recover from bad file changes.
 - `permission-gate.ts` as a simple confirmation layer for risky bash commands.
 
+The repository root includes `sandbox.json`, the recommended macOS configuration for `pi-sandbox/`. It denies reads of common secret directories, denies writes to secret-looking files, and allows writes to the current workspace plus common macOS/cache directories. It is not an extension entry; copy it manually when you want this policy:
+
+```bash
+cp sandbox.json ~/.pi/agent/sandbox.json
+```
+
+Review the policy before using it on another machine.
+
 ### Cleaner terminal output
 
 Use these together:
@@ -148,6 +156,7 @@ Use `pretty-image-paste.ts` when pasting multiple screenshots or clipboard image
 - The root `package.json` declares the package extension entries under `pi.extensions`. Keep it in sync when adding or removing top-level extensions.
 - `bash-tool-coordinator.ts` is a helper module, but it is still listed in the package manifest so package installs mirror the local auto-discovered extension directory.
 - `pi-glance/` and `pi-sandbox/` have their own `package.json` files and may also be usable as standalone pi packages.
+- The root `sandbox.json` is a recommended macOS `pi-sandbox/` policy copied from `~/.pi/agent/sandbox.json`; keep it separate from `pi-sandbox/sandbox.json`, which belongs to the standalone package source.
 - `pi-sandbox/dist/` is intentionally kept because `pi-sandbox/index.ts` re-exports `./dist/index.js`.
 - Generated development directories such as `pi-glance/.tmp-git-dev/` are intentionally ignored.
 - Some files include attribution comments for code adapted from existing MIT-licensed pi extensions. Keep those notices when redistributing.

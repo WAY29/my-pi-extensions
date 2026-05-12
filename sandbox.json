@@ -1,0 +1,33 @@
+{
+    "enabled": true,
+    "network": {
+        "allowedDomains": ["*"],
+        "deniedDomains": []
+    },
+    "filesystem": {
+        "denyRead": [
+            "~/.ssh",
+            "~/.aws",
+            "~/.gnupg"
+        ],
+        "allowWrite": [
+            ".",
+            "/tmp",
+            "/var/folders",
+            "~/.npm",
+            "~/.cache/npm",
+            "~/.cache/uv",
+            "~/.cache/go-build",
+            "~/go/pkg/mod",
+            "~/.bun",
+            "~/Library/Caches/bun",
+            "~/.pi/agent/pi-rewind"
+        ],
+        "denyWrite": [
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key"
+        ]
+    }
+}

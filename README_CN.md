@@ -119,6 +119,14 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 - `pi-rewind/`：从错误文件改动中恢复。
 - `permission-gate.ts`：为高风险 bash 命令提供简单确认层。
 
+仓库根目录包含 `sandbox.json`，这是 `pi-sandbox/` 在 macOS 下的推荐配置。它会拒绝读取常见密钥目录、拒绝写入看起来像密钥的文件，并允许写入当前工作区以及常见的 macOS/cache 目录。它不是扩展入口；如果你想启用这套策略，需要手动复制：
+
+```bash
+cp sandbox.json ~/.pi/agent/sandbox.json
+```
+
+在其它机器上使用前请先审查这份策略。
+
 ### 更清爽的终端输出
 
 搭配使用：
@@ -148,6 +156,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 - 根目录 `package.json` 通过 `pi.extensions` 声明 package 的扩展入口。新增或删除顶层扩展时需要同步更新。
 - `bash-tool-coordinator.ts` 是辅助模块，但仍列在 package manifest 中，以便 package 安装方式尽量贴近本地自动发现的扩展目录。
 - `pi-glance/` 和 `pi-sandbox/` 拥有自己的 `package.json`，也可能可以作为独立 pi 包使用。
+- 根目录 `sandbox.json` 是从 `~/.pi/agent/sandbox.json` 复制来的 macOS 推荐 `pi-sandbox/` 策略；它应与属于独立包源码的 `pi-sandbox/sandbox.json` 分开维护。
 - `pi-sandbox/dist/` 被有意保留，因为 `pi-sandbox/index.ts` 会重新导出 `./dist/index.js`。
 - `pi-glance/.tmp-git-dev/` 等生成的开发目录会被有意忽略。
 - 一些文件包含基于现有 MIT 许可 pi 扩展改编代码的署名注释。重新分发时请保留这些声明。
