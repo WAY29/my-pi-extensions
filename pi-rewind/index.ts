@@ -19,6 +19,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   isGitRepo,
   getRepoRoot,
+  initSyntheticGitRepo,
   createCheckpoint,
   deleteCheckpoint,
   loadAllCheckpoints,
@@ -65,18 +66,35 @@ export default function (pi: ExtensionAPI) {
   async function initSession(ctx: any): Promise<void> {
     resetState(state);
 
-    state.gitAvailable = await isGitRepo(ctx.cwd);
-    if (!state.gitAvailable) {
-      if (ctx.hasUI) clearStatus(ctx);
-      return;
+    const hasRealGit = await isGitRepo(ctx.cwd);
+    if (hasRealGit) {
+      state.gitAvailable = true;
+      state.syntheticGit = false;
+      state.gitDir = null;
+      state.repoRoot = await getRepoRoot(ctx.cwd);
+    } else {
+      try {
+        const synthetic = await initSyntheticGitRepo(ctx.cwd);
+        state.gitAvailable = true;
+        state.syntheticGit = true;
+        state.gitDir = synthetic.gitDir;
+        state.repoRoot = synthetic.root;
+      } catch (err) {
+        state.gitAvailable = false;
+        if (ctx.hasUI) {
+          clearStatus(ctx);
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Rewind disabled: failed to initialize external git storage (${msg})`, "warning");
+        }
+        return;
+      }
     }
 
-    state.repoRoot = await getRepoRoot(ctx.cwd);
     state.sessionId = ctx.sessionManager.getSessionId();
 
     // Rebuild checkpoint cache from existing git refs (for resumed sessions)
     try {
-      const existing = await loadAllCheckpoints(state.repoRoot, state.sessionId);
+      const existing = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
       for (const cp of existing) {
         state.checkpoints.set(cp.id, cp);
       }
@@ -89,6 +107,7 @@ export default function (pi: ExtensionAPI) {
       const resumeId = `resume-${state.sessionId}-${Date.now()}`;
       const cp = await createCheckpoint({
         root: state.repoRoot,
+        gitDir: state.gitDir,
         id: resumeId,
         sessionId: state.sessionId,
         trigger: "resume",
@@ -108,10 +127,11 @@ export default function (pi: ExtensionAPI) {
     if (state.repoRoot && state.sessionId) {
       const root = state.repoRoot;
       const sid = state.sessionId;
-      pruneOldSessions(root, sid).then((pruned) => {
+      const gitDir = state.gitDir;
+      pruneOldSessions(root, sid, 0, gitDir).then((pruned) => {
         if (pruned > 0) {
           // Reload cache after prune
-          loadAllCheckpoints(root, sid).then((remaining) => {
+          loadAllCheckpoints(root, sid, gitDir).then((remaining) => {
             state.checkpoints.clear();
             for (const cp of remaining) state.checkpoints.set(cp.id, cp);
             if (ctx.hasUI) updateStatus(state, ctx);
@@ -205,6 +225,7 @@ export default function (pi: ExtensionAPI) {
           const id = `turn-${state.sessionId}-${state.currentTurnIndex}-${ts}`;
           const cp = await createCheckpoint({
             root: state.repoRoot!,
+            gitDir: state.gitDir,
             id,
             sessionId: state.sessionId!,
             trigger: "tool",
@@ -214,15 +235,20 @@ export default function (pi: ExtensionAPI) {
 
           // Skip if worktree is identical to last checkpoint (read-only bash like ls, find, cat)
           if (state.lastWorktreeTree && cp.worktreeTreeSha === state.lastWorktreeTree) {
-            await deleteCheckpoint(state.repoRoot!, cp.id);
+            await deleteCheckpoint(state.repoRoot!, cp.id, state.gitDir);
             return;
           }
 
           state.checkpoints.set(cp.id, cp);
           state.lastWorktreeTree = cp.worktreeTreeSha;
           if (ctx.hasUI) updateStatus(state, ctx);
-        } catch {
-          // Checkpoint failures are non-fatal
+        } catch (err) {
+          state.failed = true;
+          if (ctx.hasUI) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Rewind disabled: checkpoint creation failed (${msg})`, "warning");
+            updateStatus(state, ctx);
+          }
         }
       })();
     }
@@ -236,9 +262,10 @@ export default function (pi: ExtensionAPI) {
         state.repoRoot,
         state.sessionId,
         DEFAULT_MAX_CHECKPOINTS,
+        state.gitDir,
       );
       if (pruned > 0) {
-        const remaining = await loadAllCheckpoints(state.repoRoot, state.sessionId);
+        const remaining = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
         state.checkpoints.clear();
         for (const cp of remaining) {
           state.checkpoints.set(cp.id, cp);

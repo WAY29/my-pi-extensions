@@ -7,10 +7,14 @@
 import type { CheckpointData } from "./core.js";
 
 export interface RewindState {
-  /** Is the cwd a git repo? */
+  /** Is git-backed checkpoint storage available? */
   gitAvailable: boolean;
-  /** Absolute path to repo root */
+  /** Absolute path to repo root, or real worktree root for synthetic storage */
   repoRoot: string | null;
+  /** External bare git dir for non-git workspaces; null for real git repos */
+  gitDir: string | null;
+  /** True when using pi-rewind-managed git storage outside the worktree */
+  syntheticGit: boolean;
   /** Current session ID (UUID) */
   sessionId: string | null;
   /** In-memory checkpoint cache: checkpoint ID → data */
@@ -41,6 +45,8 @@ export function createInitialState(): RewindState {
   return {
     gitAvailable: false,
     repoRoot: null,
+    gitDir: null,
+    syntheticGit: false,
     sessionId: null,
     checkpoints: new Map(),
     resumeCheckpoint: null,
@@ -59,6 +65,8 @@ export function createInitialState(): RewindState {
 export function resetState(state: RewindState): void {
   state.gitAvailable = false;
   state.repoRoot = null;
+  state.gitDir = null;
+  state.syntheticGit = false;
   state.sessionId = null;
   state.checkpoints.clear();
   state.resumeCheckpoint = null;

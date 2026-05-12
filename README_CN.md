@@ -62,7 +62,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
 | `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
-| `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建基于 Git 的检查点，并在 agent 改错时回退文件和/或会话状态。 |
+| `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 
@@ -104,7 +104,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 - `permission-gate.ts` 是基于提示确认的安全网，用于明显危险的 bash 命令。它独立于 `pi-sandbox/`，即使关闭沙箱也有用。
 - `pi-sandbox/` 是更强的策略层，负责 OS 级 bash 沙箱以及直接工具的文件系统/网络提示。
 - `plan-mode/` 是工作流层，会向 `pi-sandbox/` 请求只读行为；如果没有沙箱，也会优雅降级。
-- `pi-rewind/` 是恢复层，不是预防层。agent 改坏文件或会话状态后，用它回退。
+- `pi-rewind/` 是恢复层，不是预防层。agent 改坏文件或会话状态后，用它回退。它可用于 Git 仓库，也可以为普通目录在 `~/.pi/agent/pi-rewind/workspaces/` 下创建 pi-rewind 自己管理的外部 Git 存储。
 - `pi-glance/` 和 `progress-checkpoints.ts` 是可见性/控制层，帮助你看到当前状态并请求状态变更；安全执行仍由安全扩展本身负责。
 
 ## 常见工作流
@@ -116,7 +116,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 - `pi-sandbox/`：文件系统/网络权限门禁，以及 cwd 范围的只读锁。
 - `plan-mode/`：编辑前的只读规划，包括可选的已批准计划清上下文执行。
 - `pi-glance/`：在输入界面中显示计划状态，并从同一个设置面板切换 `permission-gate.ts` / `pi-sandbox/`。
-- `pi-rewind/`：从错误文件改动中恢复。
+- `pi-rewind/`：从错误文件改动中恢复，包括通过外部本地 checkpoint 存储保护非 Git 目录。
 - `permission-gate.ts`：为高风险 bash 命令提供简单确认层。
 
 仓库根目录包含 `sandbox.json`，这是 `pi-sandbox/` 在 macOS 下的推荐配置。它会拒绝读取常见密钥目录、拒绝写入看起来像密钥的文件，并允许写入当前工作区以及常见的 macOS/cache 目录。它不是扩展入口；如果你想启用这套策略，需要手动复制：

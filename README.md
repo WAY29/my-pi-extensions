@@ -62,7 +62,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `retry-stream-read-error.ts` | retry patch | automatic | Treats `stream_read_error` assistant failures as retryable by patching pi's retry classifier, with a warning when the current pi version is unsupported. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
-| `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates Git-based checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. |
+| `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
 
@@ -104,7 +104,7 @@ These three extensions cooperate but have separate responsibilities:
 - `permission-gate.ts` is a prompt-based safety net for obviously dangerous bash commands. It is independent of `pi-sandbox/` and still useful when the sandbox is disabled.
 - `pi-sandbox/` is the stronger policy layer. It controls OS-level bash sandboxing and direct-tool filesystem/network prompts.
 - `plan-mode/` is a workflow layer. It requests read-only behavior from `pi-sandbox/`, but falls back gracefully when no sandbox is present.
-- `pi-rewind/` is a recovery layer, not a prevention layer. Use it to roll back file and/or conversation state after an agent change goes wrong.
+- `pi-rewind/` is a recovery layer, not a prevention layer. Use it to roll back file and/or conversation state after an agent change goes wrong. It works in Git repos and can also create pi-rewind-owned external Git storage under `~/.pi/agent/pi-rewind/workspaces/` for plain directories.
 - `pi-glance/` and `progress-checkpoints.ts` are visibility/control layers. They help you see current state and request changes; security enforcement stays in the security extensions themselves.
 
 ## Common Workflows
@@ -116,7 +116,7 @@ Use these together:
 - `pi-sandbox/` for filesystem/network permission gates and cwd-scoped read-only locks.
 - `plan-mode/` for read-only planning before edits, including optional clear-context execution of the approved plan.
 - `pi-glance/` to show plan state and toggle `permission-gate.ts` / `pi-sandbox/` from one settings pane.
-- `pi-rewind/` to recover from bad file changes.
+- `pi-rewind/` to recover from bad file changes, including in non-Git directories via external local checkpoint storage.
 - `permission-gate.ts` as a simple confirmation layer for risky bash commands.
 
 The repository root includes `sandbox.json`, the recommended macOS configuration for `pi-sandbox/`. It denies reads of common secret directories, denies writes to secret-looking files, and allows writes to the current workspace plus common macOS/cache directories. It is not an extension entry; copy it manually when you want this policy:

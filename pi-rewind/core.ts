@@ -5,11 +5,12 @@
  * Independently testable, safe to import from anywhere.
  */
 
+import { createHash } from "crypto";
 import { spawn } from "child_process";
 import { statSync, readdirSync } from "fs";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "fs/promises";
+import { homedir, tmpdir } from "os";
+import { dirname, join, relative } from "path";
 
 // ============================================================================
 // Constants & Types
@@ -77,22 +78,34 @@ export interface CheckpointData {
   skippedLargeDirs?: string[];
 }
 
+export interface SyntheticGitRepo {
+  /** Real path to the directory being snapshotted */
+  root: string;
+  /** pi-rewind-owned bare git directory */
+  gitDir: string;
+  /** Directory containing the bare git dir and metadata */
+  storageDir: string;
+  /** Stable key derived from root */
+  key: string;
+}
+
 // ============================================================================
 // Git helpers
 // ============================================================================
 
-/**
- * Run a git command via spawn (no shell injection).
- * `cmd` is parsed into args respecting quotes.
- */
-export function git(
-  cmd: string,
-  cwd: string,
-  opts: { env?: NodeJS.ProcessEnv; input?: string } = {},
-): Promise<string> {
+/** Options for running git. gitDir points at a pi-rewind-owned bare repo. */
+export interface GitOptions {
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  gitDir?: string | null;
+}
+
+function runGit(args: string[], cwd: string, opts: GitOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const args = parseArgs(cmd);
-    const proc = spawn("git", args, {
+    const finalArgs = opts.gitDir
+      ? [`--git-dir=${opts.gitDir}`, `--work-tree=${cwd}`, ...args]
+      : args;
+    const proc = spawn("git", finalArgs, {
       cwd,
       env: opts.env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -105,7 +118,7 @@ export function git(
 
     proc.on("close", (code) => {
       if (code === 0) resolve(stdout.trim());
-      else reject(new Error(stderr || `git ${args[0]} failed (code ${code})`));
+      else reject(new Error(stderr || `git ${args[0] ?? "command"} failed (code ${code})`));
     });
     proc.on("error", reject);
 
@@ -116,6 +129,18 @@ export function git(
       proc.stdin.end();
     }
   });
+}
+
+/**
+ * Run a git command via spawn (no shell injection).
+ * `cmd` is parsed into args respecting quotes.
+ */
+export function git(
+  cmd: string,
+  cwd: string,
+  opts: GitOptions = {},
+): Promise<string> {
+  return runGit(parseArgs(cmd), cwd, opts);
 }
 
 function parseArgs(cmd: string): string[] {
@@ -140,6 +165,50 @@ export const isGitRepo = (cwd: string) =>
 
 export const getRepoRoot = (cwd: string) =>
   git("rev-parse --show-toplevel", cwd);
+
+function hasGitHead(gitDir: string): boolean {
+  try {
+    return statSync(join(gitDir, "HEAD")).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create or reuse pi-rewind's external git database for a non-git directory.
+ * The user's directory remains untouched; git data lives under ~/.pi/agent/pi-rewind.
+ */
+export async function initSyntheticGitRepo(cwd: string): Promise<SyntheticGitRepo> {
+  const root = await realpath(cwd);
+  const key = createHash("sha256").update(root).digest("hex").slice(0, 32);
+  const storageDirPath = join(homedir(), ".pi", "agent", "pi-rewind", "workspaces", key);
+  await mkdir(storageDirPath, { recursive: true });
+
+  const storageDir = await realpath(storageDirPath);
+  const gitDir = join(storageDir, ".git");
+
+  if (!hasGitHead(gitDir)) {
+    await runGit(["init", "--bare", gitDir], root);
+  }
+
+  const now = new Date().toISOString();
+  const metadataPath = join(storageDir, "metadata.json");
+  let createdAt = now;
+  try {
+    const existing = JSON.parse(await readFile(metadataPath, "utf8")) as { createdAt?: unknown };
+    if (typeof existing.createdAt === "string") createdAt = existing.createdAt;
+  } catch {
+    // Missing or invalid metadata is harmless; rewrite it below.
+  }
+
+  await writeFile(
+    metadataPath,
+    JSON.stringify({ formatVersion: 1, key, worktreePath: root, gitDir, createdAt, lastUsedAt: now }, null, 2) + "\n",
+    "utf8",
+  );
+
+  return { root, gitDir, storageDir, key };
+}
 
 // ============================================================================
 // Path filtering
@@ -202,6 +271,18 @@ function isPathWithinAny(path: string, dirs: Set<string>): boolean {
   return false;
 }
 
+function getInternalStorageDirs(root: string, gitDir?: string | null): Set<string> {
+  if (!gitDir) return new Set();
+  const storageDir = dirname(gitDir);
+  const rel = normalizeGitPath(relative(root, storageDir));
+  if (!rel || rel === "." || rel.startsWith("..")) return new Set();
+  return new Set([rel]);
+}
+
+function shouldSkipSnapshotPath(path: string, internalDirs: Set<string>): boolean {
+  return shouldIgnoreForSnapshot(path) || isPathWithinAny(path, internalDirs);
+}
+
 // ============================================================================
 // Status snapshot (what files need snapshotting)
 // ============================================================================
@@ -214,7 +295,7 @@ interface StatusSnapshot {
   skippedLargeFiles: string[];
 }
 
-async function captureStatusSnapshot(root: string): Promise<StatusSnapshot> {
+async function captureStatusSnapshot(root: string, gitDir?: string | null): Promise<StatusSnapshot> {
   const snap: StatusSnapshot = {
     trackedPaths: [],
     untrackedFiles: [],
@@ -223,16 +304,17 @@ async function captureStatusSnapshot(root: string): Promise<StatusSnapshot> {
     skippedLargeFiles: [],
   };
 
-  const output = await git("status --porcelain=2 -z --untracked-files=all", root).catch(() => "");
+  const output = await git("status --porcelain=2 -z --untracked-files=all", root, { gitDir }).catch(() => "");
   if (!output) return snap;
 
+  const internalDirs = getInternalStorageDirs(root, gitDir);
   const entries = output.split("\0").filter(Boolean);
   let expectRename = false;
 
   for (const entry of entries) {
     if (expectRename) {
       const n = normalizeGitPath(entry);
-      if (n) snap.trackedPaths.push(n);
+      if (n && !shouldSkipSnapshotPath(n, internalDirs)) snap.trackedPaths.push(n);
       expectRename = false;
       continue;
     }
@@ -242,7 +324,7 @@ async function captureStatusSnapshot(root: string): Promise<StatusSnapshot> {
       const sp = entry.indexOf(" ");
       if (sp === -1) continue;
       const raw = normalizeGitPath(entry.slice(sp + 1));
-      if (!raw || shouldIgnoreForSnapshot(raw)) continue;
+      if (!raw || shouldSkipSnapshotPath(raw, internalDirs)) continue;
 
       let st: ReturnType<typeof statSync> | null = null;
       try { st = statSync(join(root, raw)); } catch { st = null; }
@@ -255,14 +337,23 @@ async function captureStatusSnapshot(root: string): Promise<StatusSnapshot> {
       else snap.untrackedFilesForIndex.push(raw);
     } else if (tag === "1") {
       const p = extractField(entry, 8);
-      if (p) snap.trackedPaths.push(normalizeGitPath(p));
+      if (p) {
+        const n = normalizeGitPath(p);
+        if (!shouldSkipSnapshotPath(n, internalDirs)) snap.trackedPaths.push(n);
+      }
     } else if (tag === "2") {
       const p = extractField(entry, 9);
-      if (p) snap.trackedPaths.push(normalizeGitPath(p));
+      if (p) {
+        const n = normalizeGitPath(p);
+        if (!shouldSkipSnapshotPath(n, internalDirs)) snap.trackedPaths.push(n);
+      }
       expectRename = true;
     } else if (tag === "u") {
       const p = extractField(entry, 10);
-      if (p) snap.trackedPaths.push(normalizeGitPath(p));
+      if (p) {
+        const n = normalizeGitPath(p);
+        if (!shouldSkipSnapshotPath(n, internalDirs)) snap.trackedPaths.push(n);
+      }
     }
   }
   return snap;
@@ -314,8 +405,8 @@ interface FilesToAddResult {
   skippedLargeDirs: string[];
 }
 
-async function getFilesToAdd(root: string): Promise<FilesToAddResult> {
-  const status = await captureStatusSnapshot(root);
+async function getFilesToAdd(root: string, gitDir?: string | null): Promise<FilesToAddResult> {
+  const status = await captureStatusSnapshot(root, gitDir);
   const largeDirs = detectLargeDirs(
     status.untrackedFiles,
     status.untrackedDirs,
@@ -351,6 +442,8 @@ export interface CreateCheckpointOpts {
   trigger: CheckpointData["trigger"];
   turnIndex: number;
   toolName?: string;
+  /** External bare git dir for non-git workspaces */
+  gitDir?: string | null;
   /** Human-readable label (user prompt, tool args summary) */
   description?: string;
 }
@@ -360,13 +453,13 @@ export interface CreateCheckpointOpts {
  * Returns full checkpoint metadata.
  */
 export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<CheckpointData> {
-  const { root, id, sessionId, trigger, turnIndex, toolName, description } = opts;
+  const { root, id, sessionId, trigger, turnIndex, toolName, gitDir, description } = opts;
   const timestamp = Date.now();
   const iso = new Date(timestamp).toISOString();
 
-  const headSha = await git("rev-parse HEAD", root).catch(() => ZEROS);
-  const branch = await git("rev-parse --abbrev-ref HEAD", root).catch(() => "unknown");
-  const indexTreeSha = await git("write-tree", root);
+  const headSha = await git("rev-parse HEAD", root, { gitDir }).catch(() => ZEROS);
+  const branch = await git("rev-parse --abbrev-ref HEAD", root, { gitDir }).catch(() => gitDir ? "pi-rewind" : "unknown");
+  const indexTreeSha = await git("write-tree", root, { gitDir });
 
   const tmpDir = await mkdtemp(join(tmpdir(), "pi-rewind-"));
   const tmpIndex = join(tmpDir, "index");
@@ -375,7 +468,7 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
     const tmpEnv = { ...process.env, GIT_INDEX_FILE: tmpIndex };
 
     const { filtered, allUntracked, skippedLargeFiles, skippedLargeDirs } =
-      await getFilesToAdd(root);
+      await getFilesToAdd(root, gitDir);
 
     const largeDirsSet = new Set(skippedLargeDirs);
     const largeFilesSet = new Set(skippedLargeFiles);
@@ -388,7 +481,7 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
 
     // Seed temp index from HEAD
     if (headSha !== ZEROS) {
-      await git(`read-tree ${headSha}`, root, { env: tmpEnv });
+      await git(`read-tree ${headSha}`, root, { env: tmpEnv, gitDir });
     }
 
     // Add files in batches of 100
@@ -396,10 +489,10 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
     for (let i = 0; i < filtered.length; i += BATCH) {
       const batch = filtered.slice(i, i + BATCH);
       const paths = batch.map((f) => `"${f}"`).join(" ");
-      await git(`add --all -- ${paths}`, root, { env: tmpEnv });
+      await git(`add --all -- ${paths}`, root, { env: tmpEnv, gitDir });
     }
 
-    const worktreeTreeSha = await git("write-tree", root, { env: tmpEnv });
+    const worktreeTreeSha = await git("write-tree", root, { env: tmpEnv, gitDir });
 
     // Build commit message with all metadata
     const msg = [
@@ -432,9 +525,10 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
     const commitSha = await git(`commit-tree ${worktreeTreeSha}`, root, {
       input: msg,
       env: commitEnv,
+      gitDir,
     });
 
-    await git(`update-ref ${REF_BASE}/${id} ${commitSha}`, root);
+    await git(`update-ref ${REF_BASE}/${id} ${commitSha}`, root, { gitDir });
 
     return {
       id,
@@ -461,10 +555,15 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
  * Restore worktree + index to a checkpoint's state.
  * Safely preserves pre-existing untracked files and skipped large items.
  */
-export async function restoreCheckpoint(root: string, cp: CheckpointData): Promise<void> {
+export async function restoreCheckpoint(
+  root: string,
+  cp: CheckpointData,
+  gitDir?: string | null,
+): Promise<void> {
   // Safety: verify we're on the same branch as when the checkpoint was created
   if (cp.branch) {
-    const currentBranch = await git("rev-parse --abbrev-ref HEAD", root).catch(() => "unknown");
+    const currentBranch = await git("rev-parse --abbrev-ref HEAD", root, { gitDir })
+      .catch(() => gitDir ? "pi-rewind" : "unknown");
     if (currentBranch !== cp.branch) {
       throw new Error(
         `Branch mismatch: checkpoint was created on "${cp.branch}" but you are on "${currentBranch}". ` +
@@ -474,11 +573,11 @@ export async function restoreCheckpoint(root: string, cp: CheckpointData): Promi
   }
   // 1. Reset HEAD
   if (cp.headSha !== ZEROS) {
-    await git(`reset --hard ${cp.headSha}`, root);
+    await git(`reset --hard ${cp.headSha}`, root, { gitDir });
   }
 
   // 2. Restore worktree from snapshot tree
-  await git(`read-tree --reset -u ${cp.worktreeTreeSha}`, root);
+  await git(`read-tree --reset -u ${cp.worktreeTreeSha}`, root, { gitDir });
 
   // 3. Safe-clean new untracked files only
   await safeClean(
@@ -486,10 +585,11 @@ export async function restoreCheckpoint(root: string, cp: CheckpointData): Promi
     cp.preexistingUntrackedFiles || [],
     cp.skippedLargeFiles || [],
     cp.skippedLargeDirs || [],
+    gitDir,
   );
 
   // 4. Restore staged state without touching files
-  await git(`read-tree --reset ${cp.indexTreeSha}`, root);
+  await git(`read-tree --reset ${cp.indexTreeSha}`, root, { gitDir });
 }
 
 async function safeClean(
@@ -497,8 +597,9 @@ async function safeClean(
   preexisting: string[],
   skippedFiles: string[],
   skippedDirs: string[],
+  gitDir?: string | null,
 ): Promise<void> {
-  const output = await git("ls-files --others --exclude-standard", root).catch(() => "");
+  const output = await git("ls-files --others --exclude-standard", root, { gitDir }).catch(() => "");
   if (!output) return;
   const current = output.split("\n").filter(Boolean);
   if (current.length === 0) return;
@@ -506,10 +607,11 @@ async function safeClean(
   const preSet = new Set(preexisting);
   const sfSet = new Set(skippedFiles);
   const sdSet = new Set(skippedDirs);
+  const internalDirs = getInternalStorageDirs(root, gitDir);
 
   const toRemove = current.filter((f) => {
     if (preSet.has(f)) return false;
-    if (shouldIgnoreForSnapshot(f)) return false;
+    if (shouldSkipSnapshotPath(f, internalDirs)) return false;
     if (sfSet.has(f)) return false;
     if (isPathWithinAny(f, sdSet)) return false;
     return true;
@@ -521,7 +623,7 @@ async function safeClean(
   for (let i = 0; i < toRemove.length; i += BATCH) {
     const batch = toRemove.slice(i, i + BATCH);
     const paths = batch.map((f) => `"${f}"`).join(" ");
-    await git(`clean -f -- ${paths}`, root).catch(() => {});
+    await git(`clean -f -- ${paths}`, root, { gitDir }).catch(() => {});
   }
 }
 
@@ -533,10 +635,11 @@ async function safeClean(
 export async function loadCheckpointFromRef(
   root: string,
   refName: string,
+  gitDir?: string | null,
 ): Promise<CheckpointData | null> {
   try {
-    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${refName}`, root);
-    const msg = await git(`cat-file commit ${commitSha}`, root);
+    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${refName}`, root, { gitDir });
+    const msg = await git(`cat-file commit ${commitSha}`, root, { gitDir });
 
     const get = (key: string) =>
       msg.match(new RegExp(`^${key} (.+)$`, "m"))?.[1]?.trim();
@@ -579,10 +682,10 @@ export async function loadCheckpointFromRef(
 }
 
 /** List all checkpoint ref names under REF_BASE */
-export async function listCheckpointRefs(root: string): Promise<string[]> {
+export async function listCheckpointRefs(root: string, gitDir?: string | null): Promise<string[]> {
   try {
     const prefix = `${REF_BASE}/`;
-    const out = await git(`for-each-ref --format=%(refname) ${prefix}`, root);
+    const out = await git(`for-each-ref --format=%(refname) ${prefix}`, root, { gitDir });
     return out.split("\n").filter(Boolean).map((r) => r.replace(prefix, ""));
   } catch {
     return [];
@@ -593,9 +696,10 @@ export async function listCheckpointRefs(root: string): Promise<string[]> {
 export async function loadAllCheckpoints(
   root: string,
   sessionId?: string,
+  gitDir?: string | null,
 ): Promise<CheckpointData[]> {
-  const refs = await listCheckpointRefs(root);
-  const results = await Promise.all(refs.map((r) => loadCheckpointFromRef(root, r)));
+  const refs = await listCheckpointRefs(root, gitDir);
+  const results = await Promise.all(refs.map((r) => loadCheckpointFromRef(root, r, gitDir)));
   return results.filter(
     (cp): cp is CheckpointData =>
       cp !== null && (!sessionId || cp.sessionId === sessionId),
@@ -603,8 +707,8 @@ export async function loadAllCheckpoints(
 }
 
 /** Delete a checkpoint ref */
-export async function deleteCheckpoint(root: string, id: string): Promise<void> {
-  await git(`update-ref -d ${REF_BASE}/${id}`, root).catch(() => {});
+export async function deleteCheckpoint(root: string, id: string, gitDir?: string | null): Promise<void> {
+  await git(`update-ref -d ${REF_BASE}/${id}`, root, { gitDir }).catch(() => {});
 }
 
 /** Prune oldest checkpoints for a session, keeping at most `max` */
@@ -612,8 +716,9 @@ export async function pruneCheckpoints(
   root: string,
   sessionId: string,
   max: number = DEFAULT_MAX_CHECKPOINTS,
+  gitDir?: string | null,
 ): Promise<number> {
-  const all = await loadAllCheckpoints(root, sessionId);
+  const all = await loadAllCheckpoints(root, sessionId, gitDir);
   // Sort oldest first
   all.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -623,7 +728,7 @@ export async function pruneCheckpoints(
 
   const toDelete = prunable.slice(0, prunable.length - max);
   for (const cp of toDelete) {
-    await deleteCheckpoint(root, cp.id);
+    await deleteCheckpoint(root, cp.id, gitDir);
   }
   return toDelete.length;
 }
@@ -637,8 +742,9 @@ export async function pruneOldSessions(
   root: string,
   currentSessionId: string,
   keepPerOldSession: number = 0,
+  gitDir?: string | null,
 ): Promise<number> {
-  const refs = await listCheckpointRefs(root);
+  const refs = await listCheckpointRefs(root, gitDir);
   let deleted = 0;
 
   // Group refs by session (parse sessionId from ref name without loading full commit)
@@ -673,7 +779,7 @@ export async function pruneOldSessions(
 
     for (const ref of toDelete) {
       const id = ref.replace("refs/pi-checkpoints/", "");
-      await deleteCheckpoint(root, id).catch(() => {});
+      await deleteCheckpoint(root, id, gitDir).catch(() => {});
       deleted++;
     }
   }
@@ -686,10 +792,11 @@ export async function diffCheckpoints(
   root: string,
   fromTree: string,
   toTree: string,
+  gitDir?: string | null,
 ): Promise<string> {
   try {
     // diff-tree compares two tree objects and works with tree SHAs or commit refs
-    return await git(`diff-tree --stat --no-commit-id ${fromTree} ${toTree}`, root);
+    return await git(`diff-tree --stat --no-commit-id ${fromTree} ${toTree}`, root, { gitDir });
   } catch {
     return "(diff unavailable)";
   }

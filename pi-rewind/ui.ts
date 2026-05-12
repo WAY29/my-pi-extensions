@@ -19,10 +19,16 @@ export function updateStatus(state: RewindState, ctx: ExtensionContext): void {
   }
 
   const theme = ctx.ui.theme;
+  if (state.failed) {
+    ctx.ui.setStatus(STATUS_KEY, theme.fg("warning", "◆ rewind disabled"));
+    return;
+  }
+
   const count = state.checkpoints.size;
+  const kind = state.syntheticGit ? "local checkpoint" : "checkpoint";
   ctx.ui.setStatus(
     STATUS_KEY,
-    theme.fg("dim", "◆ ") + theme.fg("muted", `${count} checkpoint${count === 1 ? "" : "s"}`),
+    theme.fg("dim", "◆ ") + theme.fg("muted", `${count} ${kind}${count === 1 ? "" : "s"}`),
   );
 }
 

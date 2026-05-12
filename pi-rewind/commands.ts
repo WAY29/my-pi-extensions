@@ -8,7 +8,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { RewindState } from "./state.js";
 import type { CheckpointData } from "./core.js";
-import { restoreCheckpoint, createCheckpoint, diffCheckpoints, sanitizeForRef, git } from "./core.js";
+import { restoreCheckpoint, createCheckpoint, diffCheckpoints, git } from "./core.js";
 
 // ============================================================================
 // Helpers
@@ -56,7 +56,7 @@ async function runRewindFlow(
   ctx: import("@mariozechner/pi-coding-agent").ExtensionCommandContext,
 ): Promise<void> {
   if (!state.gitAvailable || !state.repoRoot || !state.sessionId) {
-    ctx.ui.notify("Rewind not available (no git repo or session)", "warning");
+    ctx.ui.notify("Rewind not available (checkpoint storage unavailable or no session)", "warning");
     return;
   }
 
@@ -73,7 +73,8 @@ async function runRewindFlow(
 
   // Build picker items
   const items: string[] = [];
-  const currentBranch = await git("rev-parse --abbrev-ref HEAD", state.root).catch(() => "unknown");
+  const currentBranch = await git("rev-parse --abbrev-ref HEAD", state.repoRoot, { gitDir: state.gitDir })
+    .catch(() => state.syntheticGit ? "pi-rewind" : "unknown");
   const undoRef = state.redoStack.length > 0 ? state.redoStack[state.redoStack.length - 1] : null;
   if (undoRef) {
     items.push("↩ Undo last rewind");
@@ -104,7 +105,7 @@ async function runRewindFlow(
   // Show diff preview
   let diffText = "";
   try {
-    const diff = await diffCheckpoints(state.repoRoot, target.worktreeTreeSha, "HEAD");
+    const diff = await diffCheckpoints(state.repoRoot, target.worktreeTreeSha, "HEAD", state.gitDir);
     if (diff && diff !== "(diff unavailable)") {
       diffText = diff.slice(0, 2000);
     }
@@ -178,6 +179,7 @@ async function performRestore(
     const beforeId = `before-restore-${state.sessionId}-${Date.now()}`;
     const beforeCp = await createCheckpoint({
       root: state.repoRoot,
+      gitDir: state.gitDir,
       id: beforeId,
       sessionId: state.sessionId,
       trigger: "before-restore",
@@ -190,7 +192,7 @@ async function performRestore(
 
   // Restore files
   try {
-    await restoreCheckpoint(state.repoRoot, target);
+    await restoreCheckpoint(state.repoRoot, target, state.gitDir);
   } catch (err) {
     ctx.ui.notify(`Restore failed: ${err instanceof Error ? err.message : err}`, "error");
   }
@@ -316,7 +318,7 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
       // Shortcut handler gets ExtensionContext, not CommandContext.
       // We can't call navigateTree from here, so do files-only quick rewind.
       if (!state.gitAvailable || !state.repoRoot || !state.sessionId) {
-        ctx.ui.notify("Rewind not available", "warning");
+        ctx.ui.notify("Rewind not available (checkpoint storage unavailable or no session)", "warning");
         return;
       }
 
@@ -329,7 +331,8 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
         return;
       }
 
-      const currentBranch = await git("rev-parse --abbrev-ref HEAD", state.root).catch(() => "unknown");
+      const currentBranch = await git("rev-parse --abbrev-ref HEAD", state.repoRoot, { gitDir: state.gitDir })
+        .catch(() => state.syntheticGit ? "pi-rewind" : "unknown");
       const items = checkpoints.map((cp, i) => formatCheckpointLabel(cp, i, state, currentBranch));
       const choice = await ctx.ui.select("Quick rewind (files only):", items);
       if (!choice) return;
