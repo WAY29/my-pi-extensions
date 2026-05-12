@@ -51,9 +51,8 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `AskUserQuestion.ts` | 工具 | `AskUserQuestion` | 为 agent 添加交互式提问工具。支持单问题或多问题流程、选项列表、自定义文本回答和每个选项的备注。 |
 | `bash-grep-output-mode.ts` | UI/工具渲染器 | `/bash-grep-output`, `Ctrl+Shift+O`, `Alt+O` | 在 `hidden`、`compact` 和 `full` 之间切换 `bash` 与 `grep` 输出渲染模式，同时不改变模型接收到的内容。bash 部分通过 `bash-tool-coordinator.ts` 协作。 |
 | `bash-tool-coordinator.ts` | 辅助模块 | 自动 | 为需要包装 `bash` 工具的扩展提供共享组合层。它本身刻意不提供可见 UI。 |
-| `copy-code-block.ts` | 命令/快捷键 | `/copy-code`, `Ctrl+Alt+C` | 从最新的 assistant 消息中复制代码块。支持选择某个代码块、复制全部代码块，并可保留 markdown fence。 |
+| `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
-| `hide-code-fence-markers.ts` | UI patch | 自动 | 通过隐藏终端 UI 中额外的代码块 fence 标记行，清理 markdown 代码块渲染效果。 |
 | `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
 | `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`sudo`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
@@ -125,8 +124,7 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 
 - `hide-read-output.ts`：隐藏所有内置 `read` 结果输出。
 - `bash-grep-output-mode.ts`：控制噪声较多的命令/搜索输出。
-- `hide-code-fence-markers.ts`：让 markdown 代码块显示更干净。
-- `copy-code-block.ts`：需要快速复制生成代码时使用。
+- `code-block-enhancer.ts`：让 markdown 代码块更清爽、带编号，并可快速复制生成的代码。
 
 ### 长时间自主任务
 

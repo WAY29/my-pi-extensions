@@ -51,9 +51,8 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `AskUserQuestion.ts` | tool | `AskUserQuestion` | Adds an interactive question tool for the agent. Supports single or multi-question flows, option lists, custom text answers, and per-option notes. |
 | `bash-grep-output-mode.ts` | UI/tool renderer | `/bash-grep-output`, `Ctrl+Shift+O`, `Alt+O` | Toggles `bash` and `grep` output rendering between `hidden`, `compact`, and `full` without changing what the model receives. Uses `bash-tool-coordinator.ts` for the bash side. |
 | `bash-tool-coordinator.ts` | helper | automatic | Shared composition layer for extensions that need to wrap the `bash` tool. It intentionally has no visible UI by itself. |
-| `copy-code-block.ts` | command/shortcut | `/copy-code`, `Ctrl+Alt+C` | Copies code blocks from the latest assistant message. Supports choosing a block, copying all blocks, and preserving markdown fences. |
+| `code-block-enhancer.ts` | UI patch + command/shortcut | automatic, `/copy-code`, `Ctrl+Alt+C` | Replaces the old code-fence hiding and copy-code extensions. Renders fenced code blocks as bordered, numbered blocks and copies recent assistant code blocks by number, all blocks, or with markdown fences. |
 | `effort.ts` | command | `/effort` | Quickly switches or cycles pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
-| `hide-code-fence-markers.ts` | UI patch | automatic | Cleans up markdown code block rendering by hiding extra code fence marker lines in the terminal UI. |
 | `hide-read-output.ts` | UI/tool renderer | automatic | Hides all rendered result output from the built-in `read` tool in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
 | `keydump.ts` | command/debug UI | `/keydump` | Shows raw key sequences received by pi. Useful when debugging terminal keybindings. |
 | `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm`, `sudo`, or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
@@ -125,8 +124,7 @@ Use these together:
 
 - `hide-read-output.ts` to hide all built-in `read` result output.
 - `bash-grep-output-mode.ts` to control noisy command/search output.
-- `hide-code-fence-markers.ts` for cleaner markdown code blocks.
-- `copy-code-block.ts` when you want quick clipboard access to generated code.
+- `code-block-enhancer.ts` for cleaner, numbered markdown code blocks and quick clipboard access to generated code.
 
 ### Long-running autonomous tasks
 

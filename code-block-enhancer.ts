@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const extensionConfig = {
   showStatusHint: true,
@@ -12,6 +12,16 @@ const extensionConfig = {
 } as const;
 
 const shortcutHint = formatShortcutHint(extensionConfig.shortcut);
+const PATCHED = Symbol.for("pi.code-block-enhancer.patched");
+const LEGACY_HIDE_PATCHED = Symbol.for("pi.hide-code-fence-markers.patched");
+const ENHANCE_CONTEXT: EnhancementContext = {
+  active: false,
+  currentIndex: 0,
+  totalBlocks: 0,
+};
+const ANSI_DIM = "\x1b[2m";
+const ANSI_RESET = "\x1b[0m";
+const FENCED_CODE_BLOCK_PATTERN = /^```([^\n`]*)\r?\n([\s\S]*?)^```[ \t]*$/gm;
 
 interface CodeBlock {
   index: number;
@@ -32,6 +42,34 @@ interface ParsedCopyRequest {
   selector?: string;
 }
 
+type MarkdownInternals = {
+  text?: string;
+  theme: {
+    codeBlock: (text: string) => string;
+    codeBlockBorder: (text: string) => string;
+    highlightCode?: (code: string, lang?: string) => string[];
+    codeBlockIndent?: string;
+  };
+};
+
+type MarkdownToken = {
+  type?: string;
+  text?: string;
+  lang?: string;
+  tokens?: MarkdownToken[];
+};
+
+type RenderToken = (this: MarkdownInternals, token: MarkdownToken, width: number, nextTokenType?: string, styleContext?: unknown) => string[];
+type RenderListItem = (this: MarkdownInternals, tokens: MarkdownToken[], parentDepth: number, styleContext?: unknown) => string[];
+type RenderMarkdown = (this: MarkdownInternals, width: number) => string[];
+
+interface EnhancementContext {
+  active: boolean;
+  currentIndex: number;
+  totalBlocks: number;
+  currentWidth?: number;
+}
+
 function formatShortcutHint(shortcut: string): string {
   return shortcut
     .split("+")
@@ -45,6 +83,17 @@ function getAssistantText(message: AssistantMessage): string {
     .map((content) => content.text)
     .join("\n")
     .trim();
+}
+
+function cloneFencePattern(): RegExp {
+  return new RegExp(FENCED_CODE_BLOCK_PATTERN.source, FENCED_CODE_BLOCK_PATTERN.flags);
+}
+
+function countFencedCodeBlocks(text: string): number {
+  let count = 0;
+  const pattern = cloneFencePattern();
+  while (pattern.exec(text)) count++;
+  return count;
 }
 
 function getCodeBlocksFromRecentAssistantMessages(ctx: CopyContext): {
@@ -91,7 +140,7 @@ function getPreview(code: string): string {
 
 function extractCodeBlocks(text: string): CodeBlock[] {
   const extracted: Array<Pick<CodeBlock, "language" | "code">> = [];
-  const fencePattern = /^```([^\n`]*)\r?\n([\s\S]*?)^```[ \t]*$/gm;
+  const fencePattern = cloneFencePattern();
 
   let match: RegExpExecArray | null = fencePattern.exec(text);
   while (match) {
@@ -137,7 +186,7 @@ function parseCopyRequest(input?: string): { request?: ParsedCopyRequest; error?
 
   if (remaining.length > 1) {
     return {
-      error: 'Too many arguments. Use /copy-code, /copy-code 2, /copy-code all, or /copy-code fenced 2.',
+      error: "Too many arguments. Use /copy-code, /copy-code 2, /copy-code all, or /copy-code fenced 2.",
     };
   }
 
@@ -300,7 +349,133 @@ function getAllBlocksCopiedMessage(blockCount: number, fenced: boolean): string 
   return fenced ? `Copied all ${blockCount} fenced code blocks.` : `Copied all ${blockCount} code blocks.`;
 }
 
-export default function piCopyCodeBlock(pi: ExtensionAPI) {
+function dim(text: string): string {
+  return `${ANSI_DIM}${text}${ANSI_RESET}`;
+}
+
+function padToWidth(text: string, width: number): string {
+  const visible = visibleWidth(text);
+  return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
+}
+
+function framedCodeLine(content: string, innerWidth: number, border: (text: string) => string): string {
+  return `${border("│ ")}${truncateToWidth(content, innerWidth, "", true)}${border(" │")}`;
+}
+
+function renderCodeBlock(instance: MarkdownInternals, token: MarkdownToken, width: number, nextTokenType?: string): string[] {
+  const safeWidth = Number.isFinite(width) ? Math.max(4, width) : 80;
+  const innerWidth = Math.max(1, safeWidth - 4);
+  const border = instance.theme.codeBlockBorder;
+  const code = token.text ?? "";
+  const lang = token.lang || undefined;
+  const blockIndex = ENHANCE_CONTEXT.active ? Math.max(1, ENHANCE_CONTEXT.currentIndex) : 1;
+  if (ENHANCE_CONTEXT.active && ENHANCE_CONTEXT.currentIndex > 0) {
+    ENHANCE_CONTEXT.currentIndex--;
+  }
+
+  const label = dim(`#${blockIndex}`);
+  const labelWidth = visibleWidth(label);
+  const topFillWidth = Math.max(0, safeWidth - 2 - labelWidth);
+  const topBorder = `${border("┌")}${border("─".repeat(topFillWidth))}${label}${border("┐")}`;
+  const bottomBorder = `${border("└")}${border("─".repeat(Math.max(0, safeWidth - 2)))}${border("┘")}`;
+
+  const lines: string[] = [truncateToWidth(topBorder, safeWidth, "", true)];
+  const highlightedLines = instance.theme.highlightCode
+    ? instance.theme.highlightCode(code, lang)
+    : code.split("\n").map((line) => instance.theme.codeBlock(line));
+
+  for (const highlightedLine of highlightedLines) {
+    const wrapped = wrapTextWithAnsi(highlightedLine, innerWidth);
+    for (const line of wrapped.length > 0 ? wrapped : [""]) {
+      lines.push(framedCodeLine(line, innerWidth, border));
+    }
+  }
+
+  lines.push(bottomBorder);
+  if (nextTokenType && nextTokenType !== "space") {
+    lines.push("");
+  }
+
+  return lines;
+}
+
+function withEnhancementContext(instance: MarkdownInternals, render: () => string[]): string[] {
+  const previous = { ...ENHANCE_CONTEXT };
+
+  ENHANCE_CONTEXT.active = true;
+  ENHANCE_CONTEXT.totalBlocks = countFencedCodeBlocks(instance.text ?? "");
+  ENHANCE_CONTEXT.currentIndex = ENHANCE_CONTEXT.totalBlocks;
+
+  try {
+    return render();
+  } finally {
+    ENHANCE_CONTEXT.active = previous.active;
+    ENHANCE_CONTEXT.currentIndex = previous.currentIndex;
+    ENHANCE_CONTEXT.totalBlocks = previous.totalBlocks;
+    ENHANCE_CONTEXT.currentWidth = previous.currentWidth;
+  }
+}
+
+export function patchMarkdownCodeBlocks(): boolean {
+  const proto = Markdown.prototype as unknown as {
+    render?: RenderMarkdown;
+    renderToken?: RenderToken;
+    renderListItem?: RenderListItem;
+  } & Record<PropertyKey, unknown>;
+
+  if (proto[PATCHED] === true) return true;
+
+  const originalRender = proto.render;
+  const originalRenderToken = proto.renderToken;
+  const originalRenderListItem = proto.renderListItem;
+
+  if (typeof originalRender !== "function" || typeof originalRenderToken !== "function" || typeof originalRenderListItem !== "function") {
+    return false;
+  }
+
+  proto.render = function (width: number): string[] {
+    return withEnhancementContext(this, () => originalRender.call(this, width));
+  };
+
+  proto.renderToken = function (token: MarkdownToken, width: number, nextTokenType?: string, styleContext?: unknown): string[] {
+    const previousWidth = ENHANCE_CONTEXT.currentWidth;
+    ENHANCE_CONTEXT.currentWidth = width;
+
+    try {
+      if (token?.type === "code") {
+        return renderCodeBlock(this, token, width, nextTokenType);
+      }
+
+      return originalRenderToken.call(this, token, width, nextTokenType, styleContext);
+    } finally {
+      ENHANCE_CONTEXT.currentWidth = previousWidth;
+    }
+  };
+
+  proto.renderListItem = function (tokens: MarkdownToken[], parentDepth: number, styleContext?: unknown): string[] {
+    const lines: string[] = [];
+
+    for (const token of tokens) {
+      if (token.type === "code") {
+        const listCodeWidth = Math.max(4, (ENHANCE_CONTEXT.currentWidth ?? 80) - 2);
+        lines.push(...renderCodeBlock(this, token, listCodeWidth));
+        continue;
+      }
+
+      lines.push(...originalRenderListItem.call(this, [token], parentDepth, styleContext));
+    }
+
+    return lines;
+  };
+
+  proto[PATCHED] = true;
+  proto[LEGACY_HIDE_PATCHED] = true;
+  return true;
+}
+
+export default function codeBlockEnhancer(pi: ExtensionAPI) {
+  const patched = patchMarkdownCodeBlocks();
+
   async function copyTextToClipboard(ctx: CopyContext, text: string, message: string): Promise<void> {
     try {
       await copyToClipboard(text);
@@ -368,6 +543,9 @@ export default function piCopyCodeBlock(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    if (!patched) {
+      ctx.ui.notify("code-block-enhancer: unsupported pi-tui Markdown internals", "warning");
+    }
     updateCopyCodeStatus(ctx);
   });
 
