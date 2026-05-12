@@ -1,5 +1,6 @@
 import { completeSimple, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { captureGlobalSettingsSnapshot, getWorkspaceAutoModelSpec, loadGlobalDefaultModelReference, restoreGlobalSettingsSnapshot } from "./auto-model.js";
 import { cloneConfig, loadConfig, saveConfig } from "./config.js";
 import { GlanceEditor } from "./editor.js";
 import { GlanceFooterBridge } from "./footer-bridge.js";
@@ -259,8 +260,67 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (state?.title.generating && setTitleState(state, { generating: false })) renderNow();
 	}
 
+	const AUTO_MODEL_CUSTOM_TYPE = "pi-glance:auto-model";
+
+	type AutoModelEntryData = {
+		provider?: string;
+		modelId?: string;
+	};
+
 	function resolveTitleModel(ctx: ExtensionContext, spec: string): Model<Api> | undefined {
 		return resolveTitleModelSpec(ctx.modelRegistry, ctx.model, spec);
+	}
+
+	function findLastAutoModelEntry(ctx: ExtensionContext): AutoModelEntryData | undefined {
+		for (let i = ctx.sessionManager.getBranch().length - 1; i >= 0; i--) {
+			const entry = ctx.sessionManager.getBranch()[i];
+			if (entry?.type !== "custom" || entry.customType !== AUTO_MODEL_CUSTOM_TYPE) continue;
+			const data = entry.data as AutoModelEntryData | undefined;
+			if (typeof data?.provider === "string" && typeof data?.modelId === "string" && data.provider && data.modelId) return data;
+		}
+		return undefined;
+	}
+
+	async function applyWorkspaceAutoModel(ctx: ExtensionContext): Promise<void> {
+		const workspace = ctx.sessionManager.getCwd() || ctx.cwd;
+		const modelSpec = getWorkspaceAutoModelSpec(getConfig().autoModel.workspaceModels, workspace);
+		if (!modelSpec) {
+			const lastAuto = findLastAutoModelEntry(ctx);
+			const defaultModel = await loadGlobalDefaultModelReference();
+			if (!lastAuto || !defaultModel || !ctx.model) return;
+			if (ctx.model.provider !== lastAuto.provider || ctx.model.id !== lastAuto.modelId) return;
+			if (ctx.model.provider === defaultModel.provider && ctx.model.id === defaultModel.modelId) return;
+			const restored = resolveTitleModel(ctx, `${defaultModel.provider}/${defaultModel.modelId}`);
+			if (!restored) return;
+			const snapshot = await captureGlobalSettingsSnapshot();
+			const switched = await pi.setModel(restored);
+			if (!switched) return;
+			await restoreGlobalSettingsSnapshot(snapshot);
+			if (ctx.hasUI) ctx.ui.notify(`Auto model cleared: ${titleModelKey(restored)}`, "info");
+			return;
+		}
+
+		const model = resolveTitleModel(ctx, modelSpec);
+		if (!model) {
+			if (ctx.hasUI) ctx.ui.notify(`Auto model could not resolve \"${modelSpec}\".`, "warning");
+			return;
+		}
+
+		const nextModelKey = titleModelKey(model);
+		if (ctx.model && titleModelKey(ctx.model) === nextModelKey) {
+			if (ctx.hasUI) ctx.ui.notify(`Auto model: ${nextModelKey}`, "info");
+			return;
+		}
+
+		const snapshot = await captureGlobalSettingsSnapshot();
+		const switched = await pi.setModel(model);
+		if (!switched) {
+			if (ctx.hasUI) ctx.ui.notify(`Auto model is unavailable: ${modelSpec}`, "warning");
+			return;
+		}
+		pi.appendEntry<AutoModelEntryData>(AUTO_MODEL_CUSTOM_TYPE, { provider: model.provider, modelId: model.id });
+		await restoreGlobalSettingsSnapshot(snapshot);
+		if (ctx.hasUI) ctx.ui.notify(`Auto model: ${nextModelKey}`, "info");
 	}
 
 	async function generateTitle(generationId: number, ctx: ExtensionContext, prompt: string, model: Model<Api>, fallback: string, signal: AbortSignal): Promise<void> {
@@ -491,6 +551,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		config = await loadConfig();
 		state = createInitialState(ctx, config, pi.getThinkingLevel());
 		if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
+		await applyWorkspaceAutoModel(ctx);
+		refreshModel(state, ctx, getConfig(), pi.getThinkingLevel());
 		await restoreTitle(ctx, config);
 		installInputSurface(ctx);
 		await applyConfiguredSecurityState(ctx);

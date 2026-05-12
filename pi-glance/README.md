@@ -110,6 +110,25 @@ Open `/glance`, select **General**, and configure:
 
 When `Title model` is empty, pi-glance uses a local fallback from the first prompt. If the configured model is unavailable, unauthenticated, times out, or returns an invalid title, pi-glance falls back quietly. Fallback titles are upgraded on the next turn when you later configure a title model. Generated titles are stored in `~/.pi/agent/pi-glance/title.json` keyed by session and restored on reload/resume.
 
+## Workspace auto model
+
+Open `/glance`, select **Auto model**, and manage the rules directly in the pane.
+
+- `Add rule` — starts a two-step editor: first path, then model.
+- `Rule N` — edit an existing rule with the same two-step flow. Clear the path to delete that rule.
+- `Current cwd` — the current session workspace preview.
+- `Current match` — the model that would be applied for this workspace, or `default` when no rule matches.
+- `Rules` — the number of configured exact-match rules.
+
+For rule editing:
+
+- Step 1 asks for the path and defaults to the current workspace for new rules.
+- Step 2 asks for the model. You can enter either `provider/model` or a bare `model` name.
+- Bare model names reuse the current active provider, like the title model setting.
+- Relative paths resolve from the current workspace while editing in `/glance`.
+
+On `session_start`, pi-glance checks the exact session cwd, switches to the configured model when a rule matches, and shows a notification. If no rule matches, pi keeps the default model.
+
 ## Git status
 
 The Git segment is intentionally quiet:

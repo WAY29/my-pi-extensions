@@ -59,7 +59,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `path-autocomplete-normalizer.ts` | autocomplete patch | automatic | Normalizes repeated `/./` path segments produced by some file-completion flows. |
 | `pretty-image-paste.ts` | input/image helper | automatic | Replaces pasted pi clipboard image paths with readable `[Image #n]` labels, then attaches the referenced images when the prompt is submitted. |
 | `progress-checkpoints.ts` | prompt helper | `/progress`, `/progress-checkpoints` | Injects a progress-checkpoint policy so the assistant gives short status updates around multi-step or tool-heavy work. |
-| `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also toggle `permission-gate.ts` and `pi-sandbox/` when those extensions are installed. |
+| `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates Git-based checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
@@ -125,6 +125,10 @@ Use these together:
 - `hide-read-output.ts` to hide all built-in `read` result output.
 - `bash-grep-output-mode.ts` to control noisy command/search output.
 - `code-block-enhancer.ts` for cleaner, numbered markdown code blocks and quick clipboard access to generated code.
+
+### Workspace-specific models
+
+Use `/glance` → **Auto model** to add exact cwd rules that switch models automatically on `session_start`. Rules can use `provider/model` or a bare model name that reuses the current provider.
 
 ### Long-running autonomous tasks
 

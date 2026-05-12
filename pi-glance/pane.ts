@@ -1,6 +1,8 @@
 import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
+import { formatWorkspaceModelRule, listWorkspaceModelRules, normalizeWorkspaceDirectory, parseWorkspaceModelRuleEntry } from "./auto-model.js";
 import { cloneConfig, defaultConfig, moveSegment, toggleSegment } from "./config.js";
+import { displayDirectory, formatWorkspaceLabel } from "./format.js";
 import { renderInputSurface, renderInputSurfacePreview } from "./renderer.js";
 import { SEGMENT_BY_ID } from "./segments.js";
 import type {
@@ -19,18 +21,19 @@ import type {
 } from "./types.js";
 
 type PaneFocus = "categories" | "settings" | "values";
-type CategoryId = "general" | "permissionGate" | "sandbox" | SegmentId;
+type CategoryId = "general" | "autoModel" | "permissionGate" | "sandbox" | SegmentId;
 type Category = { id: CategoryId; label: string };
 type PaneResult = { action: "save"; config: GlanceConfig } | { action: "cancel" };
 type Done = (result: PaneResult) => void;
 type SettingKind = "toggle" | "cycle" | "input" | "info";
-type SettingRow = { label: string; value: string; rawValue?: string; hint?: string; kind: SettingKind; mutate?: () => void; edit?: (value: string) => void };
+type SettingRow = { label: string; value: string; rawValue?: string; emptyValue?: string; hint?: string; kind: SettingKind; mutate?: () => void; edit?: (value: string) => boolean | void };
 type Tone = (text: string) => string;
 
 interface EditingField {
 	label: string;
 	value: string;
-	apply: (value: string) => void;
+	emptyValue: string;
+	apply: (value: string) => boolean | void;
 }
 
 interface PaneColors {
@@ -88,7 +91,7 @@ const PANE_SPACING = {
 	contentInset: 4,
 	categoryWidth: 16,
 	settingLabelWidth: 20,
-	valueWidth: 16,
+	valueWidth: 24,
 	minValueWidth: 8,
 	asideWidth: 36,
 	minAsideWidth: 22,
@@ -234,16 +237,29 @@ function infoRow(label: string, value: string, hint: string): SettingRow {
 	return { label, value, hint, kind: "info" };
 }
 
-function inputRow(label: string, value: string, hint: string, edit: (value: string) => void): SettingRow {
-	return { label, value: value || "fallback", rawValue: value, hint, kind: "input", edit };
+function inputRow(label: string, value: string, hint: string, edit: (value: string) => boolean | void, emptyValue = "fallback", rawValue = value): SettingRow {
+	return { label, value: value || emptyValue, rawValue, emptyValue, hint, kind: "input", edit };
 }
 
 function shortcutKey(data: string): string {
 	return decodeKittyPrintable(data) ?? data;
 }
 
+function autoModelPathSummary(directory: string, width: number): string {
+	return formatWorkspaceLabel(directory, displayDirectory(directory), "path", width, 200);
+}
+
+function autoModelRuleSummary(directory: string, model: string): string {
+	return `${autoModelPathSummary(directory, 11)} → ${model}`;
+}
+
+function isStaticCategory(id: CategoryId): boolean {
+	return id === "general" || id === "autoModel" || id === "permissionGate" || id === "sandbox";
+}
+
 class GlanceConfigPane implements Component {
 	private readonly initial: GlanceConfig;
+	private readonly currentWorkspacePath: string;
 	private draft: GlanceConfig;
 	private focus: PaneFocus = "categories";
 	private catIndex = 0;
@@ -260,6 +276,7 @@ class GlanceConfigPane implements Component {
 	) {
 		this.initial = cloneConfig(initial);
 		this.draft = cloneConfig(initial);
+		this.currentWorkspacePath = previewState?.workspace.path ? normalizeWorkspaceDirectory(previewState.workspace.path) : "";
 	}
 
 	invalidate(): void {}
@@ -276,7 +293,7 @@ class GlanceConfigPane implements Component {
 			dirty: this.isDirty(),
 			status: this.status,
 			categories: categories.map((cat, index) => {
-				const segment = cat.id === "general" || cat.id === "permissionGate" || cat.id === "sandbox" ? undefined : this.draft.segments.find((s) => s.id === cat.id);
+				const segment = isStaticCategory(cat.id) ? undefined : this.draft.segments.find((s) => s.id === cat.id);
 				const enabled = cat.id === "permissionGate" ? this.draft.permissionGate.enabled : cat.id === "sandbox" ? this.draft.sandbox.enabled : segment?.enabled;
 				return {
 					...cat,
@@ -290,6 +307,8 @@ class GlanceConfigPane implements Component {
 			settings: settings.map((row, index) => ({
 				label: row.label,
 				value: row.value,
+				rawValue: row.rawValue,
+				emptyValue: row.emptyValue,
 				hint: row.hint,
 				kind: row.kind,
 				selected: index === this.setIndex,
@@ -333,6 +352,7 @@ class GlanceConfigPane implements Component {
 				id: segment.id,
 				label: segmentLabel(segment.id),
 			})),
+			{ id: "autoModel", label: "Auto model" },
 			{ id: "permissionGate", label: "Permission Gate" },
 			{ id: "sandbox", label: "Sandbox" },
 		];
@@ -342,6 +362,8 @@ class GlanceConfigPane implements Component {
 		switch (id) {
 			case "general":
 				return this.generalRows();
+			case "autoModel":
+				return this.autoModelRows();
 			case "permissionGate":
 				return this.permissionGateRows();
 			case "sandbox":
@@ -389,6 +411,43 @@ class GlanceConfigPane implements Component {
 			inputRow("Title model", this.draft.title.model, "Use model or provider/model. Empty uses local fallback.", (value) => {
 				this.draft.title.model = value.trim();
 			}),
+		];
+	}
+
+	private autoModelRows(): SettingRow[] {
+		const rules = listWorkspaceModelRules(this.draft.autoModel.workspaceModels);
+		const currentMatch = this.currentWorkspacePath ? this.draft.autoModel.workspaceModels[this.currentWorkspacePath] ?? "" : "";
+		return [
+			inputRow(
+				"Add rule",
+				this.currentWorkspacePath ? "current cwd" : "",
+				"Press Enter to edit the path first, then the model. Bare model names use the current provider.",
+				(value) => this.beginAutoModelRuleEdit("Add rule", undefined, value),
+				"new",
+				this.currentWorkspacePath,
+			),
+			...rules.map((rule, index) => {
+				const fullRule = formatWorkspaceModelRule(rule);
+				return inputRow(
+					`Rule ${index + 1}`,
+					autoModelRuleSummary(rule.directory, rule.model),
+					`Edit ${fullRule}. First update the path, then the model. Clear the path to delete this rule. Bare model names use the current provider.`,
+					(value) => this.beginAutoModelRuleEdit(`Rule ${index + 1}`, rule.directory, value),
+					"delete",
+					rule.directory,
+				);
+			}),
+			infoRow(
+				"Current cwd",
+				this.currentWorkspacePath ? autoModelPathSummary(this.currentWorkspacePath, 24) : "unavailable",
+				this.currentWorkspacePath ? `Current workspace: ${this.currentWorkspacePath}` : "Open /glance inside a workspace to preview auto model rules.",
+			),
+			infoRow(
+				"Current match",
+				currentMatch || "default",
+				currentMatch ? `session_start will switch to ${currentMatch} for this exact cwd.` : "No exact rule for the current workspace. pi keeps the default model.",
+			),
+			infoRow("Rules", `${rules.length}`, "Rules match the session cwd exactly. Add a rule first, then edit path and model separately."),
 		];
 	}
 
@@ -484,6 +543,47 @@ class GlanceConfigPane implements Component {
 		];
 	}
 
+	private beginAutoModelRuleEdit(label: string, previousDirectory: string | undefined, value: string): boolean | void {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			if (previousDirectory) {
+				delete this.draft.autoModel.workspaceModels[previousDirectory];
+				return;
+			}
+			this.status = "Path required.";
+			return false;
+		}
+
+		const directory = normalizeWorkspaceDirectory(trimmed, this.currentWorkspacePath || undefined);
+		if (!directory) {
+			this.status = "Path required.";
+			return false;
+		}
+
+		const currentModel = previousDirectory ? this.draft.autoModel.workspaceModels[previousDirectory] ?? "" : "";
+		const provider = this.previewState?.model.provider || "the current provider";
+		this.editing = {
+			label: `${label} model`,
+			value: currentModel,
+			emptyValue: "model",
+			apply: (modelValue) => this.finishAutoModelRuleEdit(previousDirectory, directory, modelValue),
+		};
+		this.status = `Editing ${label} model. Use model or provider/model. Bare models use ${provider}.`;
+		return false;
+	}
+
+	private finishAutoModelRuleEdit(previousDirectory: string | undefined, directory: string, value: string): boolean | void {
+		const model = value.trim();
+		if (!model) {
+			this.status = "Model required. Use model or provider/model.";
+			return false;
+		}
+		if (previousDirectory && previousDirectory !== directory) {
+			delete this.draft.autoModel.workspaceModels[previousDirectory];
+		}
+		this.draft.autoModel.workspaceModels[directory] = model;
+	}
+
 	private activateCurrent(): void {
 		const cat = this.getCategories()[this.catIndex];
 		if (!cat) return;
@@ -495,6 +595,7 @@ class GlanceConfigPane implements Component {
 			this.editing = {
 				label: row.label,
 				value: row.rawValue ?? "",
+				emptyValue: row.emptyValue ?? "fallback",
 				apply: row.edit,
 			};
 			this.status = `Editing ${row.label}. Press Enter to save or Esc to cancel.`;
@@ -514,14 +615,14 @@ class GlanceConfigPane implements Component {
 	private moveCurrentSegment(direction: -1 | 1): void {
 		const categories = this.getCategories();
 		const cat = categories[this.catIndex];
-		if (!cat || cat.id === "general" || cat.id === "permissionGate" || cat.id === "sandbox") {
+		if (!cat || isStaticCategory(cat.id)) {
 			this.status = "Only status segments can be moved.";
 			return;
 		}
 		const segment = this.draft.segments.find((s) => s.id === cat.id);
 		if (!segment) return;
 
-		const firstSegmentIndex = categories.findIndex((item) => item.id !== "general" && item.id !== "permissionGate" && item.id !== "sandbox");
+		const firstSegmentIndex = categories.findIndex((item) => !isStaticCategory(item.id));
 		const lastSegmentIndex = firstSegmentIndex + this.draft.segments.length - 1;
 		const targetCatIndex = this.catIndex + direction;
 		if (targetCatIndex < firstSegmentIndex || targetCatIndex > lastSegmentIndex) {
@@ -539,7 +640,11 @@ class GlanceConfigPane implements Component {
 
 		if (matchesKey(data, Key.enter)) {
 			const label = this.editing.label;
-			this.editing.apply(this.editing.value.trim());
+			const applied = this.editing.apply(this.editing.value.trim());
+			if (applied === false) {
+				this.requestRender();
+				return;
+			}
 			this.editing = undefined;
 			this.status = `${label} updated. Press S to save.`;
 			this.requestRender();
@@ -599,8 +704,11 @@ class GlanceConfigPane implements Component {
 		if (matchesKey(data, Key.left)) {
 			const index = PANE_FOCUS_ORDER.indexOf(this.focus);
 			if (this.focus === "settings") {
-				const count = this.getCategories().length;
-				this.catIndex = count === 0 ? 0 : Math.min(this.setIndex, count - 1);
+				const selectedCategory = this.getCategories()[this.catIndex];
+				if (selectedCategory?.id !== "autoModel") {
+					const count = this.getCategories().length;
+					this.catIndex = count === 0 ? 0 : Math.min(this.setIndex, count - 1);
+				}
 			}
 			this.focus = PANE_FOCUS_ORDER[Math.max(0, index - 1)] ?? "categories";
 			this.requestRender();
@@ -611,7 +719,7 @@ class GlanceConfigPane implements Component {
 			if (this.focus === "categories") {
 				const cat = this.getCategories()[this.catIndex];
 				const count = cat ? this.getSettings(cat.id).length : 0;
-				this.setIndex = count === 0 ? 0 : Math.min(this.catIndex, count - 1);
+				this.setIndex = count === 0 ? 0 : cat?.id === "autoModel" ? 0 : Math.min(this.catIndex, count - 1);
 			}
 			this.focus = PANE_FOCUS_ORDER[Math.min(PANE_FOCUS_ORDER.length - 1, index + 1)] ?? "values";
 			this.requestRender();
@@ -698,7 +806,7 @@ class GlanceConfigPane implements Component {
 		if (!this.editing) return;
 		const help = colors.dim("Enter save · Esc cancel · Ctrl+U clear");
 		lines.push(paneLine(layout, [spreadAnsi(colors.accent(`Edit ${this.editing.label}`), help, layout.contentWidth)]));
-		const value = this.editing.value || colors.dim("fallback");
+		const value = this.editing.value || colors.dim(this.editing.emptyValue);
 		lines.push(paneLine(layout, [colors.accent("> "), truncateToWidth(value, Math.max(0, layout.contentWidth - 2), "…")]));
 		lines.push("");
 	}
@@ -724,7 +832,7 @@ class GlanceConfigPane implements Component {
 		if (row.kind === "info") return colors.dim(row.value);
 		if (row.kind === "input") {
 			if (row.selected && row.valueHasFocus) return colors.accent(row.value);
-			return row.value === "fallback" ? colors.dim(row.value) : colors.muted(row.value);
+			return !row.rawValue && row.emptyValue ? colors.dim(row.value) : colors.muted(row.value);
 		}
 		const valueTone = row.selected && row.valueHasFocus ? colors.accent : row.value === "on" ? colors.success : row.value === "off" ? colors.dim : colors.muted;
 		return valueTone(row.value);

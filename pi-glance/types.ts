@@ -32,6 +32,10 @@ interface TitleConfig {
 	model: string;
 }
 
+interface AutoModelConfig {
+	workspaceModels: Record<string, string>;
+}
+
 interface PermissionGateConfig {
 	enabled: boolean;
 }
@@ -64,13 +68,14 @@ interface TokensConfig {
 }
 
 export interface GlanceConfig {
-	version: 2;
+	version: 3;
 	enabled: boolean;
 	theme: GlanceThemeName;
 	icons: IconMode;
 	editor: EditorConfig;
 	display: DisplayConfig;
 	title: TitleConfig;
+	autoModel: AutoModelConfig;
 	permissionGate: PermissionGateConfig;
 	sandbox: SandboxConfig;
 	segments: SegmentConfig[];

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { normalizeWorkspaceModelRules } from "./auto-model.js";
 import type {
 	ContextDisplayMode,
 	ContextUnknownMode,
@@ -17,7 +18,7 @@ import type {
 } from "./types.js";
 
 const CONFIG_PATH = join(getAgentDir(), "pi-glance", "config.json");
-const CONFIG_VERSION = 2 as const;
+const CONFIG_VERSION = 3 as const;
 
 const DEFAULT_SEGMENTS: SegmentConfig[] = [
 	{ id: "git", enabled: true },
@@ -52,6 +53,9 @@ export function defaultConfig(): GlanceConfig {
 		title: {
 			enabled: true,
 			model: "",
+		},
+		autoModel: {
+			workspaceModels: {},
 		},
 		permissionGate: {
 			enabled: true,
@@ -97,6 +101,7 @@ export function cloneConfig(config: GlanceConfig): GlanceConfig {
 		editor: { ...config.editor },
 		display: { ...config.display },
 		title: { ...config.title },
+		autoModel: { workspaceModels: { ...config.autoModel.workspaceModels } },
 		permissionGate: { ...config.permissionGate },
 		sandbox: { ...config.sandbox },
 		segments: config.segments.map((s) => ({ ...s })),
@@ -168,6 +173,7 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 	const record = raw as Record<string, unknown>;
 	const editor = record.editor && typeof record.editor === "object" ? (record.editor as Record<string, unknown>) : {};
 	const title = record.title && typeof record.title === "object" ? (record.title as Record<string, unknown>) : {};
+	const autoModel = record.autoModel && typeof record.autoModel === "object" ? (record.autoModel as Record<string, unknown>) : {};
 	const permissionGate = record.permissionGate && typeof record.permissionGate === "object" ? (record.permissionGate as Record<string, unknown>) : {};
 	const sandbox = record.sandbox && typeof record.sandbox === "object" ? (record.sandbox as Record<string, unknown>) : {};
 	const display = record.display && typeof record.display === "object" ? (record.display as Record<string, unknown>) : {};
@@ -188,6 +194,9 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 		title: {
 			enabled: parseBool(title.enabled, defaults.title.enabled),
 			model: typeof title.model === "string" ? title.model.trim() : defaults.title.model,
+		},
+		autoModel: {
+			workspaceModels: normalizeWorkspaceModelRules(autoModel.workspaceModels),
 		},
 		permissionGate: {
 			enabled: parseBool(permissionGate.enabled, defaults.permissionGate.enabled),
