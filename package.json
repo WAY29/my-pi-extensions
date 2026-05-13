@@ -33,6 +33,7 @@
       "./progress-checkpoints.ts",
       "./retry-stream-read-error.ts",
       "./stable-scroll.ts",
+      "./sudo-auth.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
       "./pi-rewind/index.ts",

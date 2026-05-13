@@ -55,12 +55,13 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
 | `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
-| `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`sudo`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
+| `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
 | `path-autocomplete-normalizer.ts` | 自动补全 patch | 自动 | 规范化部分文件补全流程产生的重复 `/./` 路径片段。 |
 | `pretty-image-paste.ts` | 输入/图片辅助 | 自动 | 将粘贴进编辑器的 pi 剪贴板图片路径替换为易读的 `[Image #n]` 标签，并在提交时附加对应图片。 |
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
 | `stable-scroll.ts` | UI patch | 自动 | 过滤正常重绘时的终端清空 scrollback 序列，避免 TUI 刷新抹掉滚动历史，同时保留会话启动时的清屏。 |
+| `sudo-auth.ts` | sudo 辅助 | 自动 | 为 bash 命令中的 `sudo` 提供 TUI askpass 桥接。密码只缓存在扩展内存中，并会在认证失败或会话结束时清除。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
 | `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
@@ -74,6 +75,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替换这个工具，最后注册的替换会覆盖之前的行为。`bash-tool-coordinator.ts` 通过把多个插件组合成一个 bash 工具，避免这些扩展互相踩掉。
 
 - `pi-sandbox/` 注册一个高优先级的 bash operations 包装器。沙箱启用并初始化后，bash 命令会走沙箱后端；否则回退到下一个 bash 实现。
+- `sudo-auth.ts` 注册一个较低优先级的 bash operations 包装器，在沙箱 bash 未接管时注入 sudo askpass 环境。
 - `bash-grep-output-mode.ts` 注册一个 bash 结果渲染包装器。它可以隐藏、压缩或完整展开 bash 输出，同时保留底层的沙箱行为。
 - `bash-grep-output-mode.ts` 也会直接包装 `grep` 的渲染，因为 `grep` 是另一个独立内置工具，不经过 bash coordinator。
 - `bash-tool-coordinator.ts` 必须保持在仓库顶层。它不注册面向用户的命令，但仍需要随仓库一起复制。

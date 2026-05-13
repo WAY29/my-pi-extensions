@@ -55,12 +55,13 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `effort.ts` | command | `/effort` | Quickly switches or cycles pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | `hide-read-output.ts` | UI/tool renderer | automatic | Hides all rendered result output from the built-in `read` tool in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
 | `keydump.ts` | command/debug UI | `/keydump` | Shows raw key sequences received by pi. Useful when debugging terminal keybindings. |
-| `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm`, `sudo`, or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
+| `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm` or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
 | `path-autocomplete-normalizer.ts` | autocomplete patch | automatic | Normalizes repeated `/./` path segments produced by some file-completion flows. |
 | `pretty-image-paste.ts` | input/image helper | automatic | Replaces pasted pi clipboard image paths with readable `[Image #n]` labels, then attaches the referenced images when the prompt is submitted. |
 | `progress-checkpoints.ts` | prompt helper | `/progress`, `/progress-checkpoints` | Injects a progress-checkpoint policy so the assistant gives short status updates around multi-step or tool-heavy work. |
 | `retry-stream-read-error.ts` | retry patch | automatic | Treats `stream_read_error` assistant failures as retryable by patching pi's retry classifier, with a warning when the current pi version is unsupported. |
 | `stable-scroll.ts` | UI patch | automatic | Filters terminal clear-scrollback sequences during normal redraws so TUI refreshes do not wipe scrollback, while allowing session-start clears. |
+| `sudo-auth.ts` | sudo helper | automatic | Provides a TUI askpass bridge for `sudo` in bash commands. Passwords are cached in extension memory only and cleared on authentication failure or session shutdown. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
@@ -74,6 +75,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 Pi has a single active tool named `bash`. If several extensions independently replace that tool, the last replacement wins and earlier behavior can disappear. `bash-tool-coordinator.ts` prevents that collision by building one composed bash tool from registered plugins.
 
 - `pi-sandbox/` registers a bash operations wrapper with high priority. When the sandbox is enabled and initialized, bash commands run through the sandboxed backend; otherwise they fall back to the next bash implementation.
+- `sudo-auth.ts` registers a lower-priority bash operations wrapper that injects a sudo askpass environment when sandboxed bash is not taking ownership.
 - `bash-grep-output-mode.ts` registers a bash result-rendering wrapper. It can hide, compact, or fully expand bash output while preserving the sandbox behavior underneath.
 - `bash-grep-output-mode.ts` also wraps `grep` rendering directly, because `grep` is a separate built-in tool and does not go through the bash coordinator.
 - `bash-tool-coordinator.ts` is intentionally top-level. Keep it copied with the repository even though it does not register a user-facing command.
