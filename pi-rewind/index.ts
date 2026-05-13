@@ -5,7 +5,7 @@
  * Creates snapshots of your working tree so you can rewind when the AI makes mistakes.
  *
  * Checkpoint strategy (matches Cline — research-backed):
- *   - 1 resume checkpoint on session start
+ *   - 1 baseline checkpoint before the first mutating tool call
  *   - 1 checkpoint at turn_end (after ALL tools in a response finish)
  *   - Label: user prompt + list of mutating tools that ran
  *   - No per-tool or per-turn-start checkpoints (noisy, redundant)
@@ -22,7 +22,6 @@ import {
   initSyntheticGitRepo,
   createCheckpoint,
   deleteCheckpoint,
-  loadAllCheckpoints,
   cleanupMissingSyntheticWorkspaces,
   MUTATING_TOOLS,
 } from "./core.js";
@@ -90,35 +89,6 @@ export default function (pi: ExtensionAPI) {
 
     state.sessionId = ctx.sessionManager.getSessionId();
 
-    // Rebuild checkpoint cache from existing git refs (for resumed sessions)
-    try {
-      const existing = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
-      for (const cp of existing) {
-        state.checkpoints.set(cp.id, cp);
-      }
-    } catch {
-      // Silent — we'll create new checkpoints anyway
-    }
-
-    // Create resume checkpoint (snapshot of current state on session start)
-    try {
-      const resumeId = `resume-${state.sessionId}-${Date.now()}`;
-      const cp = await createCheckpoint({
-        root: state.repoRoot,
-        gitDir: state.gitDir,
-        id: resumeId,
-        sessionId: state.sessionId,
-        trigger: "resume",
-        turnIndex: 0,
-        description: "Session start",
-      });
-      state.resumeCheckpoint = cp;
-      state.checkpoints.set(cp.id, cp);
-      state.lastWorktreeTree = cp.worktreeTreeSha;
-    } catch {
-      // Resume checkpoint is optional
-    }
-
     if (ctx.hasUI) updateStatus(state, ctx);
 
     // Auto-clean only stale synthetic workspaces whose original paths disappeared.
@@ -135,6 +105,44 @@ export default function (pi: ExtensionAPI) {
     // startup, reload, new, resume: full re-initialization
     await initSession(ctx);
   });
+
+  async function ensureBaselineCheckpoint(ctx: any): Promise<void> {
+    if (state.baselineCreated || state.failed) return;
+    if (!state.gitAvailable || !state.repoRoot || !state.sessionId) return;
+
+    if (state.pending) await state.pending;
+    state.baselineCreated = true;
+
+    state.pending = (async () => {
+      try {
+        const resumeId = `resume-${state.sessionId}-${Date.now()}`;
+        const cp = await createCheckpoint({
+          root: state.repoRoot!,
+          gitDir: state.gitDir,
+          id: resumeId,
+          sessionId: state.sessionId!,
+          trigger: "resume",
+          turnIndex: 0,
+          description: "Before first mutation",
+        });
+        state.resumeCheckpoint = cp;
+        state.checkpoints.set(cp.id, cp);
+        state.lastWorktreeTree = cp.worktreeTreeSha;
+        if (ctx.hasUI) updateStatus(state, ctx);
+      } catch (err) {
+        state.failed = true;
+        if (ctx.hasUI) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Rewind disabled: baseline checkpoint failed (${msg})`, "warning");
+          updateStatus(state, ctx);
+        }
+      } finally {
+        state.pending = null;
+      }
+    })();
+
+    await state.pending;
+  }
 
   // ========================================================================
   // Capture user prompt for checkpoint labels
@@ -159,8 +167,9 @@ export default function (pi: ExtensionAPI) {
   // Capture tool args for checkpoint labels
   // ========================================================================
 
-  pi.on("tool_call", async (event, _ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (MUTATING_TOOLS.has(event.toolName)) {
+      await ensureBaselineCheckpoint(ctx);
       const desc = describeToolCall(event.toolName, event.input);
       state.pendingToolInfo.set(event.toolCallId, desc);
     }
@@ -233,6 +242,8 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`Rewind disabled: checkpoint creation failed (${msg})`, "warning");
             updateStatus(state, ctx);
           }
+        } finally {
+          state.pending = null;
         }
       })();
     }

@@ -19,7 +19,21 @@ export interface RewindState {
   sessionId: string | null;
   /** In-memory checkpoint cache: checkpoint ID → data */
   checkpoints: Map<string, CheckpointData>;
-  /** Checkpoint taken at session start (fallback for restore) */
+  /** Historical checkpoint ref IDs sorted newest-first */
+  checkpointRefs: string[];
+  /** Number of historical checkpoint refs already paged in */
+  checkpointRefOffset: number;
+  /** Whether the historical checkpoint ref index has been loaded */
+  checkpointRefsLoaded: boolean;
+  /** Whether all historical checkpoint refs have been paged in */
+  checkpointsLoaded: boolean;
+  /** Promise of in-flight historical checkpoint loading */
+  loadingCheckpoints: Promise<void> | null;
+  /** Number of historical checkpoints to load per page */
+  checkpointPageSize: number;
+  /** Baseline checkpoint taken before the first mutating tool call */
+  baselineCreated: boolean;
+  /** Checkpoint taken before first mutation (fallback for restore) */
   resumeCheckpoint: CheckpointData | null;
   /** Stack of before-restore checkpoints for undo */
   redoStack: CheckpointData[];
@@ -49,6 +63,13 @@ export function createInitialState(): RewindState {
     syntheticGit: false,
     sessionId: null,
     checkpoints: new Map(),
+    checkpointRefs: [],
+    checkpointRefOffset: 0,
+    checkpointRefsLoaded: false,
+    checkpointsLoaded: false,
+    loadingCheckpoints: null,
+    checkpointPageSize: 50,
+    baselineCreated: false,
     resumeCheckpoint: null,
     redoStack: [],
     failed: false,
@@ -69,6 +90,13 @@ export function resetState(state: RewindState): void {
   state.syntheticGit = false;
   state.sessionId = null;
   state.checkpoints.clear();
+  state.checkpointRefs = [];
+  state.checkpointRefOffset = 0;
+  state.checkpointRefsLoaded = false;
+  state.checkpointsLoaded = false;
+  state.loadingCheckpoints = null;
+  state.checkpointPageSize = 50;
+  state.baselineCreated = false;
   state.resumeCheckpoint = null;
   state.redoStack = [];
   state.failed = false;

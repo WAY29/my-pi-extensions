@@ -17,6 +17,8 @@ import {
   cleanAllSyntheticWorkspaces,
   cleanWorkspaceCheckpoints,
   listSyntheticWorkspaces,
+  listCheckpointRefsByRecency,
+  loadCheckpointPage,
   loadAllCheckpoints,
 } from "./core.js";
 
@@ -79,6 +81,72 @@ const RESTORE_OPTIONS: { label: string; value: RestoreMode }[] = [
   { label: "Cancel", value: "cancel" },
 ];
 
+function getSortedCheckpoints(state: RewindState): CheckpointData[] {
+  return [...state.checkpoints.values()].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+async function ensureCheckpointRefIndex(state: RewindState): Promise<void> {
+  if (!state.gitAvailable || !state.repoRoot || !state.sessionId) return;
+  if (state.checkpointRefsLoaded) return;
+
+  state.checkpointRefs = await listCheckpointRefsByRecency(state.repoRoot, state.sessionId, state.gitDir);
+  state.checkpointRefOffset = 0;
+  state.checkpointRefsLoaded = true;
+  state.checkpointsLoaded = state.checkpointRefs.length === 0;
+}
+
+async function loadNextCheckpointPage(state: RewindState): Promise<void> {
+  if (!state.gitAvailable || !state.repoRoot || !state.sessionId) return;
+  await ensureCheckpointRefIndex(state);
+  if (state.checkpointsLoaded) return;
+
+  state.loadingCheckpoints ??= (async () => {
+    try {
+      const start = state.checkpointRefOffset;
+      const end = Math.min(start + state.checkpointPageSize, state.checkpointRefs.length);
+      const refs = state.checkpointRefs.slice(start, end);
+      const existing = await loadCheckpointPage(state.repoRoot!, refs, state.sessionId!, state.gitDir);
+      let newestResume = state.resumeCheckpoint;
+      for (const cp of existing) {
+        state.checkpoints.set(cp.id, cp);
+        if (cp.trigger === "resume" && (!newestResume || cp.timestamp > newestResume.timestamp)) {
+          newestResume = cp;
+        }
+      }
+      state.resumeCheckpoint = newestResume;
+      state.checkpointRefOffset = end;
+      state.checkpointsLoaded = state.checkpointRefOffset >= state.checkpointRefs.length;
+    } catch {
+      // Keep newly-created in-memory checkpoints usable even if old refs fail to load.
+      state.checkpointsLoaded = true;
+    } finally {
+      state.loadingCheckpoints = null;
+    }
+  })();
+
+  await state.loadingCheckpoints;
+}
+
+async function ensureInitialCheckpointPage(state: RewindState): Promise<void> {
+  await ensureCheckpointRefIndex(state);
+  if (state.checkpointRefOffset === 0 && !state.checkpointsLoaded) {
+    await loadNextCheckpointPage(state);
+  }
+  while (getSortedCheckpoints(state).length === 0 && !state.checkpointsLoaded) {
+    await loadNextCheckpointPage(state);
+  }
+}
+
+async function loadUntilCheckpointBefore(state: RewindState, targetTs: number): Promise<CheckpointData | undefined> {
+  await ensureInitialCheckpointPage(state);
+  let target = getSortedCheckpoints(state).find((cp) => cp.timestamp <= targetTs);
+  while (!target && !state.checkpointsLoaded) {
+    await loadNextCheckpointPage(state);
+    target = getSortedCheckpoints(state).find((cp) => cp.timestamp <= targetTs);
+  }
+  return target;
+}
+
 // ============================================================================
 // Rewind flow
 // ============================================================================
@@ -92,11 +160,10 @@ async function runRewindFlow(
     return;
   }
 
-  // Collect checkpoints sorted newest-first (limit to 25 most recent)
-  const MAX_DISPLAY = 25;
-  const checkpoints = [...state.checkpoints.values()]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, MAX_DISPLAY);
+  if (state.pending) await state.pending;
+  await ensureInitialCheckpointPage(state);
+
+  const checkpoints = getSortedCheckpoints(state);
 
   if (checkpoints.length === 0) {
     ctx.ui.notify("No checkpoints available", "warning");
@@ -114,6 +181,10 @@ async function runRewindFlow(
   for (let i = 0; i < checkpoints.length; i++) {
     items.push(formatCheckpointLabel(checkpoints[i], i, state, currentBranch));
   }
+  const loadOlderLabel = `Load older ${state.checkpointPageSize} checkpoints…`;
+  if (!state.checkpointsLoaded) {
+    items.push(loadOlderLabel);
+  }
 
   const choice = await ctx.ui.select("Rewind to checkpoint:", items);
   if (!choice) {
@@ -127,6 +198,11 @@ async function runRewindFlow(
     state.redoStack.pop();
     ctx.ui.notify("Undo successful — files restored to before last rewind", "info");
     return;
+  }
+
+  if (choice === loadOlderLabel) {
+    await loadNextCheckpointPage(state);
+    return runRewindFlow(state, ctx);
   }
 
   // Find selected checkpoint
@@ -242,12 +318,13 @@ export async function handleForkRestore(
   if (!state.gitAvailable || !state.repoRoot || !state.sessionId) return undefined;
   if (!ctx.hasUI) return undefined;
 
+  if (state.pending) await state.pending;
+
   const entry = ctx.sessionManager.getEntry(event.entryId);
   const targetTs = entry?.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
 
-  // Find best checkpoint
-  const sorted = [...state.checkpoints.values()].sort((a, b) => b.timestamp - a.timestamp);
-  const target = sorted.find((cp) => cp.timestamp <= targetTs) ?? sorted[sorted.length - 1];
+  // Find best checkpoint, loading older pages only if needed.
+  const target = (await loadUntilCheckpointBefore(state, targetTs)) ?? getSortedCheckpoints(state).slice(-1)[0];
 
   if (!target && state.resumeCheckpoint) {
     // Use resume checkpoint as fallback
@@ -300,11 +377,12 @@ export async function handleTreeRestore(
   if (!state.gitAvailable || !state.repoRoot || !state.sessionId) return undefined;
   if (!ctx.hasUI) return undefined;
 
+  if (state.pending) await state.pending;
+
   const entry = ctx.sessionManager.getEntry(event.preparation.targetId);
   const targetTs = entry?.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
 
-  const sorted = [...state.checkpoints.values()].sort((a, b) => b.timestamp - a.timestamp);
-  const cp = sorted.find((c) => c.timestamp <= targetTs) ?? state.resumeCheckpoint;
+  const cp = (await loadUntilCheckpointBefore(state, targetTs)) ?? state.resumeCheckpoint;
 
   const options: string[] = ["Keep current files"];
   if (cp) options.push("Restore files to that point");
@@ -339,7 +417,19 @@ async function refreshCurrentSessionCache(state: RewindState): Promise<void> {
   if (!state.repoRoot || !state.sessionId) return;
   const remaining = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
   state.checkpoints.clear();
-  for (const cp of remaining) state.checkpoints.set(cp.id, cp);
+  let newestResume: CheckpointData | null = null;
+  for (const cp of remaining) {
+    state.checkpoints.set(cp.id, cp);
+    if (cp.trigger === "resume" && (!newestResume || cp.timestamp > newestResume.timestamp)) {
+      newestResume = cp;
+    }
+  }
+  state.resumeCheckpoint = newestResume;
+  state.checkpointRefs = remaining.sort((a, b) => b.timestamp - a.timestamp).map((cp) => cp.id);
+  state.checkpointRefOffset = state.checkpointRefs.length;
+  state.checkpointRefsLoaded = true;
+  state.checkpointsLoaded = true;
+  state.loadingCheckpoints = null;
 }
 
 async function buildCleanupDryRun(state: RewindState): Promise<string> {

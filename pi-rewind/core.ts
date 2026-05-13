@@ -827,6 +827,44 @@ async function safeClean(
 // ============================================================================
 
 /** Load checkpoint metadata from a git ref */
+function parseCheckpointMessage(refName: string, msg: string): CheckpointData | null {
+  const get = (key: string) =>
+    msg.match(new RegExp(`^${key} (.+)$`, "m"))?.[1]?.trim();
+
+  const sid = get("sessionId");
+  const turn = get("turn");
+  const head = get("head");
+  const idx = get("index-tree");
+  const wt = get("worktree-tree");
+  if (!sid || !turn || !head || !idx || !wt) return null;
+
+  const parseJson = (key: string): string[] | undefined => {
+    const raw = get(key);
+    if (!raw) return undefined;
+    try {
+      const arr = JSON.parse(raw);
+      return arr.length > 0 ? arr : undefined;
+    } catch { return undefined; }
+  };
+
+  return {
+    id: refName,
+    sessionId: sid,
+    trigger: (get("trigger") as CheckpointData["trigger"]) || "turn",
+    turnIndex: parseInt(turn, 10),
+    toolName: get("toolName"),
+    description: get("description"),
+    branch: get("branch") || "unknown",
+    headSha: head,
+    indexTreeSha: idx,
+    worktreeTreeSha: wt,
+    timestamp: get("created") ? new Date(get("created")!).getTime() : 0,
+    preexistingUntrackedFiles: parseJson("untracked"),
+    skippedLargeFiles: parseJson("largeFiles"),
+    skippedLargeDirs: parseJson("largeDirs"),
+  };
+}
+
 export async function loadCheckpointFromRef(
   root: string,
   refName: string,
@@ -835,42 +873,7 @@ export async function loadCheckpointFromRef(
   try {
     const commitSha = await git(`rev-parse --verify ${REF_BASE}/${refName}`, root, { gitDir });
     const msg = await git(`cat-file commit ${commitSha}`, root, { gitDir });
-
-    const get = (key: string) =>
-      msg.match(new RegExp(`^${key} (.+)$`, "m"))?.[1]?.trim();
-
-    const sid = get("sessionId");
-    const turn = get("turn");
-    const head = get("head");
-    const idx = get("index-tree");
-    const wt = get("worktree-tree");
-    if (!sid || !turn || !head || !idx || !wt) return null;
-
-    const parseJson = (key: string): string[] | undefined => {
-      const raw = get(key);
-      if (!raw) return undefined;
-      try {
-        const arr = JSON.parse(raw);
-        return arr.length > 0 ? arr : undefined;
-      } catch { return undefined; }
-    };
-
-    return {
-      id: refName,
-      sessionId: sid,
-      trigger: (get("trigger") as CheckpointData["trigger"]) || "turn",
-      turnIndex: parseInt(turn, 10),
-      toolName: get("toolName"),
-      description: get("description"),
-      branch: get("branch") || "unknown",
-      headSha: head,
-      indexTreeSha: idx,
-      worktreeTreeSha: wt,
-      timestamp: get("created") ? new Date(get("created")!).getTime() : 0,
-      preexistingUntrackedFiles: parseJson("untracked"),
-      skippedLargeFiles: parseJson("largeFiles"),
-      skippedLargeDirs: parseJson("largeDirs"),
-    };
+    return parseCheckpointMessage(refName, msg);
   } catch {
     return null;
   }
@@ -882,6 +885,64 @@ export async function listCheckpointRefs(root: string, gitDir?: string | null): 
     const prefix = `${REF_BASE}/`;
     const out = await git(`for-each-ref --format=%(refname) ${prefix}`, root, { gitDir });
     return out.split("\n").filter(Boolean).map((r) => r.replace(prefix, ""));
+  } catch {
+    return [];
+  }
+}
+
+function refBelongsToSession(refName: string, sessionId?: string): boolean {
+  if (!sessionId) return true;
+  return (
+    refName.startsWith(`resume-${sessionId}-`) ||
+    refName.startsWith(`turn-${sessionId}-`) ||
+    refName.startsWith(`before-restore-${sessionId}-`)
+  );
+}
+
+/** List checkpoint ref names newest-first, optionally filtered by session ID from the ref name. */
+export async function listCheckpointRefsByRecency(
+  root: string,
+  sessionId?: string,
+  gitDir?: string | null,
+): Promise<string[]> {
+  try {
+    const prefix = `${REF_BASE}/`;
+    const out = await git(`for-each-ref --sort=-creatordate --format=%(refname) ${prefix}`, root, { gitDir });
+    return out
+      .split("\n")
+      .filter(Boolean)
+      .map((r) => r.replace(prefix, ""))
+      .filter((r) => refBelongsToSession(r, sessionId));
+  } catch {
+    return [];
+  }
+}
+
+/** Load a checkpoint page from a precomputed ref-name list. */
+export async function loadCheckpointPage(
+  root: string,
+  refs: string[],
+  sessionId?: string,
+  gitDir?: string | null,
+): Promise<CheckpointData[]> {
+  if (refs.length === 0) return [];
+  try {
+    const prefix = `${REF_BASE}/`;
+    const patterns = refs.map((r) => `${prefix}${r}`).join(" ");
+    const out = await git(`for-each-ref --sort=-creatordate --format=%(refname)%00%(contents)%00 ${patterns}`, root, { gitDir });
+    const parts = out.split("\0");
+    const results: CheckpointData[] = [];
+
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const fullRef = parts[i].replace(/^\n+/, "").trim();
+      const msg = parts[i + 1];
+      if (!fullRef.startsWith(prefix)) continue;
+      const refName = fullRef.slice(prefix.length);
+      const cp = parseCheckpointMessage(refName, msg);
+      if (cp && (!sessionId || cp.sessionId === sessionId)) results.push(cp);
+    }
+
+    return results;
   } catch {
     return [];
   }
