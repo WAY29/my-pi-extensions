@@ -25,8 +25,11 @@ export const MAX_UNTRACKED_FILE_SIZE = 10 * 1024 * 1024;
 /** Maximum files in an untracked directory before skipping (200) */
 export const MAX_UNTRACKED_DIR_FILES = 200;
 
-/** Default max checkpoints before auto-pruning */
-export const DEFAULT_MAX_CHECKPOINTS = 50;
+/** Default max checkpoints kept by manual cleanup commands */
+export const DEFAULT_MAX_CHECKPOINTS = 200;
+
+/** Auto-clean only removes missing-path synthetic workspaces after this grace period. */
+export const MISSING_WORKSPACE_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** Directories to exclude from snapshots (matched against any path component) */
 export const IGNORED_DIR_NAMES = new Set([
@@ -87,6 +90,50 @@ export interface SyntheticGitRepo {
   storageDir: string;
   /** Stable key derived from root */
   key: string;
+}
+
+export interface SyntheticWorkspaceMetadata {
+  formatVersion?: number;
+  key?: string;
+  worktreePath: string;
+  gitDir?: string;
+  createdAt?: string;
+  lastUsedAt?: string;
+}
+
+export interface SyntheticWorkspaceInfo {
+  key: string;
+  storageDir: string;
+  metadataPath: string;
+  gitDir: string;
+  valid: boolean;
+  error?: string;
+  metadata?: SyntheticWorkspaceMetadata;
+  worktreePath?: string;
+  worktreeExists: boolean;
+  lastUsedAtMs: number;
+  sizeBytes: number;
+  checkpointCount: number;
+}
+
+export interface MissingWorkspaceCleanupResult {
+  deleted: SyntheticWorkspaceInfo[];
+  skipped: SyntheticWorkspaceInfo[];
+  bytesFreed: number;
+}
+
+export interface WorkspaceCleanupResult {
+  checkpointCountBefore: number;
+  checkpointCountAfter: number;
+  pruned: number;
+  gc: "synthetic-prune-now" | "real-auto";
+}
+
+export interface AllSyntheticCleanupResult {
+  deletedMissing: SyntheticWorkspaceInfo[];
+  cleanedExisting: Array<SyntheticWorkspaceInfo & { pruned: number }>;
+  skippedInvalid: SyntheticWorkspaceInfo[];
+  bytesFreed: number;
 }
 
 // ============================================================================
@@ -181,7 +228,7 @@ function hasGitHead(gitDir: string): boolean {
 export async function initSyntheticGitRepo(cwd: string): Promise<SyntheticGitRepo> {
   const root = await realpath(cwd);
   const key = createHash("sha256").update(root).digest("hex").slice(0, 32);
-  const storageDirPath = join(homedir(), ".pi", "agent", "pi-rewind", "workspaces", key);
+  const storageDirPath = join(getSyntheticWorkspacesDir(), key);
   await mkdir(storageDirPath, { recursive: true });
 
   const storageDir = await realpath(storageDirPath);
@@ -208,6 +255,154 @@ export async function initSyntheticGitRepo(cwd: string): Promise<SyntheticGitRep
   );
 
   return { root, gitDir, storageDir, key };
+}
+
+export function getSyntheticWorkspacesDir(): string {
+  return join(homedir(), ".pi", "agent", "pi-rewind", "workspaces");
+}
+
+function pathExists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseTimeMs(value: unknown): number {
+  if (typeof value !== "string") return 0;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+interface FsDirentLike {
+  name: string;
+  isDirectory(): boolean;
+  isFile(): boolean;
+}
+
+function directorySizeBytes(path: string): number {
+  let total = 0;
+  const walk = (dir: string) => {
+    let entries: FsDirentLike[] = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      try {
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) total += statSync(full).size;
+      } catch {
+        // Ignore racing deletes and permission errors.
+      }
+    }
+  };
+  walk(path);
+  return total;
+}
+
+async function readSyntheticWorkspace(storageDir: string): Promise<SyntheticWorkspaceInfo> {
+  const key = storageDir.split(/[/\\]/).filter(Boolean).pop() || "unknown";
+  const metadataPath = join(storageDir, "metadata.json");
+  const fallbackGitDir = join(storageDir, ".git");
+  const sizeBytes = directorySizeBytes(storageDir);
+
+  let metadata: SyntheticWorkspaceMetadata | undefined;
+  try {
+    const parsed = JSON.parse(await readFile(metadataPath, "utf8")) as Partial<SyntheticWorkspaceMetadata>;
+    if (typeof parsed.worktreePath !== "string" || parsed.worktreePath.length === 0) {
+      throw new Error("metadata missing worktreePath");
+    }
+    metadata = {
+      ...parsed,
+      worktreePath: parsed.worktreePath,
+      gitDir: typeof parsed.gitDir === "string" ? parsed.gitDir : fallbackGitDir,
+    };
+  } catch (err) {
+    return {
+      key,
+      storageDir,
+      metadataPath,
+      gitDir: fallbackGitDir,
+      valid: false,
+      error: err instanceof Error ? err.message : String(err),
+      worktreeExists: false,
+      lastUsedAtMs: 0,
+      sizeBytes,
+      checkpointCount: 0,
+    };
+  }
+
+  const worktreeExists = pathExists(metadata.worktreePath);
+  const lastUsedAtMs = parseTimeMs(metadata.lastUsedAt) || parseTimeMs(metadata.createdAt);
+  let checkpointCount = 0;
+  try {
+    const gitRoot = worktreeExists ? metadata.worktreePath : storageDir;
+    checkpointCount = (await loadAllCheckpoints(gitRoot, undefined, metadata.gitDir)).length;
+  } catch {
+    checkpointCount = 0;
+  }
+
+  return {
+    key,
+    storageDir,
+    metadataPath,
+    gitDir: metadata.gitDir || fallbackGitDir,
+    valid: true,
+    metadata,
+    worktreePath: metadata.worktreePath,
+    worktreeExists,
+    lastUsedAtMs,
+    sizeBytes,
+    checkpointCount,
+  };
+}
+
+export async function listSyntheticWorkspaces(): Promise<SyntheticWorkspaceInfo[]> {
+  const root = getSyntheticWorkspacesDir();
+  let entries: FsDirentLike[] = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const workspaces: SyntheticWorkspaceInfo[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    workspaces.push(await readSyntheticWorkspace(join(root, entry.name)));
+  }
+  return workspaces;
+}
+
+export async function cleanupMissingSyntheticWorkspaces(
+  graceMs: number = MISSING_WORKSPACE_GRACE_MS,
+  nowMs: number = Date.now(),
+): Promise<MissingWorkspaceCleanupResult> {
+  const deleted: SyntheticWorkspaceInfo[] = [];
+  const skipped: SyntheticWorkspaceInfo[] = [];
+  let bytesFreed = 0;
+
+  for (const workspace of await listSyntheticWorkspaces()) {
+    if (!workspace.valid || workspace.worktreeExists) {
+      skipped.push(workspace);
+      continue;
+    }
+    const ageMs = workspace.lastUsedAtMs > 0 ? nowMs - workspace.lastUsedAtMs : Number.POSITIVE_INFINITY;
+    if (ageMs < graceMs) {
+      skipped.push(workspace);
+      continue;
+    }
+    await rm(workspace.storageDir, { recursive: true, force: true });
+    deleted.push(workspace);
+    bytesFreed += workspace.sizeBytes;
+  }
+
+  return { deleted, skipped, bytesFreed };
 }
 
 // ============================================================================
@@ -731,6 +926,73 @@ export async function pruneCheckpoints(
     await deleteCheckpoint(root, cp.id, gitDir);
   }
   return toDelete.length;
+}
+
+/** Prune all pi-rewind checkpoints for a workspace, keeping the newest `max`. */
+export async function pruneWorkspaceCheckpoints(
+  root: string,
+  max: number = DEFAULT_MAX_CHECKPOINTS,
+  gitDir?: string | null,
+): Promise<number> {
+  const all = await loadAllCheckpoints(root, undefined, gitDir);
+  all.sort((a, b) => a.timestamp - b.timestamp);
+  if (all.length <= max) return 0;
+
+  const toDelete = all.slice(0, all.length - max);
+  for (const cp of toDelete) {
+    await deleteCheckpoint(root, cp.id, gitDir);
+  }
+  return toDelete.length;
+}
+
+export async function runCheckpointGc(root: string, gitDir?: string | null): Promise<WorkspaceCleanupResult["gc"]> {
+  if (gitDir) {
+    await git("gc --prune=now", root, { gitDir });
+    return "synthetic-prune-now";
+  }
+  await git("gc --auto", root);
+  return "real-auto";
+}
+
+export async function cleanWorkspaceCheckpoints(
+  root: string,
+  gitDir?: string | null,
+  max: number = DEFAULT_MAX_CHECKPOINTS,
+): Promise<WorkspaceCleanupResult> {
+  const checkpointCountBefore = (await loadAllCheckpoints(root, undefined, gitDir)).length;
+  const pruned = await pruneWorkspaceCheckpoints(root, max, gitDir);
+  const gc = await runCheckpointGc(root, gitDir);
+  const checkpointCountAfter = (await loadAllCheckpoints(root, undefined, gitDir)).length;
+  return { checkpointCountBefore, checkpointCountAfter, pruned, gc };
+}
+
+export async function cleanAllSyntheticWorkspaces(
+  max: number = DEFAULT_MAX_CHECKPOINTS,
+): Promise<AllSyntheticCleanupResult> {
+  const deletedMissing: SyntheticWorkspaceInfo[] = [];
+  const cleanedExisting: Array<SyntheticWorkspaceInfo & { pruned: number }> = [];
+  const skippedInvalid: SyntheticWorkspaceInfo[] = [];
+  let bytesFreed = 0;
+
+  for (const workspace of await listSyntheticWorkspaces()) {
+    if (!workspace.valid || !workspace.worktreePath) {
+      skippedInvalid.push(workspace);
+      continue;
+    }
+
+    if (!workspace.worktreeExists) {
+      await rm(workspace.storageDir, { recursive: true, force: true });
+      deletedMissing.push(workspace);
+      bytesFreed += workspace.sizeBytes;
+      continue;
+    }
+
+    const pruned = await pruneWorkspaceCheckpoints(workspace.worktreePath, max, workspace.gitDir);
+    await runCheckpointGc(workspace.worktreePath, workspace.gitDir);
+    cleanedExisting.push({ ...workspace, pruned });
+  }
+
+  return { deletedMissing, cleanedExisting, skippedInvalid, bytesFreed };
 }
 
 /**

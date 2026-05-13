@@ -7,8 +7,18 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { RewindState } from "./state.js";
-import type { CheckpointData } from "./core.js";
-import { restoreCheckpoint, createCheckpoint, diffCheckpoints, git } from "./core.js";
+import type { CheckpointData, SyntheticWorkspaceInfo } from "./core.js";
+import {
+  restoreCheckpoint,
+  createCheckpoint,
+  diffCheckpoints,
+  git,
+  DEFAULT_MAX_CHECKPOINTS,
+  cleanAllSyntheticWorkspaces,
+  cleanWorkspaceCheckpoints,
+  listSyntheticWorkspaces,
+  loadAllCheckpoints,
+} from "./core.js";
 
 // ============================================================================
 // Helpers
@@ -20,6 +30,28 @@ function formatTimestamp(ts: number): string {
   const mm = String(d.getMinutes()).padStart(2, "0");
   const ss = String(d.getSeconds()).padStart(2, "0");
   return `${hh}:${mm}:${ss}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && value >= 1024; i++) {
+    value /= 1024;
+    unit = units[i];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+function formatDate(ms: number): string {
+  if (!ms) return "unknown";
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function workspaceLabel(workspace: SyntheticWorkspaceInfo): string {
+  if (!workspace.valid) return `${workspace.key} (invalid metadata)`;
+  return workspace.worktreePath || workspace.key;
 }
 
 function formatCheckpointLabel(cp: CheckpointData, index: number, _state: RewindState, currentBranch?: string): string {
@@ -300,6 +332,94 @@ export async function handleTreeRestore(
 }
 
 // ============================================================================
+// Cleanup commands
+// ============================================================================
+
+async function refreshCurrentSessionCache(state: RewindState): Promise<void> {
+  if (!state.repoRoot || !state.sessionId) return;
+  const remaining = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
+  state.checkpoints.clear();
+  for (const cp of remaining) state.checkpoints.set(cp.id, cp);
+}
+
+async function buildCleanupDryRun(state: RewindState): Promise<string> {
+  const lines: string[] = ["pi-rewind cleanup preview", ""];
+
+  if (state.repoRoot) {
+    const checkpointCount = (await loadAllCheckpoints(state.repoRoot, undefined, state.gitDir).catch(() => [])).length;
+    const wouldPrune = Math.max(0, checkpointCount - DEFAULT_MAX_CHECKPOINTS);
+    lines.push("Current workspace:");
+    lines.push(`  path: ${state.repoRoot}`);
+    lines.push(`  mode: ${state.syntheticGit ? "synthetic" : "real git"}`);
+    lines.push(`  checkpoints: ${checkpointCount}`);
+    lines.push(`  workspace clean keeps latest ${DEFAULT_MAX_CHECKPOINTS}, would remove ${wouldPrune} refs`);
+  } else {
+    lines.push("Current workspace: unavailable");
+  }
+
+  const workspaces = await listSyntheticWorkspaces();
+  const missing = workspaces.filter((w) => w.valid && !w.worktreeExists);
+  const existing = workspaces.filter((w) => w.valid && w.worktreeExists);
+  const invalid = workspaces.filter((w) => !w.valid);
+  const totalSize = workspaces.reduce((sum, w) => sum + w.sizeBytes, 0);
+
+  lines.push("");
+  lines.push("Synthetic storage:");
+  lines.push(`  workspaces: ${workspaces.length}`);
+  lines.push(`  total size: ${formatBytes(totalSize)}`);
+  lines.push(`  existing paths: ${existing.length}`);
+  lines.push(`  missing paths: ${missing.length}`);
+  if (invalid.length > 0) lines.push(`  invalid metadata: ${invalid.length} (skipped by cleanup)`);
+
+  if (missing.length > 0) {
+    lines.push("");
+    lines.push("Missing workspaces (/rewind:clean:all deletes these):");
+    for (const workspace of missing.slice(0, 10)) {
+      lines.push(`  ${workspaceLabel(workspace)}`);
+      lines.push(`    last used: ${formatDate(workspace.lastUsedAtMs)}, size: ${formatBytes(workspace.sizeBytes)}`);
+    }
+    if (missing.length > 10) lines.push(`  ... ${missing.length - 10} more`);
+  }
+
+  lines.push("");
+  lines.push("Commands:");
+  lines.push("  /rewind:clean:workspace  clean current workspace only");
+  lines.push("  /rewind:clean:all        delete missing synthetic workspaces and prune existing synthetic repos");
+
+  return lines.join("\n");
+}
+
+async function runWorkspaceClean(state: RewindState, ctx: any): Promise<void> {
+  if (!state.gitAvailable || !state.repoRoot) {
+    ctx.ui.notify("Rewind cleanup unavailable (checkpoint storage unavailable)", "warning");
+    return;
+  }
+  if (state.pending) await state.pending;
+
+  const result = await cleanWorkspaceCheckpoints(state.repoRoot, state.gitDir, DEFAULT_MAX_CHECKPOINTS);
+  await refreshCurrentSessionCache(state);
+  ctx.ui.notify(
+    `Rewind workspace cleanup complete: ${result.pruned} refs removed, ` +
+    `${result.checkpointCountAfter}/${result.checkpointCountBefore} checkpoints remain, gc=${result.gc}.`,
+    "info",
+  );
+}
+
+async function runAllClean(state: RewindState, ctx: any): Promise<void> {
+  if (state.pending) await state.pending;
+
+  const result = await cleanAllSyntheticWorkspaces(DEFAULT_MAX_CHECKPOINTS);
+  await refreshCurrentSessionCache(state).catch(() => {});
+  const pruned = result.cleanedExisting.reduce((sum, item) => sum + item.pruned, 0);
+  ctx.ui.notify(
+    `Rewind global cleanup complete: deleted ${result.deletedMissing.length} missing workspaces ` +
+    `(${formatBytes(result.bytesFreed)}), cleaned ${result.cleanedExisting.length} existing synthetic workspaces, ` +
+    `removed ${pruned} refs, skipped ${result.skippedInvalid.length} invalid workspaces.`,
+    "info",
+  );
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -308,6 +428,27 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
     description: "Rewind file changes and/or conversation to a checkpoint",
     handler: async (_args, ctx) => {
       await runRewindFlow(state, ctx);
+    },
+  });
+
+  pi.registerCommand("rewind:clean:dryrun", {
+    description: "Preview pi-rewind cleanup without deleting anything",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify(await buildCleanupDryRun(state), "info");
+    },
+  });
+
+  pi.registerCommand("rewind:clean:workspace", {
+    description: `Clean current pi-rewind workspace, keeping latest ${DEFAULT_MAX_CHECKPOINTS} checkpoints`,
+    handler: async (_args, ctx) => {
+      await runWorkspaceClean(state, ctx);
+    },
+  });
+
+  pi.registerCommand("rewind:clean:all", {
+    description: "Clean all pi-rewind synthetic storage",
+    handler: async (_args, ctx) => {
+      await runAllClean(state, ctx);
     },
   });
 

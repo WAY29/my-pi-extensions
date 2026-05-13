@@ -23,10 +23,8 @@ import {
   createCheckpoint,
   deleteCheckpoint,
   loadAllCheckpoints,
-  pruneCheckpoints,
-  pruneOldSessions,
+  cleanupMissingSyntheticWorkspaces,
   MUTATING_TOOLS,
-  DEFAULT_MAX_CHECKPOINTS,
 } from "./core.js";
 import { createInitialState, resetState } from "./state.js";
 import { updateStatus, clearStatus } from "./ui.js";
@@ -123,22 +121,8 @@ export default function (pi: ExtensionAPI) {
 
     if (ctx.hasUI) updateStatus(state, ctx);
 
-    // Prune old sessions in background (non-blocking)
-    if (state.repoRoot && state.sessionId) {
-      const root = state.repoRoot;
-      const sid = state.sessionId;
-      const gitDir = state.gitDir;
-      pruneOldSessions(root, sid, 0, gitDir).then((pruned) => {
-        if (pruned > 0) {
-          // Reload cache after prune
-          loadAllCheckpoints(root, sid, gitDir).then((remaining) => {
-            state.checkpoints.clear();
-            for (const cp of remaining) state.checkpoints.set(cp.id, cp);
-            if (ctx.hasUI) updateStatus(state, ctx);
-          }).catch(() => {});
-        }
-      }).catch(() => {});
-    }
+    // Auto-clean only stale synthetic workspaces whose original paths disappeared.
+    cleanupMissingSyntheticWorkspaces().catch(() => {});
   }
 
   pi.on("session_start", async (event, ctx) => {
@@ -255,26 +239,6 @@ export default function (pi: ExtensionAPI) {
 
     // Wait for checkpoint to complete before pruning
     if (state.pending) await state.pending;
-
-    // Auto-prune
-    try {
-      const pruned = await pruneCheckpoints(
-        state.repoRoot,
-        state.sessionId,
-        DEFAULT_MAX_CHECKPOINTS,
-        state.gitDir,
-      );
-      if (pruned > 0) {
-        const remaining = await loadAllCheckpoints(state.repoRoot, state.sessionId, state.gitDir);
-        state.checkpoints.clear();
-        for (const cp of remaining) {
-          state.checkpoints.set(cp.id, cp);
-        }
-        if (ctx.hasUI) updateStatus(state, ctx);
-      }
-    } catch {
-      // Pruning is non-critical
-    }
 
     // Reset turn state
     state.turnToolDescriptions = [];

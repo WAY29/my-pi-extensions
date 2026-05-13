@@ -187,18 +187,103 @@ async function testSyntheticStorageInsideWorktree(core, root) {
   }
 }
 
+async function testCleanupMissingSyntheticWorkspaces(core, root) {
+  await mkdir(root, { recursive: true });
+  const originalHome = process.env.HOME;
+  process.env.HOME = root;
+  const workspacesDir = join(root, ".pi", "agent", "pi-rewind", "workspaces");
+  const now = Date.now();
+  try {
+    const stale = join(workspacesDir, "stale");
+    const fresh = join(workspacesDir, "fresh");
+    const invalid = join(workspacesDir, "invalid");
+    await mkdir(stale, { recursive: true });
+    await mkdir(fresh, { recursive: true });
+    await mkdir(invalid, { recursive: true });
+    await writeFile(join(stale, "metadata.json"), JSON.stringify({
+      worktreePath: join(root, "missing-stale"),
+      gitDir: join(stale, ".git"),
+      createdAt: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      lastUsedAt: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    }), "utf8");
+    await writeFile(join(fresh, "metadata.json"), JSON.stringify({
+      worktreePath: join(root, "missing-fresh"),
+      gitDir: join(fresh, ".git"),
+      createdAt: new Date(now).toISOString(),
+      lastUsedAt: new Date(now).toISOString(),
+    }), "utf8");
+    await writeFile(join(invalid, "metadata.json"), "{}", "utf8");
+
+    const result = await core.cleanupMissingSyntheticWorkspaces(24 * 60 * 60 * 1000, now);
+    assert.equal(result.deleted.map((w) => w.key).includes("stale"), true, "stale missing workspace should be auto-deleted");
+    assert.equal(existsSync(stale), false, "stale missing workspace directory should be removed");
+    assert.equal(existsSync(fresh), true, "fresh missing workspace should honor the grace period");
+    assert.equal(existsSync(invalid), true, "invalid metadata should not be auto-deleted");
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  }
+}
+
+async function testCleanAllSyntheticWorkspaces(core, root) {
+  await mkdir(root, { recursive: true });
+  const originalHome = process.env.HOME;
+  process.env.HOME = root;
+  try {
+    const existingRoot = join(root, "existing-worktree");
+    await mkdir(existingRoot, { recursive: true });
+    await writeFile(join(existingRoot, "a.txt"), "one\n", "utf8");
+    const synthetic = await core.initSyntheticGitRepo(existingRoot);
+
+    for (let i = 0; i < 3; i++) {
+      await core.createCheckpoint({
+        root: synthetic.root,
+        gitDir: synthetic.gitDir,
+        id: `all-clean-cp${i}`,
+        sessionId: "all-clean-session",
+        trigger: "tool",
+        turnIndex: i,
+      });
+    }
+
+    const missing = join(root, ".pi", "agent", "pi-rewind", "workspaces", "missing-explicit");
+    await mkdir(missing, { recursive: true });
+    await writeFile(join(missing, "metadata.json"), JSON.stringify({
+      worktreePath: join(root, "missing-explicit-worktree"),
+      gitDir: join(missing, ".git"),
+      createdAt: new Date(Date.now() - 1000).toISOString(),
+      lastUsedAt: new Date(Date.now() - 1000).toISOString(),
+    }), "utf8");
+
+    const result = await core.cleanAllSyntheticWorkspaces(2);
+    assert.equal(result.deletedMissing.some((w) => w.key === "missing-explicit"), true, "explicit all cleanup should delete missing workspaces");
+    assert.equal(existsSync(missing), false, "missing workspace should be deleted by clean all");
+    const remaining = await core.loadAllCheckpoints(synthetic.root, undefined, synthetic.gitDir);
+    assert.equal(remaining.length, 2, "existing synthetic workspace should be pruned to requested max");
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  }
+}
+
 async function testCommandSourceDoesNotUseMissingStateRoot() {
   const commands = await readFile(join(repoDir, "commands.ts"), "utf8");
   assert.equal(commands.includes("state.root"), false, "/rewind branch display should not reference missing state.root");
+  assert.equal(commands.includes("rewind:clean:dryrun"), true, "dry-run cleanup command should be registered");
+  assert.equal(commands.includes("rewind:clean:workspace"), true, "workspace cleanup command should be registered");
+  assert.equal(commands.includes("rewind:clean:all"), true, "global cleanup command should be registered");
 }
 
 async function main() {
   const tempRoot = await mkdtemp(join(tmpdir(), "pi-rewind-test-"));
   const { core, compileDir } = await compileCore();
   try {
+    assert.equal(core.DEFAULT_MAX_CHECKPOINTS, 200, "default manual cleanup retention should be 200 checkpoints");
     await testRealGitRepo(core, join(tempRoot, "real"));
     await testSyntheticRepo(core, join(tempRoot, "plain"));
     await testSyntheticStorageInsideWorktree(core, join(tempRoot, "home-worktree"));
+    await testCleanupMissingSyntheticWorkspaces(core, join(tempRoot, "cleanup-home"));
+    await testCleanAllSyntheticWorkspaces(core, join(tempRoot, "clean-all-home"));
     await testCommandSourceDoesNotUseMissingStateRoot();
     console.log("pi-rewind core tests passed");
   } finally {

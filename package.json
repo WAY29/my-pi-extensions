@@ -32,6 +32,7 @@
       "./pretty-image-paste.ts",
       "./progress-checkpoints.ts",
       "./retry-stream-read-error.ts",
+      "./stable-scroll.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
       "./pi-rewind/index.ts",
