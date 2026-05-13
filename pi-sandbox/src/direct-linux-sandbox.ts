@@ -7,7 +7,6 @@ import path from "node:path";
 import { getApplySeccompBinaryPath } from "@carderne/sandbox-runtime/dist/sandbox/generate-seccomp-filter.js";
 import {
   DANGEROUS_FILES,
-  generateProxyEnvVars,
   getDangerousDirectories,
   isSymlinkOutsideBoundary,
   normalizeCaseForComparison,
@@ -16,6 +15,8 @@ import {
 import { logForDebugging } from "@carderne/sandbox-runtime/dist/utils/debug.js";
 import { ripGrep, type RipgrepConfig } from "@carderne/sandbox-runtime/dist/utils/ripgrep.js";
 import { whichSync } from "@carderne/sandbox-runtime/dist/utils/which.js";
+
+import { generateSandboxProxyEnvVars } from "./proxy-env";
 
 const DEFAULT_MANDATORY_DENY_SEARCH_DEPTH = 3;
 
@@ -584,7 +585,7 @@ export async function createDirectLinuxSandboxCommand(
 
         bwrapArgs.push("--bind", httpSocketPath, httpSocketPath);
         bwrapArgs.push("--bind", socksSocketPath, socksSocketPath);
-        const proxyEnv = generateProxyEnvVars(3128, 1080);
+        const proxyEnv = generateSandboxProxyEnvVars(3128, 1080);
         bwrapArgs.push(
           ...proxyEnv.flatMap((env) => {
             const firstEq = env.indexOf("=");

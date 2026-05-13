@@ -8,10 +8,11 @@ import {
   decodeSandboxedCommand,
   DANGEROUS_FILES,
   encodeSandboxedCommand,
-  generateProxyEnvVars,
   getDangerousDirectories,
   globToRegex,
 } from "@carderne/sandbox-runtime/dist/sandbox/sandbox-utils.js";
+
+import { generateSandboxProxyEnvVars } from "./proxy-env";
 
 export type FilesystemAccessKind = "read" | "write";
 
@@ -613,7 +614,7 @@ export function createDirectMacSandboxCommand(
   return {
     file: "env",
     args: [
-      ...generateProxyEnvVars(params.httpProxyPort, params.socksProxyPort),
+      ...generateSandboxProxyEnvVars(params.httpProxyPort, params.socksProxyPort),
       "sandbox-exec",
       "-p",
       profile,

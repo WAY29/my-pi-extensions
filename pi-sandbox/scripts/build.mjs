@@ -1,4 +1,4 @@
-import { access, cp, mkdir, rm } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { build } from "esbuild";
 
@@ -21,6 +21,21 @@ await build({
     js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
   },
 });
+
+await removeBundledNoProxyEnv("dist/index.js");
+
+async function removeBundledNoProxyEnv(filePath) {
+  const source = await readFile(filePath, "utf-8");
+  const patched = source
+    .replace(/\n  envVars\.push\(`NO_PROXY=\$\{noProxyAddresses\}`\);/g, "")
+    .replace(/\n  envVars\.push\(`no_proxy=\$\{noProxyAddresses\}`\);/g, "");
+
+  if (patched === source) {
+    throw new Error(`Expected bundled sandbox-runtime NO_PROXY injection in ${filePath}`);
+  }
+
+  await writeFile(filePath, patched);
+}
 
 async function copyIfExists(source, destination) {
   try {

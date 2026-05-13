@@ -1482,8 +1482,6 @@ function generateProxyEnvVars(httpProxyPort, socksProxyPort) {
     "192.168.0.0/16"
     // Private network
   ].join(",");
-  envVars.push(`NO_PROXY=${noProxyAddresses}`);
-  envVars.push(`no_proxy=${noProxyAddresses}`);
   if (httpProxyPort) {
     envVars.push(`HTTP_PROXY=http://localhost:${httpProxyPort}`);
     envVars.push(`HTTPS_PROXY=http://localhost:${httpProxyPort}`);
@@ -7609,6 +7607,18 @@ function releaseBashToolOwner(pi) {
 import * as fs6 from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import path4 from "node:path";
+
+// src/proxy-env-filter.ts
+function omitNoProxyEnvVars(envVars) {
+  return envVars.filter((envVar) => !envVar.toLowerCase().startsWith("no_proxy="));
+}
+
+// src/proxy-env.ts
+function generateSandboxProxyEnvVars(httpProxyPort, socksProxyPort) {
+  return omitNoProxyEnvVars(generateProxyEnvVars(httpProxyPort, socksProxyPort));
+}
+
+// src/direct-linux-sandbox.ts
 var DEFAULT_MANDATORY_DENY_SEARCH_DEPTH2 = 3;
 function findSymlinkInPath2(targetPath, allowedWritePaths) {
   const parts = targetPath.split(path4.sep);
@@ -8041,7 +8051,7 @@ async function createDirectLinuxSandboxCommand(params) {
         }
         bwrapArgs.push("--bind", httpSocketPath, httpSocketPath);
         bwrapArgs.push("--bind", socksSocketPath, socksSocketPath);
-        const proxyEnv = generateProxyEnvVars(3128, 1080);
+        const proxyEnv = generateSandboxProxyEnvVars(3128, 1080);
         bwrapArgs.push(
           ...proxyEnv.flatMap((env) => {
             const firstEq = env.indexOf("=");
@@ -8609,7 +8619,7 @@ function createDirectMacSandboxCommand(params) {
   return {
     file: "env",
     args: [
-      ...generateProxyEnvVars(params.httpProxyPort, params.socksProxyPort),
+      ...generateSandboxProxyEnvVars(params.httpProxyPort, params.socksProxyPort),
       "sandbox-exec",
       "-p",
       profile,
