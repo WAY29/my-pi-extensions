@@ -20,7 +20,7 @@ const ENHANCE_CONTEXT: EnhancementContext = {
 };
 const ANSI_DIM = "\x1b[2m";
 const ANSI_RESET = "\x1b[0m";
-const FENCED_CODE_BLOCK_PATTERN = /^```([^\n`]*)\r?\n([\s\S]*?)^```[ \t]*$/gm;
+const FENCE_OPEN_PATTERN = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
 
 interface CodeBlock {
   index: number;
@@ -43,6 +43,9 @@ interface ParsedCopyRequest {
 
 type MarkdownInternals = {
   text?: string;
+  cachedText?: string;
+  cachedWidth?: number;
+  cachedLines?: string[];
   theme: {
     codeBlock: (text: string) => string;
     codeBlockBorder: (text: string) => string;
@@ -94,7 +97,9 @@ const SESSION_CODE_BLOCK_STATE: SessionCodeBlockState = {
   assignmentsByText: new Map(),
 };
 const MARKDOWN_RENDER_ASSIGNMENTS = new WeakMap<object, AssignedRenderRange>();
+const MARKDOWN_RENDER_RANGE_KEYS = new WeakMap<object, string>();
 const CLAIMED_RENDER_ASSIGNMENTS = new Set<string>();
+let renderAssignmentPassActive = false;
 
 function formatShortcutHint(shortcut: string): string {
   return shortcut
@@ -103,30 +108,70 @@ function formatShortcutHint(shortcut: string): string {
     .join("+");
 }
 
+function normalizeMarkdownText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").trim();
+}
+
 function getAssistantText(message: AssistantMessage): string {
   return message.content
     .filter((content): content is { type: "text"; text: string } => content.type === "text")
-    .map((content) => content.text)
-    .join("\n")
-    .trim();
-}
-
-function cloneFencePattern(): RegExp {
-  return new RegExp(FENCED_CODE_BLOCK_PATTERN.source, FENCED_CODE_BLOCK_PATTERN.flags);
+    .map((content) => normalizeMarkdownText(content.text))
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 function countFencedCodeBlocks(text: string): number {
-  let count = 0;
-  const pattern = cloneFencePattern();
-  while (pattern.exec(text)) count++;
-  return count;
+  return extractCodeBlocks(text).length;
 }
 
-function normalizeMarkdownText(text: string): string {
-  return text.replace(/\r\n/g, "\n").trim();
+function appendTextCodeBlocks(
+  rawText: string,
+  blocks: CodeBlock[],
+  assignmentsByText: Map<string, RenderAssignment[]>,
+  nextIndex: number,
+): number {
+  const text = normalizeMarkdownText(rawText);
+  if (!text) return nextIndex;
+
+  const extracted = extractCodeBlocks(text);
+  if (extracted.length === 0) return nextIndex;
+
+  const startIndex = nextIndex;
+  for (const block of extracted) {
+    blocks.push({
+      ...block,
+      index: nextIndex++,
+    });
+  }
+
+  const assignment: RenderAssignment = {
+    id: `block-range-${startIndex}`,
+    startIndex,
+    blockCount: extracted.length,
+  };
+
+  const existing = assignmentsByText.get(text);
+  if (existing) existing.push(assignment);
+  else assignmentsByText.set(text, [assignment]);
+
+  return nextIndex;
 }
 
-function buildSessionCodeBlockSnapshot(ctx: Pick<CopyContext, "sessionManager">): CodeBlockSnapshot {
+function shouldAppendLiveAssistantMessage(ctx: Pick<CopyContext, "sessionManager">, message: AssistantMessage): boolean {
+  const targetText = getAssistantText(message);
+  if (!targetText) return false;
+
+  return !ctx.sessionManager.getBranch().some((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "assistant") return false;
+    const branchMessage = entry.message as AssistantMessage;
+    return branchMessage === message || (branchMessage.timestamp === message.timestamp && getAssistantText(branchMessage) === targetText);
+  });
+}
+
+function buildSessionCodeBlockSnapshot(
+  ctx: Pick<CopyContext, "sessionManager">,
+  liveAssistantMessage?: AssistantMessage,
+): CodeBlockSnapshot {
   const assignmentsByText = new Map<string, RenderAssignment[]>();
   const blocks: CodeBlock[] = [];
   const branch = ctx.sessionManager.getBranch();
@@ -140,47 +185,50 @@ function buildSessionCodeBlockSnapshot(ctx: Pick<CopyContext, "sessionManager">)
 
     for (const content of message.content) {
       if (content.type !== "text") continue;
+      nextIndex = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
+    }
+  }
 
-      const text = normalizeMarkdownText(content.text);
-      if (!text) continue;
-
-      const extracted = extractCodeBlocks(text);
-      if (extracted.length === 0) continue;
-
-      const startIndex = nextIndex;
-      for (const block of extracted) {
-        blocks.push({
-          ...block,
-          index: nextIndex++,
-        });
-      }
-
-      const assignment: RenderAssignment = {
-        id: `block-range-${startIndex}`,
-        startIndex,
-        blockCount: extracted.length,
-      };
-
-      const existing = assignmentsByText.get(text);
-      if (existing) existing.push(assignment);
-      else assignmentsByText.set(text, [assignment]);
+  if (liveAssistantMessage && shouldAppendLiveAssistantMessage(ctx, liveAssistantMessage)) {
+    for (const content of liveAssistantMessage.content) {
+      if (content.type !== "text") continue;
+      nextIndex = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
     }
   }
 
   return { blocks, assignmentsByText };
 }
 
-function rebuildSessionCodeBlockState(ctx: Pick<CopyContext, "sessionManager">): void {
-  const snapshot = buildSessionCodeBlockSnapshot(ctx);
+function rebuildSessionCodeBlockState(ctx: Pick<CopyContext, "sessionManager">, liveAssistantMessage?: AssistantMessage): void {
+  const snapshot = buildSessionCodeBlockSnapshot(ctx, liveAssistantMessage);
   SESSION_CODE_BLOCK_STATE.version++;
   SESSION_CODE_BLOCK_STATE.blocks = snapshot.blocks;
   SESSION_CODE_BLOCK_STATE.assignmentsByText = snapshot.assignmentsByText;
   CLAIMED_RENDER_ASSIGNMENTS.clear();
 }
 
+function beginRenderAssignmentPass(): void {
+  if (renderAssignmentPassActive) return;
+
+  CLAIMED_RENDER_ASSIGNMENTS.clear();
+  renderAssignmentPassActive = true;
+  queueMicrotask(() => {
+    renderAssignmentPassActive = false;
+  });
+}
+
+function clearMarkdownRenderCache(instance: MarkdownInternals): void {
+  instance.cachedText = undefined;
+  instance.cachedWidth = undefined;
+  instance.cachedLines = undefined;
+}
+
 function resolveAssignedRenderRange(instance: MarkdownInternals): AssignedRenderRange | undefined {
   const cached = MARKDOWN_RENDER_ASSIGNMENTS.get(instance as object);
-  if (cached && cached.version === SESSION_CODE_BLOCK_STATE.version) return cached;
+  if (cached && cached.version === SESSION_CODE_BLOCK_STATE.version) {
+    CLAIMED_RENDER_ASSIGNMENTS.add(cached.id);
+    return cached;
+  }
 
   const text = normalizeMarkdownText(instance.text ?? "");
   if (!text) {
@@ -196,11 +244,7 @@ function resolveAssignedRenderRange(instance: MarkdownInternals): AssignedRender
 
   const match =
     (cached ? assignments.find((assignment) => assignment.id === cached.id) : undefined) ??
-    assignments.find((assignment) => !CLAIMED_RENDER_ASSIGNMENTS.has(assignment.id));
-  if (!match) {
-    MARKDOWN_RENDER_ASSIGNMENTS.delete(instance as object);
-    return undefined;
-  }
+    (assignments.length === 1 ? assignments[0] : assignments.find((assignment) => !CLAIMED_RENDER_ASSIGNMENTS.has(assignment.id)) ?? assignments[0]);
 
   const resolved: AssignedRenderRange = {
     version: SESSION_CODE_BLOCK_STATE.version,
@@ -227,26 +271,69 @@ function getPreview(code: string): string {
   return lines.length > 1 ? `${linePreview} ⏎ …` : linePreview;
 }
 
+function parseOpeningFenceLine(line: string): { indent: string; marker: string; info: string } | undefined {
+  const match = FENCE_OPEN_PATTERN.exec(line);
+  if (!match) return undefined;
+
+  const indent = match[1] ?? "";
+  const marker = match[2] ?? "";
+  const info = match[3] ?? "";
+  if (marker.startsWith("`") && info.includes("`")) return undefined;
+
+  return { indent, marker, info };
+}
+
+function isClosingFenceLine(line: string, marker: string): boolean {
+  const fenceChar = marker[0];
+  if (!fenceChar) return false;
+
+  const candidate = line.trimStart();
+  let markerLength = 0;
+  while (candidate[markerLength] === fenceChar) markerLength++;
+
+  return markerLength >= marker.length && /^[ \t]*$/.test(candidate.slice(markerLength));
+}
+
+function stripFenceIndent(line: string, indent: string): string {
+  let stripped = line;
+  for (const indentChar of indent) {
+    if (stripped.startsWith(indentChar)) {
+      stripped = stripped.slice(indentChar.length);
+      continue;
+    }
+    break;
+  }
+  return stripped;
+}
+
 function extractCodeBlocks(text: string): CodeBlock[] {
-  const extracted: Array<Pick<CodeBlock, "language" | "code">> = [];
-  const fencePattern = cloneFencePattern();
+  const blocks: CodeBlock[] = [];
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
 
-  let match: RegExpExecArray | null = fencePattern.exec(text);
-  while (match) {
-    const infoString = match[1]?.trim() ?? "";
+  for (let i = 0; i < lines.length; i++) {
+    const opening = parseOpeningFenceLine(lines[i] ?? "");
+    if (!opening) continue;
+
+    const codeLines: string[] = [];
+    i++;
+    for (; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (isClosingFenceLine(line, opening.marker)) break;
+      codeLines.push(stripFenceIndent(line, opening.indent));
+    }
+
+    const infoString = opening.info.trim();
     const language = infoString.split(/\s+/)[0] || "text";
-    const code = match[2]?.replace(/\r\n/g, "\n") ?? "";
-
-    extracted.push({ language, code });
-    match = fencePattern.exec(text);
+    const code = codeLines.join("\n");
+    blocks.push({
+      index: blocks.length + 1,
+      language,
+      code,
+      preview: getPreview(code),
+    });
   }
 
-  return extracted.reverse().map((block, index) => ({
-    index: index + 1,
-    language: block.language,
-    code: block.code,
-    preview: getPreview(block.code),
-  }));
+  return blocks;
 }
 
 function parseCopyRequest(input?: string): { request?: ParsedCopyRequest; error?: string } {
@@ -412,7 +499,7 @@ function updateCopyCodeStatus(ctx: CopyContext) {
     return;
   }
 
-  const { blocks } = buildSessionCodeBlockSnapshot(ctx);
+  const blocks = SESSION_CODE_BLOCK_STATE.blocks;
   if (blocks.length === 0) {
     ctx.ui.setStatus("copy-code", undefined);
     return;
@@ -459,7 +546,7 @@ function renderCodeBlock(instance: MarkdownInternals, token: MarkdownToken, widt
   const lang = token.lang || undefined;
   const blockIndex = ENHANCE_CONTEXT.active ? Math.max(1, ENHANCE_CONTEXT.currentIndex) : 1;
   if (ENHANCE_CONTEXT.active && ENHANCE_CONTEXT.currentIndex > 0) {
-    ENHANCE_CONTEXT.currentIndex--;
+    ENHANCE_CONTEXT.currentIndex++;
   }
 
   const label = dim(`#${blockIndex}`);
@@ -490,12 +577,22 @@ function renderCodeBlock(instance: MarkdownInternals, token: MarkdownToken, widt
 
 function withEnhancementContext(instance: MarkdownInternals, render: () => string[]): string[] {
   const previous = { ...ENHANCE_CONTEXT };
-  const fallbackBlockCount = countFencedCodeBlocks(instance.text ?? "");
   const assigned = resolveAssignedRenderRange(instance);
+  const fallbackBlockCount = assigned ? 0 : countFencedCodeBlocks(instance.text ?? "");
+  const startIndex = assigned ? assigned.startIndex : 1;
+  const blockCount = assigned?.blockCount ?? fallbackBlockCount;
+  const rangeKey = `${startIndex}:${blockCount}`;
+  const instanceKey = instance as object;
+  const previousRangeKey = MARKDOWN_RENDER_RANGE_KEYS.get(instanceKey);
+
+  if (previousRangeKey !== undefined && previousRangeKey !== rangeKey) {
+    clearMarkdownRenderCache(instance);
+  }
+  MARKDOWN_RENDER_RANGE_KEYS.set(instanceKey, rangeKey);
 
   ENHANCE_CONTEXT.active = true;
-  ENHANCE_CONTEXT.totalBlocks = assigned?.blockCount ?? fallbackBlockCount;
-  ENHANCE_CONTEXT.currentIndex = assigned ? assigned.startIndex + assigned.blockCount - 1 : ENHANCE_CONTEXT.totalBlocks;
+  ENHANCE_CONTEXT.totalBlocks = blockCount;
+  ENHANCE_CONTEXT.currentIndex = startIndex;
 
   try {
     return render();
@@ -525,6 +622,7 @@ export function patchMarkdownCodeBlocks(): boolean {
   }
 
   proto.render = function (width: number): string[] {
+    beginRenderAssignmentPass();
     return withEnhancementContext(this, () => originalRender.call(this, width));
   };
 
@@ -585,7 +683,7 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
     }
 
     const request = parsed.request!;
-    const { blocks } = buildSessionCodeBlockSnapshot(ctx);
+    const blocks = SESSION_CODE_BLOCK_STATE.blocks;
     if (blocks.length === 0) {
       notify(ctx, "No code blocks found in the current session.", "warning");
       return;
@@ -629,6 +727,16 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
       ctx.ui.notify("code-block-enhancer: unsupported pi-tui Markdown internals", "warning");
     }
     rebuildSessionCodeBlockState(ctx);
+    updateCopyCodeStatus(ctx);
+  });
+
+  pi.on("message_end", async (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+
+    const message = event.message as AssistantMessage;
+    if (message.stopReason !== "stop") return;
+
+    rebuildSessionCodeBlockState(ctx, message);
     updateCopyCodeStatus(ctx);
   });
 
