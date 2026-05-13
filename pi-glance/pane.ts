@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 
 type PaneFocus = "categories" | "settings" | "values";
-type CategoryId = "general" | "autoModel" | "permissionGate" | "sandbox" | SegmentId;
+type CategoryId = "general" | "autoModel" | "permissionGate" | SegmentId;
 type Category = { id: CategoryId; label: string };
 type PaneResult = { action: "save"; config: GlanceConfig } | { action: "cancel" };
 type Done = (result: PaneResult) => void;
@@ -254,7 +254,7 @@ function autoModelRuleSummary(directory: string, model: string): string {
 }
 
 function isStaticCategory(id: CategoryId): boolean {
-	return id === "general" || id === "autoModel" || id === "permissionGate" || id === "sandbox";
+	return id === "general" || id === "autoModel" || id === "permissionGate";
 }
 
 class GlanceConfigPane implements Component {
@@ -294,7 +294,7 @@ class GlanceConfigPane implements Component {
 			status: this.status,
 			categories: categories.map((cat, index) => {
 				const segment = isStaticCategory(cat.id) ? undefined : this.draft.segments.find((s) => s.id === cat.id);
-				const enabled = cat.id === "permissionGate" ? this.draft.permissionGate.enabled : cat.id === "sandbox" ? this.draft.sandbox.enabled : segment?.enabled;
+				const enabled = cat.id === "permissionGate" ? this.draft.permissionGate.enabled : segment?.enabled;
 				return {
 					...cat,
 					selected: index === this.catIndex,
@@ -354,7 +354,6 @@ class GlanceConfigPane implements Component {
 			})),
 			{ id: "autoModel", label: "Auto model" },
 			{ id: "permissionGate", label: "Permission Gate" },
-			{ id: "sandbox", label: "Sandbox" },
 		];
 	}
 
@@ -460,11 +459,11 @@ class GlanceConfigPane implements Component {
 	}
 
 	private sandboxRows(): SettingRow[] {
-		return [
-			toggleRow("Enabled", this.draft.sandbox.enabled, "Enable or disable pi-sandbox after saving. --no-sandbox still takes priority.", () => {
+		return this.segmentRows("sandbox", [
+			toggleRow("Runtime enabled", this.draft.sandbox.enabled, "Enable or disable the actual sandbox state after saving. --no-sandbox still takes priority.", () => {
 				this.draft.sandbox.enabled = !this.draft.sandbox.enabled;
 			}),
-		];
+		]);
 	}
 
 	private planRows(): SettingRow[] {

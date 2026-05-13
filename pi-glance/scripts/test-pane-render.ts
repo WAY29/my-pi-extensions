@@ -120,6 +120,7 @@ assertNotContains(initial, "PREVIEW", "preview label should stay removed");
 assertContains(initial, "Enabled", "settings section should render");
 assertContains(initial, "› General", "general category should be selected initially");
 assertContains(initial, "Git", "git category should render");
+assertContains(initial, "Sandbox", "sandbox category should render");
 assertContains(initial, "Tokens", "tokens category should render");
 assertContains(initial, "[←→↑↓] move  ·  [S] save  ·  [R] reset", "stable help shortcuts should stay first");
 assertContains(initial, "[J/K] switch", "category help should describe segment switching");
@@ -162,7 +163,16 @@ assertLineContainsAll(planCategory, ["Enabled", "on"], "plan segment enabled set
 assertLineContainsAll(planCategory, ["Source", "plan-mode"], "plan source info should render");
 assertContains(planCategory, "while plan", "plan visibility hint should render");
 
+const sandboxPane = await makePane();
+press(sandboxPane.component, "\x1b[B");
+press(sandboxPane.component, "\x1b[B");
+press(sandboxPane.component, "\x1b[B");
+const sandboxCategory = plainText(sandboxPane.component);
+assertLineContainsAll(sandboxCategory, ["Enabled", "on"], "sandbox segment enabled setting should render");
+assertLineContainsAll(sandboxCategory, ["Runtime enabled", "on"], "sandbox runtime setting should render");
+
 const contextPane = await makePane();
+press(contextPane.component, "\x1b[B");
 press(contextPane.component, "\x1b[B");
 press(contextPane.component, "\x1b[B");
 press(contextPane.component, "\x1b[B");
@@ -192,6 +202,7 @@ press(costPane.component, "\x1b[B");
 press(costPane.component, "\x1b[B");
 press(costPane.component, "\x1b[B");
 press(costPane.component, "\x1b[B");
+press(costPane.component, "\x1b[B");
 const costCategory = plainText(costPane.component);
 assertContains(costCategory, "Hide zero", "cost category should show cost detail settings");
 assertLineContainsAll(costCategory, ["Hide zero", "off"], "cost hide zero setting should render");
@@ -206,6 +217,7 @@ assertLineContainsAll(costChanged, ["Hide zero", "on"], "enter should toggle cos
 assertContains(costChanged, "Hide until cost is non-zero.", "cost hide zero hint should render");
 
 const tokensPane = await makePane();
+press(tokensPane.component, "\x1b[B");
 press(tokensPane.component, "\x1b[B");
 press(tokensPane.component, "\x1b[B");
 press(tokensPane.component, "\x1b[B");
@@ -229,6 +241,7 @@ assertLineContainsAll(tokensCacheChanged, ["Cache", "show"], "enter should cycle
 assertContains(tokensCacheChanged, "Show or hide cache details.", "tokens cache hint should render");
 
 const modelPane = await makePane();
+press(modelPane.component, "\x1b[B");
 press(modelPane.component, "\x1b[B");
 press(modelPane.component, "\x1b[B");
 press(modelPane.component, "\x1b[B");
@@ -274,7 +287,7 @@ const autoModelConfig = defaultConfig();
 autoModelConfig.autoModel.workspaceModels["/repo"] = "o/gpt5";
 autoModelConfig.autoModel.workspaceModels["/work/api"] = "a/sonnet";
 const autoModelListPane = await makePane(autoModelConfig);
-for (let i = 0; i < 7; i++) press(autoModelListPane.component, "\x1b[B");
+for (let i = 0; i < 8; i++) press(autoModelListPane.component, "\x1b[B");
 const autoModelList = plainText(autoModelListPane.component);
 assertContains(autoModelList, "Auto model", "auto model category should render");
 assertLineContainsAll(autoModelList, ["Add rule", "current cwd"], "auto model add rule should render first");
@@ -284,14 +297,14 @@ assertLineContainsAll(autoModelList, ["Current match", "o/gpt5"], "auto model ru
 assert.ok(autoModelList.indexOf("Add rule") < autoModelList.indexOf("Current cwd"), "auto model metadata should render after the editable rules");
 
 const autoModelFocusPane = await makePane();
-for (let i = 0; i < 7; i++) press(autoModelFocusPane.component, "\x1b[B");
+for (let i = 0; i < 8; i++) press(autoModelFocusPane.component, "\x1b[B");
 press(autoModelFocusPane.component, "\x1b[C");
 assertContains(plainText(autoModelFocusPane.component), "› Add rule", "entering auto model settings should focus Add rule first");
 press(autoModelFocusPane.component, "\x1b[D");
 assertContains(plainText(autoModelFocusPane.component), "› Auto model", "leaving auto model settings should return to the auto model category");
 
 const autoModelAddPane = await makePane();
-for (let i = 0; i < 7; i++) press(autoModelAddPane.component, "\x1b[B");
+for (let i = 0; i < 8; i++) press(autoModelAddPane.component, "\x1b[B");
 press(autoModelAddPane.component, "\x1b[C");
 press(autoModelAddPane.component, "\x1b[C");
 press(autoModelAddPane.component, "\r");
@@ -311,7 +324,7 @@ assert.equal(autoModelAddSave.config?.autoModel.workspaceModels["/repo"], "gpt-5
 const autoModelDeleteConfig = defaultConfig();
 autoModelDeleteConfig.autoModel.workspaceModels["/repo"] = "o/gpt5";
 const autoModelDeletePane = await makePane(autoModelDeleteConfig);
-for (let i = 0; i < 7; i++) press(autoModelDeletePane.component, "\x1b[B");
+for (let i = 0; i < 8; i++) press(autoModelDeletePane.component, "\x1b[B");
 press(autoModelDeletePane.component, "\x1b[C");
 press(autoModelDeletePane.component, "\x1b[B");
 press(autoModelDeletePane.component, "\x1b[C");

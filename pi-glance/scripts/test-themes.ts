@@ -13,7 +13,7 @@ const allThemes = Object.keys(PALETTES).sort();
 assert.deepEqual(allThemes, [...expectedThemes].sort(), "palette keys should match known themes");
 
 function assertSegmentPalette(theme: GlancePalette): void {
-	for (const segment of ["git", "plan", "model", "context", "tokens", "cost"] as const) {
+	for (const segment of ["git", "plan", "sandbox", "model", "context", "tokens", "cost"] as const) {
 		assert.ok(theme.segments[segment], `${theme.name} should define ${segment} segment color`);
 	}
 }

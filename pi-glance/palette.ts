@@ -13,6 +13,7 @@ export const PALETTES: Record<GlanceThemeName, GlancePalette> = {
 		segments: {
 			git: { fg: { r: 35, g: 118, b: 85 } },
 			plan: { fg: { r: 217, g: 119, b: 6 } },
+			sandbox: { fg: { r: 217, g: 119, b: 6 } },
 			model: { fg: { r: 15, g: 23, b: 42 } },
 			context: { fg: { r: 5, g: 150, b: 105 } },
 			tokens: { fg: { r: 100, g: 116, b: 139 } },
@@ -31,6 +32,7 @@ export const PALETTES: Record<GlanceThemeName, GlancePalette> = {
 		segments: {
 			git: { fg: { r: 94, g: 188, b: 145 } },
 			plan: { fg: { r: 251, g: 191, b: 36 } },
+			sandbox: { fg: { r: 251, g: 191, b: 36 } },
 			model: { fg: { r: 229, g: 231, b: 235 } },
 			context: { fg: { r: 52, g: 211, b: 153 } },
 			tokens: { fg: { r: 156, g: 163, b: 175 } },
@@ -49,6 +51,7 @@ export const PALETTES: Record<GlanceThemeName, GlancePalette> = {
 		segments: {
 			git: { fg: { r: 64, g: 160, b: 43 } },
 			plan: { fg: { r: 223, g: 142, b: 29 } },
+			sandbox: { fg: { r: 223, g: 142, b: 29 } },
 			model: { fg: { r: 114, g: 135, b: 253 } },
 			context: { fg: { r: 23, g: 146, b: 153 } },
 			tokens: { fg: { r: 140, g: 143, b: 161 } },
@@ -67,6 +70,7 @@ export const PALETTES: Record<GlanceThemeName, GlancePalette> = {
 		segments: {
 			git: { fg: { r: 166, g: 227, b: 161 } },
 			plan: { fg: { r: 249, g: 226, b: 175 } },
+			sandbox: { fg: { r: 249, g: 226, b: 175 } },
 			model: { fg: { r: 180, g: 190, b: 254 } },
 			context: { fg: { r: 148, g: 226, b: 213 } },
 			tokens: { fg: { r: 127, g: 132, b: 156 } },
@@ -79,6 +83,7 @@ export const ICONS: Record<IconMode, IconSet> = {
 	nerd: {
 		git: "",
 		plan: "󰈙",
+		sandbox: "",
 		model: "󰚩",
 		context: "󰔟",
 		tokens: "󰄨",
@@ -87,6 +92,7 @@ export const ICONS: Record<IconMode, IconSet> = {
 	plain: {
 		git: "git",
 		plan: "plan",
+		sandbox: "sbx",
 		model: "ai",
 		context: "ctx",
 		tokens: "tok",

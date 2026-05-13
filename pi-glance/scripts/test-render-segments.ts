@@ -6,7 +6,7 @@ import { testState } from "./helpers.js";
 import type { GlanceState } from "../types.js";
 
 function line(
-	segmentId: "context" | "cost" | "tokens" | "model" | "plan",
+	segmentId: "context" | "cost" | "tokens" | "model" | "plan" | "sandbox",
 	stateOverrides: Partial<GlanceState> = {},
 	mutateConfig?: (config: ReturnType<typeof defaultConfig>) => void,
 	width = 120,
@@ -20,6 +20,10 @@ function line(
 assert.equal(line("plan"), "", "plan segment hides while plan-mode is idle");
 assert.equal(line("plan", { plan: { enabled: true, executing: false, completed: 0, total: 0 } }), "plan mode", "plan segment shows active plan mode");
 assert.equal(line("plan", { plan: { enabled: false, executing: true, completed: 2, total: 5 } }), "plan exec 2/5", "plan segment shows execution progress");
+
+assert.equal(line("sandbox", { sandbox: { available: true, enabled: true } }), "", "sandbox segment hides while sandbox is enabled");
+assert.equal(line("sandbox", { sandbox: { available: true, enabled: false, reason: "sandbox disabled for this session" } }), "sbx off", "sandbox segment shows when sandbox is disabled");
+assert.equal(line("sandbox", { sandbox: { available: false, enabled: false } }), "", "sandbox segment hides when pi-sandbox is unavailable");
 
 assert.equal(line("context"), "ctx 23% 47k/200k", "context defaults to percent / tokens");
 assert.equal(

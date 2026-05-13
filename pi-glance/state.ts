@@ -27,6 +27,10 @@ export function createInitialState(ctx: ExtensionContext, config: GlanceConfig, 
 			completed: 0,
 			total: 0,
 		},
+		sandbox: {
+			available: false,
+			enabled: false,
+		},
 		context: {
 			tokens: null,
 			window: ctx.model?.contextWindow ?? 0,
@@ -165,6 +169,24 @@ export function setPlanModeSnapshot(state: GlanceState, snapshot: PlanModeSnapsh
 		executing: snapshot.executing,
 		completed,
 		total,
+	};
+	touch(state);
+	return true;
+}
+
+export interface SandboxSnapshot {
+	available: boolean;
+	enabled: boolean;
+	reason?: string;
+}
+
+export function setSandboxSnapshot(state: GlanceState, snapshot: SandboxSnapshot): boolean {
+	const reason = snapshot.reason?.trim() || undefined;
+	if (state.sandbox.available === snapshot.available && state.sandbox.enabled === snapshot.enabled && state.sandbox.reason === reason) return false;
+	state.sandbox = {
+		available: snapshot.available,
+		enabled: snapshot.enabled,
+		reason,
 	};
 	touch(state);
 	return true;

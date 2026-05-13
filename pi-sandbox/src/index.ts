@@ -1139,6 +1139,7 @@ export default function (pi: ExtensionAPI) {
 
   function updateSandboxStatus(ctx: ExtensionContext): void {
     lastStatusContext = ctx;
+    pi.events.emit("pi-sandbox:state", getSandboxState(ctx.cwd));
     if (!sandboxEnabled) {
       ctx.ui.setStatus("sandbox", undefined);
       return;

@@ -64,7 +64,7 @@ That's the only command — opens a calm settings pane with a real input-surface
 | 🖊️ | **Rounded editor** | Configurable 2 / 3 / 4 min rows, preserves all pi defaults |
 | 🏷️ | **Project title** | Current folder name, or a safe `~/...` path when enabled |
 | ✨ | **Session title** | After the first prompt, show a short generated title below the input box |
-| 📊 | **Inline status** | Model · plan mode · context · tokens · cost · Git status — top-right |
+| 📊 | **Inline status** | Model · plan mode · sandbox off · context · tokens · cost · Git status — top-right |
 | ⚙️ | **`/glance` pane** | General settings, segment order, and per-segment detail settings in a calm grid |
 | 💤 | **Dim unfocused** | Surface quiets down when you scroll the chat |
 | 🎨 | **Themes** | `light`, `dark`, `catppuccin-latte`, and `catppuccin-mocha` |
@@ -83,6 +83,7 @@ That's the only command — opens a calm settings pane with a real input-surface
 - **Tokens** — input / output, total, or cache details.
 - **Model** — provider and thinking labels.
 - **Plan** — listens to the local `plan-mode` extension and shows/hides its active or executing state.
+- **Sandbox** — listens to `pi-sandbox` and shows `sbx off` only when sandboxing is available but disabled.
 - **Git** — dirty marker, upstream counts, SHA, and polling.
 
 ## Plan mode integration
@@ -90,6 +91,12 @@ That's the only command — opens a calm settings pane with a real input-surface
 When the local `plan-mode` extension is installed, pi-glance listens for `plan-mode:state` events and shows a Plan segment only while plan mode is active or executing. Open `/glance`, select **Plan**, and toggle `Enabled` to show or hide this segment.
 
 The integration uses pi's extension event bus, so no pi core patches are required.
+
+## Sandbox status
+
+When `pi-sandbox` is installed, pi-glance asks it for the live sandbox state and shows `sbx off` only while sandboxing is available but disabled. The Sandbox segment stays hidden when sandboxing is enabled, or when `pi-sandbox` is not installed.
+
+Open `/glance`, select **Sandbox**, and toggle `Enabled` to show or hide this warning segment. The `Runtime enabled` row controls the actual `pi-sandbox` runtime state after saving.
 
 ## Workspace title
 

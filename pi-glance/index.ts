@@ -15,9 +15,11 @@ import {
 	refreshWorkspace,
 	setGitSnapshot,
 	setPlanModeSnapshot,
+	setSandboxSnapshot,
 	setTitleState,
 	setUsageTotals,
 	type PlanModeSnapshot,
+	type SandboxSnapshot,
 } from "./state.js";
 import { resolveTitleModelSpec, titleModelKey } from "./title-model.js";
 import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_CUSTOM_TYPE } from "./title.js";
@@ -136,14 +138,41 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return responses.length > 0 ? responses[responses.length - 1] : undefined;
 	}
 
+	function sandboxCwd(ctx: ExtensionContext): string {
+		return ctx.sessionManager.getCwd() || ctx.cwd;
+	}
+
+	async function requestSandboxState(ctx: ExtensionContext): Promise<SandboxStateResponse | undefined> {
+		return lastResponse(await emitWithResponses<SandboxStateResponse>("pi-sandbox:request-state", { cwd: sandboxCwd(ctx) }));
+	}
+
+	function sandboxSnapshotFromResponse(response: unknown): SandboxSnapshot {
+		if (!response || typeof response !== "object") return { available: false, enabled: false };
+		const record = response as Record<string, unknown>;
+		if (typeof record.enabled !== "boolean") return { available: false, enabled: false };
+		return {
+			available: record.available !== false,
+			enabled: record.enabled,
+			reason: typeof record.reason === "string" ? record.reason : undefined,
+		};
+	}
+
+	async function refreshSandboxState(ctx: ExtensionContext): Promise<boolean> {
+		if (!state) return false;
+		return setSandboxSnapshot(state, sandboxSnapshotFromResponse(await requestSandboxState(ctx)));
+	}
+
+	function applySandboxState(data: unknown): void {
+		if (state && setSandboxSnapshot(state, sandboxSnapshotFromResponse(data))) renderNow();
+	}
+
 	async function configWithLiveSecurityState(ctx: ExtensionContext, base: GlanceConfig): Promise<GlanceConfig> {
 		const draft = cloneConfig(base);
-		const [permissionGateResponses, sandboxResponses] = await Promise.all([
+		const [permissionGateResponses, sandboxState] = await Promise.all([
 			emitWithResponses<PermissionGateStateResponse>("permission-gate:request-state"),
-			emitWithResponses<SandboxStateResponse>("pi-sandbox:request-state", { cwd: ctx.cwd }),
+			requestSandboxState(ctx),
 		]);
 		const permissionGateState = lastResponse(permissionGateResponses);
-		const sandboxState = lastResponse(sandboxResponses);
 		if (typeof permissionGateState?.enabled === "boolean") {
 			draft.permissionGate.enabled = permissionGateState.enabled;
 		}
@@ -158,7 +187,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 	}
 
 	async function setSandboxEnabled(enabled: boolean, ctx: ExtensionContext): Promise<SandboxSetResponse | undefined> {
-		return lastResponse(await emitWithResponses<SandboxSetResponse>("pi-sandbox:set-enabled", { enabled, cwd: ctx.cwd, ctx }));
+		return lastResponse(await emitWithResponses<SandboxSetResponse>("pi-sandbox:set-enabled", { enabled, cwd: sandboxCwd(ctx), ctx }));
 	}
 
 	type TitleEntryData = StoredTitle;
@@ -515,6 +544,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 	}
 
 	pi.events.on("plan-mode:state", applyPlanModeState);
+	pi.events.on("pi-sandbox:state", applySandboxState);
 
 	pi.registerCommand("glance", {
 		description: "Open pi-glance configuration pane",
@@ -539,6 +569,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 			}
 			if (state) {
 				refreshReliableSnapshot(ctx, { model: true, git: true });
+				await refreshSandboxState(ctx);
 			}
 			installInputSurface(ctx);
 			renderNow();
@@ -556,6 +587,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await restoreTitle(ctx, config);
 		installInputSurface(ctx);
 		await applyConfiguredSecurityState(ctx);
+		await refreshSandboxState(ctx);
+		renderNow();
 		pi.events.emit("plan-mode:request-state", { from: "pi-glance" });
 	});
 
@@ -574,6 +607,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx, { model: true, git: true });
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 
@@ -588,6 +622,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx, { model: true });
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 
@@ -595,6 +630,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx, { git: true });
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 
@@ -602,6 +638,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx, { model: true, git: true });
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 
@@ -612,6 +649,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		refreshModel(state!, ctx, getConfig(), pi.getThinkingLevel());
 		setUsageTotals(state!, computeUsageTotals(ctx));
 		clearContextUsage(state!, ctx);
+		await refreshSandboxState(ctx);
 		scheduleGitRefresh(true);
 		renderNow();
 	});
@@ -621,6 +659,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		ensureState(ctx);
 		if (event.message.role === "assistant") {
 			refreshReliableSnapshot(ctx);
+			await refreshSandboxState(ctx);
 			renderNow();
 		}
 	});
@@ -629,6 +668,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx);
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 
@@ -636,6 +676,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx);
+		await refreshSandboxState(ctx);
 		renderNow();
 	});
 }

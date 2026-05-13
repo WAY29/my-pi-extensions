@@ -144,6 +144,22 @@ const SEGMENTS: SegmentDefinition[] = [
 		},
 	},
 	{
+		id: "sandbox",
+		label: "Sandbox",
+		collect(ctx) {
+			const sandbox = ctx.state.sandbox;
+			if (!sandbox.available || sandbox.enabled) return undefined;
+			return {
+				primary: "off",
+				display: {
+					full: "off",
+					compact: "off",
+					minimal: "off",
+				},
+			};
+		},
+	},
+	{
 		id: "model",
 		label: "Model",
 		collect(ctx) {

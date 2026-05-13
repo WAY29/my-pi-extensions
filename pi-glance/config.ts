@@ -23,6 +23,7 @@ const CONFIG_VERSION = 3 as const;
 const DEFAULT_SEGMENTS: SegmentConfig[] = [
 	{ id: "git", enabled: true },
 	{ id: "plan", enabled: true },
+	{ id: "sandbox", enabled: true },
 	{ id: "context", enabled: true },
 	{ id: "cost", enabled: true },
 	{ id: "tokens", enabled: false },
@@ -131,6 +132,15 @@ function parseIntAtLeast(value: unknown, fallback: number, min: number): number 
 	return Math.max(min, Math.floor(value));
 }
 
+function insertMissingSegment(ordered: SegmentConfig[], byId: Map<SegmentId, SegmentConfig>, id: SegmentId, afterId: SegmentId): void {
+	if (ordered.some((s) => s.id === id)) return;
+	const segment = byId.get(id);
+	if (!segment) return;
+	const afterIndex = ordered.findIndex((s) => s.id === afterId);
+	if (afterIndex >= 0) ordered.splice(afterIndex + 1, 0, segment);
+	else ordered.push(segment);
+}
+
 function normalizeSegments(value: unknown): SegmentConfig[] {
 	const defaults = DEFAULT_SEGMENTS.map((s) => ({ ...s }));
 	const byId = new Map<SegmentId, SegmentConfig>(defaults.map((s) => [s.id, s]));
@@ -154,11 +164,8 @@ function normalizeSegments(value: unknown): SegmentConfig[] {
 
 	if (!ordered.some((s) => s.id === "git")) return defaults;
 
-	if (!ordered.some((s) => s.id === "plan")) {
-		const planSegment = byId.get("plan");
-		const gitIndex = ordered.findIndex((s) => s.id === "git");
-		if (planSegment) ordered.splice(gitIndex + 1, 0, planSegment);
-	}
+	insertMissingSegment(ordered, byId, "plan", "git");
+	insertMissingSegment(ordered, byId, "sandbox", "plan");
 
 	for (const segment of defaults) {
 		if (!ordered.some((s) => s.id === segment.id)) ordered.push(byId.get(segment.id)!);

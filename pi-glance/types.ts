@@ -1,4 +1,4 @@
-export type SegmentId = "git" | "plan" | "model" | "context" | "tokens" | "cost";
+export type SegmentId = "git" | "plan" | "sandbox" | "model" | "context" | "tokens" | "cost";
 export type GlanceThemeName = "light" | "dark" | "catppuccin-latte" | "catppuccin-mocha";
 export type IconMode = "nerd" | "plain";
 export type WidthMode = "full" | "compact" | "minimal";
@@ -134,6 +134,11 @@ export interface GlanceState {
 		executing: boolean;
 		completed: number;
 		total: number;
+	};
+	sandbox: {
+		available: boolean;
+		enabled: boolean;
+		reason?: string;
 	};
 	context: {
 		tokens: number | null;

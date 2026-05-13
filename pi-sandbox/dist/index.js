@@ -9414,6 +9414,7 @@ function index_default(pi) {
   }
   function updateSandboxStatus(ctx) {
     lastStatusContext = ctx;
+    pi.events.emit("pi-sandbox:state", getSandboxState(ctx.cwd));
     if (!sandboxEnabled) {
       ctx.ui.setStatus("sandbox", void 0);
       return;
