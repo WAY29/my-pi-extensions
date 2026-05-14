@@ -19,15 +19,17 @@ const WRAPPER_NAME = "sudo";
 const ASKPASS_NAME = "askpass";
 const ASKPASS_CLIENT_NAME = "askpass-client.cjs";
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const EXEC_ID_BYTES = 16;
 
 const AUTH_FAILURE_PATTERN =
-  /(Sorry, try again|incorrect password attempt|no password was provided|authentication failed|a password is required|askpass)/i;
+  /(Sorry, try again|incorrect password attempts?|no password was provided|authentication failed|a password is required)/i;
 
 type AuthResult = { ok: true } | { ok: false; reason: string };
 type SudoCredential = { password: string };
 
 type AskpassRequest = {
   token?: string;
+  execId?: string;
   invocationId?: string;
   mode?: "askpass" | "preprompt";
   prompt?: string;
@@ -45,6 +47,10 @@ type SudoAuthRuntime = {
 type SandboxStateResponse = {
   available: true;
   enabled: boolean;
+};
+
+type ExecAuthState = {
+  sawSudoAuth: boolean;
 };
 
 function shellSingleQuote(value: string): string {
@@ -189,6 +195,10 @@ function readAskpassRequest(socket: Socket): Promise<AskpassRequest | undefined>
 
       const lines = buffer.split("\n");
       if (lines.length < 4) return;
+      if (lines.length >= 6 && (lines[3] === "askpass" || lines[3] === "preprompt")) {
+        finish({ token: lines[0], execId: lines[1], invocationId: lines[2], mode: lines[3], prompt: lines[4] });
+        return;
+      }
       if (lines.length >= 5 && (lines[2] === "askpass" || lines[2] === "preprompt")) {
         finish({ token: lines[0], invocationId: lines[1], mode: lines[2], prompt: lines[3] });
         return;
@@ -220,6 +230,7 @@ function createAskpassClientSource(useShebang: boolean): string {
   return `${shebang}const net = require("node:net");
 const socketPath = process.env.PI_SUDO_AUTH_SOCKET;
 const token = process.env.PI_SUDO_AUTH_TOKEN;
+const execId = process.env.PI_SUDO_AUTH_EXEC_ID || "";
 const invocationId = process.env.PI_SUDO_AUTH_INVOCATION_ID || "unknown";
 const mode = process.env.PI_SUDO_AUTH_MODE || "askpass";
 const prompt = process.argv.slice(2).join(" ");
@@ -232,7 +243,7 @@ const client = net.createConnection(socketPath);
 const timeout = setTimeout(fail, ${REQUEST_TIMEOUT_MS});
 
 client.on("connect", () => {
-  client.write(token + "\\n" + invocationId + "\\n" + mode + "\\n" + prompt + "\\n");
+  client.write(token + "\\n" + execId + "\\n" + invocationId + "\\n" + mode + "\\n" + prompt + "\\n");
 });
 
 client.on("data", (chunk) => {
@@ -309,7 +320,11 @@ exec ${shellSingleQuote(process.execPath)} ${shellSingleQuote(clientPath)} "$@"
 `;
 }
 
-function injectSudoAuthEnv(env: NodeJS.ProcessEnv | undefined, runtime: SudoAuthRuntime): NodeJS.ProcessEnv {
+function injectSudoAuthEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  runtime: SudoAuthRuntime,
+  execId: string,
+): NodeJS.ProcessEnv {
   const base = env ?? process.env;
   return {
     ...base,
@@ -317,6 +332,7 @@ function injectSudoAuthEnv(env: NodeJS.ProcessEnv | undefined, runtime: SudoAuth
     SUDO_ASKPASS: runtime.askpassPath,
     PI_SUDO_AUTH_SOCKET: runtime.socketPath,
     PI_SUDO_AUTH_TOKEN: runtime.token,
+    PI_SUDO_AUTH_EXEC_ID: execId,
   };
 }
 
@@ -350,6 +366,7 @@ export default function sudoAuth(pi: ExtensionAPI) {
   let runtimePromise: Promise<SudoAuthRuntime> | undefined;
   let runtime: SudoAuthRuntime | undefined;
   const invocationAttempts = new Map<string, number>();
+  const activeExecs = new Map<string, ExecAuthState>();
 
   const updateStatus = (ctx = lastStatusContext) => {
     ctx?.ui.setStatus(STATUS_KEY, credential ? "sudo: password cached" : undefined);
@@ -393,6 +410,9 @@ export default function sudoAuth(pi: ExtensionAPI) {
 
   const handleAskpassRequest = async (request: AskpassRequest): Promise<string | undefined> => {
     if (!runtime || request.token !== runtime.token) return undefined;
+
+    const execState = request.execId ? activeExecs.get(request.execId) : undefined;
+    if (execState) execState.sawSudoAuth = true;
 
     const ctx = lastStatusContext;
     if (!ctx) return undefined;
@@ -468,6 +488,9 @@ export default function sudoAuth(pi: ExtensionAPI) {
   const createSudoAuthOperations = (next: BashOperations): BashOperations => ({
     async exec(command, cwd, options) {
       const activeRuntime = await ensureRuntime();
+      const execId = randomBytes(EXEC_ID_BYTES).toString("hex");
+      const execState: ExecAuthState = { sawSudoAuth: false };
+      activeExecs.set(execId, execState);
       let sawAuthFailure = false;
       const onData = (data: Buffer) => {
         const text = data.toString("utf8");
@@ -478,14 +501,16 @@ export default function sudoAuth(pi: ExtensionAPI) {
       try {
         const result = await next.exec(command, cwd, {
           ...options,
-          env: injectSudoAuthEnv(options.env, activeRuntime),
+          env: injectSudoAuthEnv(options.env, activeRuntime, execId),
           onData,
         });
-        if (sawAuthFailure) clearCredential(true);
+        if (result.exitCode !== 0 && execState.sawSudoAuth && sawAuthFailure) clearCredential(true);
         return result;
       } catch (error) {
-        if (sawAuthFailure) clearCredential(true);
+        if (execState.sawSudoAuth && sawAuthFailure) clearCredential(true);
         throw error;
+      } finally {
+        activeExecs.delete(execId);
       }
     },
   });
@@ -525,6 +550,7 @@ export default function sudoAuth(pi: ExtensionAPI) {
     credential = undefined;
     pendingAuthentication = undefined;
     invocationAttempts.clear();
+    activeExecs.clear();
     ctx.ui.setStatus(STATUS_KEY, undefined);
     lastStatusContext = undefined;
 
