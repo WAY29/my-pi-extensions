@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -225,6 +225,150 @@ async function testCleanupMissingSyntheticWorkspaces(core, root) {
   }
 }
 
+async function testCleanupMissingSyntheticWorkspacesDoesNotInvokeGit(core, root) {
+  await mkdir(root, { recursive: true });
+  const originalHome = process.env.HOME;
+  const originalPath = process.env.PATH;
+  process.env.HOME = root;
+  const now = Date.now();
+  const worktree = join(root, "existing-worktree");
+  const storage = join(root, ".pi", "agent", "pi-rewind", "workspaces", "existing");
+  const fakeBin = join(root, "fake-bin");
+  const gitLog = join(root, "git-calls.log");
+  try {
+    await mkdir(worktree, { recursive: true });
+    await mkdir(join(storage, ".git", "refs", "pi-checkpoints"), { recursive: true });
+    await writeFile(join(storage, "metadata.json"), JSON.stringify({
+      worktreePath: worktree,
+      gitDir: join(storage, ".git"),
+      createdAt: new Date(now - 1000).toISOString(),
+      lastUsedAt: new Date(now - 1000).toISOString(),
+    }), "utf8");
+
+    await mkdir(fakeBin, { recursive: true });
+    const fakeGit = join(fakeBin, "git");
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(gitLog)}\nexit 1\n`, "utf8");
+    await chmod(fakeGit, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${originalPath || ""}`;
+
+    await core.cleanupMissingSyntheticWorkspaces(24 * 60 * 60 * 1000, now);
+    const calls = existsSync(gitLog) ? await readFile(gitLog, "utf8") : "";
+    assert.equal(calls, "", "startup missing-workspace cleanup must not inspect checkpoint refs with git");
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
+async function testLoadAllCheckpointsUsesBulkGit(core, root) {
+  await mkdir(root, { recursive: true });
+  const originalHome = process.env.HOME;
+  const originalPath = process.env.PATH;
+  process.env.HOME = root;
+  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  assert.ok(realGit, "real git executable should be discoverable");
+
+  let synthetic = null;
+  const fakeBin = join(root, "fake-bin");
+  const gitLog = join(root, "git-calls.log");
+  try {
+    const worktree = join(root, "worktree");
+    await mkdir(worktree, { recursive: true });
+    await writeFile(join(worktree, "a.txt"), "one\n", "utf8");
+    synthetic = await core.initSyntheticGitRepo(worktree);
+
+    for (let i = 0; i < 3; i++) {
+      await core.createCheckpoint({
+        root: synthetic.root,
+        gitDir: synthetic.gitDir,
+        id: `bulk-load-cp${i}`,
+        sessionId: "bulk-load-session",
+        trigger: "tool",
+        turnIndex: i,
+      });
+    }
+
+    await mkdir(fakeBin, { recursive: true });
+    const fakeGit = join(fakeBin, "git");
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(gitLog)}\nexec ${JSON.stringify(realGit)} "$@"\n`, "utf8");
+    await chmod(fakeGit, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${originalPath || ""}`;
+
+    const loaded = await core.loadAllCheckpoints(synthetic.root, undefined, synthetic.gitDir);
+    assert.equal(loaded.length, 3, "all checkpoints should still load");
+
+    const calls = (await readFile(gitLog, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(
+      calls.some((line) => line.includes("rev-parse --verify") || line.includes("cat-file commit")),
+      false,
+      "loadAllCheckpoints must not spawn per-ref rev-parse/cat-file commands",
+    );
+    assert.ok(calls.length <= 1, `loadAllCheckpoints should use one bulk git command, got ${calls.length}: ${calls.join(" | ")}`);
+  } finally {
+    if (synthetic) await rm(synthetic.storageDir, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
+async function testPruneWorkspaceCheckpointsDeletesInBulk(core, root) {
+  await mkdir(root, { recursive: true });
+  const originalHome = process.env.HOME;
+  const originalPath = process.env.PATH;
+  process.env.HOME = root;
+  const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  assert.ok(realGit, "real git executable should be discoverable");
+
+  let synthetic = null;
+  const fakeBin = join(root, "fake-bin");
+  const gitLog = join(root, "git-calls.log");
+  try {
+    const worktree = join(root, "worktree");
+    await mkdir(worktree, { recursive: true });
+    await writeFile(join(worktree, "a.txt"), "one\n", "utf8");
+    synthetic = await core.initSyntheticGitRepo(worktree);
+
+    for (let i = 0; i < 4; i++) {
+      await core.createCheckpoint({
+        root: synthetic.root,
+        gitDir: synthetic.gitDir,
+        id: `bulk-prune-cp${i}`,
+        sessionId: "bulk-prune-session",
+        trigger: "tool",
+        turnIndex: i,
+      });
+    }
+
+    await mkdir(fakeBin, { recursive: true });
+    const fakeGit = join(fakeBin, "git");
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(gitLog)}\nexec ${JSON.stringify(realGit)} "$@"\n`, "utf8");
+    await chmod(fakeGit, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${originalPath || ""}`;
+
+    const pruned = await core.pruneWorkspaceCheckpoints(synthetic.root, 1, synthetic.gitDir);
+    assert.equal(pruned, 3, "workspace prune should delete all but the newest checkpoint");
+
+    const calls = (await readFile(gitLog, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(
+      calls.some((line) => line.includes("update-ref -d")),
+      false,
+      "workspace prune must not spawn one update-ref process per checkpoint",
+    );
+    assert.equal(calls.filter((line) => line.includes("update-ref --stdin")).length, 1, "workspace prune should delete refs with one bulk update-ref");
+    assert.ok(calls.length <= 2, `workspace prune should use at most two git commands, got ${calls.length}: ${calls.join(" | ")}`);
+  } finally {
+    if (synthetic) await rm(synthetic.storageDir, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
 async function testCleanAllSyntheticWorkspaces(core, root) {
   await mkdir(root, { recursive: true });
   const originalHome = process.env.HOME;
@@ -268,10 +412,18 @@ async function testCleanAllSyntheticWorkspaces(core, root) {
 
 async function testCommandSourceDoesNotUseMissingStateRoot() {
   const commands = await readFile(join(repoDir, "commands.ts"), "utf8");
+  const index = await readFile(join(repoDir, "index.ts"), "utf8");
+  const state = await readFile(join(repoDir, "state.ts"), "utf8");
   assert.equal(commands.includes("state.root"), false, "/rewind branch display should not reference missing state.root");
   assert.equal(commands.includes("rewind:clean:dryrun"), true, "dry-run cleanup command should be registered");
   assert.equal(commands.includes("rewind:clean:workspace"), true, "workspace cleanup command should be registered");
   assert.equal(commands.includes("rewind:clean:all"), true, "global cleanup command should be registered");
+  assert.equal(state.includes("checkpointPageSize: 50"), true, "checkpoint browser should keep loading 50 checkpoints per page");
+  assert.equal(commands.includes("loadCheckpointPage"), true, "checkpoint browser should keep lazy-loading checkpoint pages");
+  assert.equal(commands.includes("await ensureInitialCheckpointPage(state);"), true, "rewind commands and shortcuts should load checkpoints on first use");
+  assert.equal(index.includes("loadAllCheckpoints"), false, "session startup must not load all checkpoints");
+  assert.equal(index.includes("loadCheckpointPage"), false, "session startup must not load checkpoint pages");
+  assert.equal(index.includes("listCheckpointRefs"), false, "session startup must not list checkpoint refs");
 }
 
 async function main() {
@@ -283,6 +435,9 @@ async function main() {
     await testSyntheticRepo(core, join(tempRoot, "plain"));
     await testSyntheticStorageInsideWorktree(core, join(tempRoot, "home-worktree"));
     await testCleanupMissingSyntheticWorkspaces(core, join(tempRoot, "cleanup-home"));
+    await testCleanupMissingSyntheticWorkspacesDoesNotInvokeGit(core, join(tempRoot, "cleanup-no-git-home"));
+    await testLoadAllCheckpointsUsesBulkGit(core, join(tempRoot, "bulk-load-home"));
+    await testPruneWorkspaceCheckpointsDeletesInBulk(core, join(tempRoot, "bulk-prune-home"));
     await testCleanAllSyntheticWorkspaces(core, join(tempRoot, "clean-all-home"));
     await testCommandSourceDoesNotUseMissingStateRoot();
     console.log("pi-rewind core tests passed");

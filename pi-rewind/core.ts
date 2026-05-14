@@ -116,6 +116,11 @@ export interface SyntheticWorkspaceInfo {
   checkpointCount: number;
 }
 
+export interface SyntheticWorkspaceListOptions {
+  includeSizeBytes?: boolean;
+  includeCheckpointCount?: boolean;
+}
+
 export interface MissingWorkspaceCleanupResult {
   deleted: SyntheticWorkspaceInfo[];
   skipped: SyntheticWorkspaceInfo[];
@@ -305,11 +310,14 @@ function directorySizeBytes(path: string): number {
   return total;
 }
 
-async function readSyntheticWorkspace(storageDir: string): Promise<SyntheticWorkspaceInfo> {
+async function readSyntheticWorkspace(
+  storageDir: string,
+  options: SyntheticWorkspaceListOptions = {},
+): Promise<SyntheticWorkspaceInfo> {
   const key = storageDir.split(/[/\\]/).filter(Boolean).pop() || "unknown";
   const metadataPath = join(storageDir, "metadata.json");
   const fallbackGitDir = join(storageDir, ".git");
-  const sizeBytes = directorySizeBytes(storageDir);
+  const sizeBytes = options.includeSizeBytes ? directorySizeBytes(storageDir) : 0;
 
   let metadata: SyntheticWorkspaceMetadata | undefined;
   try {
@@ -340,11 +348,13 @@ async function readSyntheticWorkspace(storageDir: string): Promise<SyntheticWork
   const worktreeExists = pathExists(metadata.worktreePath);
   const lastUsedAtMs = parseTimeMs(metadata.lastUsedAt) || parseTimeMs(metadata.createdAt);
   let checkpointCount = 0;
-  try {
-    const gitRoot = worktreeExists ? metadata.worktreePath : storageDir;
-    checkpointCount = (await loadAllCheckpoints(gitRoot, undefined, metadata.gitDir)).length;
-  } catch {
-    checkpointCount = 0;
+  if (options.includeCheckpointCount) {
+    try {
+      const gitRoot = worktreeExists ? metadata.worktreePath : storageDir;
+      checkpointCount = (await listCheckpointRefs(gitRoot, metadata.gitDir)).length;
+    } catch {
+      checkpointCount = 0;
+    }
   }
 
   return {
@@ -362,7 +372,9 @@ async function readSyntheticWorkspace(storageDir: string): Promise<SyntheticWork
   };
 }
 
-export async function listSyntheticWorkspaces(): Promise<SyntheticWorkspaceInfo[]> {
+export async function listSyntheticWorkspaces(
+  options: SyntheticWorkspaceListOptions = {},
+): Promise<SyntheticWorkspaceInfo[]> {
   const root = getSyntheticWorkspacesDir();
   let entries: FsDirentLike[] = [];
   try {
@@ -374,7 +386,7 @@ export async function listSyntheticWorkspaces(): Promise<SyntheticWorkspaceInfo[
   const workspaces: SyntheticWorkspaceInfo[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    workspaces.push(await readSyntheticWorkspace(join(root, entry.name)));
+    workspaces.push(await readSyntheticWorkspace(join(root, entry.name), options));
   }
   return workspaces;
 }
@@ -397,9 +409,11 @@ export async function cleanupMissingSyntheticWorkspaces(
       skipped.push(workspace);
       continue;
     }
+    const sizeBytes = directorySizeBytes(workspace.storageDir);
+    const deletedWorkspace = { ...workspace, sizeBytes };
     await rm(workspace.storageDir, { recursive: true, force: true });
-    deleted.push(workspace);
-    bytesFreed += workspace.sizeBytes;
+    deleted.push(deletedWorkspace);
+    bytesFreed += sizeBytes;
   }
 
   return { deleted, skipped, bytesFreed };
@@ -918,6 +932,23 @@ export async function listCheckpointRefsByRecency(
   }
 }
 
+function parseCheckpointForEachRefOutput(out: string, sessionId?: string): CheckpointData[] {
+  const prefix = `${REF_BASE}/`;
+  const parts = out.split("\0");
+  const results: CheckpointData[] = [];
+
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const fullRef = parts[i].replace(/^\n+/, "").trim();
+    const msg = parts[i + 1];
+    if (!fullRef.startsWith(prefix)) continue;
+    const refName = fullRef.slice(prefix.length);
+    const cp = parseCheckpointMessage(refName, msg);
+    if (cp && (!sessionId || cp.sessionId === sessionId)) results.push(cp);
+  }
+
+  return results;
+}
+
 /** Load a checkpoint page from a precomputed ref-name list. */
 export async function loadCheckpointPage(
   root: string,
@@ -930,19 +961,7 @@ export async function loadCheckpointPage(
     const prefix = `${REF_BASE}/`;
     const patterns = refs.map((r) => `${prefix}${r}`).join(" ");
     const out = await git(`for-each-ref --sort=-creatordate --format=%(refname)%00%(contents)%00 ${patterns}`, root, { gitDir });
-    const parts = out.split("\0");
-    const results: CheckpointData[] = [];
-
-    for (let i = 0; i + 1 < parts.length; i += 2) {
-      const fullRef = parts[i].replace(/^\n+/, "").trim();
-      const msg = parts[i + 1];
-      if (!fullRef.startsWith(prefix)) continue;
-      const refName = fullRef.slice(prefix.length);
-      const cp = parseCheckpointMessage(refName, msg);
-      if (cp && (!sessionId || cp.sessionId === sessionId)) results.push(cp);
-    }
-
-    return results;
+    return parseCheckpointForEachRefOutput(out, sessionId);
   } catch {
     return [];
   }
@@ -954,17 +973,29 @@ export async function loadAllCheckpoints(
   sessionId?: string,
   gitDir?: string | null,
 ): Promise<CheckpointData[]> {
-  const refs = await listCheckpointRefs(root, gitDir);
-  const results = await Promise.all(refs.map((r) => loadCheckpointFromRef(root, r, gitDir)));
-  return results.filter(
-    (cp): cp is CheckpointData =>
-      cp !== null && (!sessionId || cp.sessionId === sessionId),
-  );
+  try {
+    const prefix = `${REF_BASE}/`;
+    const out = await git(`for-each-ref --sort=-creatordate --format=%(refname)%00%(contents)%00 ${prefix}`, root, { gitDir });
+    return parseCheckpointForEachRefOutput(out, sessionId);
+  } catch {
+    return [];
+  }
+}
+
+async function deleteCheckpointRefs(
+  root: string,
+  ids: string[],
+  gitDir?: string | null,
+): Promise<void> {
+  const uniqueIds = [...new Set(ids)].filter(Boolean);
+  if (uniqueIds.length === 0) return;
+  const input = uniqueIds.map((id) => `delete ${REF_BASE}/${id}`).join("\n") + "\n";
+  await runGit(["update-ref", "--stdin"], root, { input, gitDir }).catch(() => {});
 }
 
 /** Delete a checkpoint ref */
 export async function deleteCheckpoint(root: string, id: string, gitDir?: string | null): Promise<void> {
-  await git(`update-ref -d ${REF_BASE}/${id}`, root, { gitDir }).catch(() => {});
+  await deleteCheckpointRefs(root, [id], gitDir);
 }
 
 /** Prune oldest checkpoints for a session, keeping at most `max` */
@@ -983,9 +1014,7 @@ export async function pruneCheckpoints(
   if (prunable.length <= max) return 0;
 
   const toDelete = prunable.slice(0, prunable.length - max);
-  for (const cp of toDelete) {
-    await deleteCheckpoint(root, cp.id, gitDir);
-  }
+  await deleteCheckpointRefs(root, toDelete.map((cp) => cp.id), gitDir);
   return toDelete.length;
 }
 
@@ -1000,9 +1029,7 @@ export async function pruneWorkspaceCheckpoints(
   if (all.length <= max) return 0;
 
   const toDelete = all.slice(0, all.length - max);
-  for (const cp of toDelete) {
-    await deleteCheckpoint(root, cp.id, gitDir);
-  }
+  await deleteCheckpointRefs(root, toDelete.map((cp) => cp.id), gitDir);
   return toDelete.length;
 }
 
@@ -1020,10 +1047,10 @@ export async function cleanWorkspaceCheckpoints(
   gitDir?: string | null,
   max: number = DEFAULT_MAX_CHECKPOINTS,
 ): Promise<WorkspaceCleanupResult> {
-  const checkpointCountBefore = (await loadAllCheckpoints(root, undefined, gitDir)).length;
+  const checkpointCountBefore = (await listCheckpointRefs(root, gitDir)).length;
   const pruned = await pruneWorkspaceCheckpoints(root, max, gitDir);
   const gc = await runCheckpointGc(root, gitDir);
-  const checkpointCountAfter = (await loadAllCheckpoints(root, undefined, gitDir)).length;
+  const checkpointCountAfter = (await listCheckpointRefs(root, gitDir)).length;
   return { checkpointCountBefore, checkpointCountAfter, pruned, gc };
 }
 
@@ -1042,9 +1069,11 @@ export async function cleanAllSyntheticWorkspaces(
     }
 
     if (!workspace.worktreeExists) {
+      const sizeBytes = directorySizeBytes(workspace.storageDir);
+      const deletedWorkspace = { ...workspace, sizeBytes };
       await rm(workspace.storageDir, { recursive: true, force: true });
-      deletedMissing.push(workspace);
-      bytesFreed += workspace.sizeBytes;
+      deletedMissing.push(deletedWorkspace);
+      bytesFreed += sizeBytes;
       continue;
     }
 
@@ -1100,11 +1129,8 @@ export async function pruneOldSessions(
       ? sessionRefs.slice(0, Math.max(0, sessionRefs.length - keepPerOldSession))
       : sessionRefs;
 
-    for (const ref of toDelete) {
-      const id = ref.replace("refs/pi-checkpoints/", "");
-      await deleteCheckpoint(root, id, gitDir).catch(() => {});
-      deleted++;
-    }
+    await deleteCheckpointRefs(root, toDelete, gitDir);
+    deleted += toDelete.length;
   }
 
   return deleted;

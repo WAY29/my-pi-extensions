@@ -17,6 +17,7 @@ import {
   cleanAllSyntheticWorkspaces,
   cleanWorkspaceCheckpoints,
   listSyntheticWorkspaces,
+  listCheckpointRefs,
   listCheckpointRefsByRecency,
   loadCheckpointPage,
   loadAllCheckpoints,
@@ -436,7 +437,7 @@ async function buildCleanupDryRun(state: RewindState): Promise<string> {
   const lines: string[] = ["pi-rewind cleanup preview", ""];
 
   if (state.repoRoot) {
-    const checkpointCount = (await loadAllCheckpoints(state.repoRoot, undefined, state.gitDir).catch(() => [])).length;
+    const checkpointCount = (await listCheckpointRefs(state.repoRoot, state.gitDir).catch(() => [])).length;
     const wouldPrune = Math.max(0, checkpointCount - DEFAULT_MAX_CHECKPOINTS);
     lines.push("Current workspace:");
     lines.push(`  path: ${state.repoRoot}`);
@@ -447,7 +448,7 @@ async function buildCleanupDryRun(state: RewindState): Promise<string> {
     lines.push("Current workspace: unavailable");
   }
 
-  const workspaces = await listSyntheticWorkspaces();
+  const workspaces = await listSyntheticWorkspaces({ includeSizeBytes: true });
   const missing = workspaces.filter((w) => w.valid && !w.worktreeExists);
   const existing = workspaces.filter((w) => w.valid && w.worktreeExists);
   const invalid = workspaces.filter((w) => !w.valid);
@@ -552,6 +553,9 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
         ctx.ui.notify("Rewind not available (checkpoint storage unavailable or no session)", "warning");
         return;
       }
+
+      if (state.pending) await state.pending;
+      await ensureInitialCheckpointPage(state);
 
       const checkpoints = [...state.checkpoints.values()]
         .sort((a, b) => b.timestamp - a.timestamp)
