@@ -131,7 +131,7 @@ For rule editing:
 
 - Step 1 asks for the path and defaults to the current workspace for new rules.
 - Step 2 asks for the model. You can enter either `provider/model` or a bare `model` name.
-- Bare model names reuse the current active provider, like the title model setting.
+- Bare model names prefer a configured model id across available providers; use `provider/model` to disambiguate.
 - Relative paths resolve from the current workspace while editing in `/glance`.
 
 On `session_start`, pi-glance checks the exact session cwd, switches to the configured model when a rule matches, and shows a notification. If no rule matches, pi keeps the default model.

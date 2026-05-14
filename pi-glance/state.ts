@@ -2,7 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { displayDirectory, shortenModel } from "./format.js";
 import { emptyGitSnapshot } from "./git.js";
-import type { GitSnapshot, GlanceConfig, GlanceState, TitleSource, UsageTotals } from "./types.js";
+import type { GitSnapshot, GlanceConfig, GlanceState, GoalSnapshot, TitleSource, UsageTotals } from "./types.js";
 
 export function createInitialState(ctx: ExtensionContext, config: GlanceConfig, thinkingLevel: string): GlanceState {
 	const cwd = ctx.sessionManager.getCwd() || ctx.cwd;
@@ -31,6 +31,7 @@ export function createInitialState(ctx: ExtensionContext, config: GlanceConfig, 
 			available: false,
 			enabled: false,
 		},
+		goal: null,
 		context: {
 			tokens: null,
 			window: ctx.model?.contextWindow ?? 0,
@@ -188,6 +189,39 @@ export function setSandboxSnapshot(state: GlanceState, snapshot: SandboxSnapshot
 		enabled: snapshot.enabled,
 		reason,
 	};
+	touch(state);
+	return true;
+}
+
+function normalizeGoalSnapshot(snapshot: GoalSnapshot | null): GoalSnapshot | null {
+	if (!snapshot) return null;
+	return {
+		id: snapshot.id,
+		objective: snapshot.objective.trim(),
+		status: snapshot.status,
+		timeUsedSeconds: Math.max(0, Math.floor(snapshot.timeUsedSeconds || 0)),
+		activeTurnStartedAt: typeof snapshot.activeTurnStartedAt === "number" ? snapshot.activeTurnStartedAt : null,
+		updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
+	};
+}
+
+function goalSnapshotsEqual(a: GoalSnapshot | null, b: GoalSnapshot | null): boolean {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	return (
+		a.id === b.id &&
+		a.objective === b.objective &&
+		a.status === b.status &&
+		a.timeUsedSeconds === b.timeUsedSeconds &&
+		(a.activeTurnStartedAt ?? null) === (b.activeTurnStartedAt ?? null) &&
+		a.updatedAt === b.updatedAt
+	);
+}
+
+export function setGoalSnapshot(state: GlanceState, snapshot: GoalSnapshot | null): boolean {
+	const next = normalizeGoalSnapshot(snapshot);
+	if (goalSnapshotsEqual(state.goal, next)) return false;
+	state.goal = next;
 	touch(state);
 	return true;
 }

@@ -150,6 +150,7 @@ export function renderInputSurfacePreview(config: GlanceConfig, width: number, o
 		model: { id: "claude-sonnet-4-20250514", provider: "anthropic", displayName: "Sonnet 4", thinking: "high" },
 		plan: { enabled: true, executing: false, completed: 0, total: 0 },
 		sandbox: { available: true, enabled: false, reason: "sandbox disabled for preview" },
+		goal: null,
 		context: { tokens: 46_800, window: 200_000, percent: 23.4 },
 		usage: { input: 12_400, output: 3_100, cacheRead: 800, cacheWrite: 0, cost: 0.042 },
 		title: { text: null, generating: false },

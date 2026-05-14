@@ -14,6 +14,7 @@ import {
 	refreshModel,
 	refreshWorkspace,
 	setGitSnapshot,
+	setGoalSnapshot,
 	setPlanModeSnapshot,
 	setSandboxSnapshot,
 	setTitleState,
@@ -21,10 +22,10 @@ import {
 	type PlanModeSnapshot,
 	type SandboxSnapshot,
 } from "./state.js";
-import { resolveTitleModelSpec, titleModelKey } from "./title-model.js";
+import { resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
 import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_CUSTOM_TYPE } from "./title.js";
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
-import type { GlanceConfig, GlanceState } from "./types.js";
+import type { GlanceConfig, GlanceState, GoalSnapshot, GoalStatus } from "./types.js";
 
 type PermissionGateStateResponse = {
 	available?: boolean;
@@ -62,6 +63,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 	let gitRefresher: GitRefresher | undefined;
 	let requestRender: (() => void) | undefined;
 	let pendingPlanModeState: PlanModeSnapshot | undefined;
+	let pendingGoalState: GoalSnapshot | null | undefined;
 	let titleAbort: AbortController | undefined;
 	let titleGenerationId = 0;
 
@@ -79,6 +81,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (!state) {
 			state = createInitialState(ctx, getConfig(), pi.getThinkingLevel());
 			if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
+			if (pendingGoalState !== undefined) setGoalSnapshot(state, pendingGoalState);
 		}
 		return state;
 	}
@@ -120,6 +123,35 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (!snapshot) return;
 		pendingPlanModeState = snapshot;
 		if (state && setPlanModeSnapshot(state, snapshot)) renderNow();
+	}
+
+	const GOAL_STATUSES = new Set<GoalStatus>(["active", "paused", "budget_limited", "complete"]);
+
+	function parseGoalState(data: unknown): GoalSnapshot | null | undefined {
+		if (!data || typeof data !== "object") return undefined;
+		const record = data as Record<string, unknown>;
+		if (record.statusBarEnabled === false) return null;
+		const rawGoal = "goal" in record ? record.goal : data;
+		if (rawGoal === null) return null;
+		if (!rawGoal || typeof rawGoal !== "object") return undefined;
+		const goalRecord = rawGoal as Record<string, unknown>;
+		if (typeof goalRecord.id !== "string" || typeof goalRecord.objective !== "string") return undefined;
+		if (typeof goalRecord.status !== "string" || !GOAL_STATUSES.has(goalRecord.status as GoalStatus)) return undefined;
+		return {
+			id: goalRecord.id,
+			objective: goalRecord.objective,
+			status: goalRecord.status as GoalStatus,
+			timeUsedSeconds: typeof goalRecord.timeUsedSeconds === "number" ? goalRecord.timeUsedSeconds : 0,
+			activeTurnStartedAt: typeof goalRecord.activeTurnStartedAt === "number" ? goalRecord.activeTurnStartedAt : null,
+			updatedAt: typeof goalRecord.updatedAt === "number" ? goalRecord.updatedAt : undefined,
+		};
+	}
+
+	function applyGoalState(data: unknown): void {
+		const snapshot = parseGoalState(data);
+		if (snapshot === undefined) return;
+		pendingGoalState = snapshot;
+		if (state && setGoalSnapshot(state, snapshot)) renderNow();
 	}
 
 	async function emitWithResponses<T>(channel: string, payload: Record<string, unknown> = {}): Promise<T[]> {
@@ -300,6 +332,10 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return resolveTitleModelSpec(ctx.modelRegistry, ctx.model, spec);
 	}
 
+	function resolveWorkspaceAutoModel(ctx: ExtensionContext, spec: string): Model<Api> | undefined {
+		return resolveAutoModelSpec(ctx.modelRegistry, ctx.model, spec);
+	}
+
 	function findLastAutoModelEntry(ctx: ExtensionContext): AutoModelEntryData | undefined {
 		for (let i = ctx.sessionManager.getBranch().length - 1; i >= 0; i--) {
 			const entry = ctx.sessionManager.getBranch()[i];
@@ -329,7 +365,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const model = resolveTitleModel(ctx, modelSpec);
+		const model = resolveWorkspaceAutoModel(ctx, modelSpec);
 		if (!model) {
 			if (ctx.hasUI) ctx.ui.notify(`Auto model could not resolve \"${modelSpec}\".`, "warning");
 			return;
@@ -523,7 +559,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		clearBridge();
 		ctx.ui.setFooter((tui, _theme, footerData) => {
 			requestRender = () => tui.requestRender();
-			footerBridge = new GlanceFooterBridge(() => state ?? ensureState(ctx), footerData);
+			footerBridge = new GlanceFooterBridge(() => state ?? ensureState(ctx), () => getConfig(), footerData, requestRender);
 			return footerBridge;
 		});
 
@@ -544,6 +580,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 	}
 
 	pi.events.on("plan-mode:state", applyPlanModeState);
+	pi.events.on("pi-goal:state", applyGoalState);
 	pi.events.on("pi-sandbox:state", applySandboxState);
 
 	pi.registerCommand("glance", {
@@ -582,8 +619,11 @@ export default function piGlance(pi: ExtensionAPI): void {
 		config = await loadConfig();
 		state = createInitialState(ctx, config, pi.getThinkingLevel());
 		if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
+		if (pendingGoalState !== undefined) setGoalSnapshot(state, pendingGoalState);
 		await applyWorkspaceAutoModel(ctx);
 		refreshModel(state, ctx, getConfig(), pi.getThinkingLevel());
+		const goalState = lastResponse(await emitWithResponses<unknown>("pi-goal:request-state", { from: "pi-glance" }));
+		if (goalState !== undefined) applyGoalState(goalState);
 		await restoreTitle(ctx, config);
 		installInputSurface(ctx);
 		await applyConfiguredSecurityState(ctx);

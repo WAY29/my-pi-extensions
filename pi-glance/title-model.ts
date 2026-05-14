@@ -63,3 +63,26 @@ export function resolveTitleModelSpec(
 
 	return findByModelId(registry.getAvailable(), trimmed) ?? findByModelId(registry.getAll(), trimmed);
 }
+
+export function resolveAutoModelSpec(
+	registry: TitleModelRegistry,
+	currentModel: Model<Api> | undefined,
+	spec: string,
+): Model<Api> | undefined {
+	const trimmed = spec.trim();
+	if (!trimmed) return undefined;
+
+	const slash = trimmed.indexOf("/");
+	if (slash >= 0) {
+		const provider = trimmed.slice(0, slash).trim();
+		const modelId = trimmed.slice(slash + 1).trim();
+		if (!provider || !modelId) return undefined;
+		return registry.find(provider, modelId) ?? synthesizeProviderModel(registry, provider, modelId);
+	}
+
+	return (
+		findByModelId(registry.getAvailable(), trimmed) ??
+		findByModelId(registry.getAll(), trimmed) ??
+		(currentModel ? cloneForModelId(currentModel, trimmed) : undefined)
+	);
+}

@@ -11,6 +11,16 @@ export type TokensCacheMode = "auto" | "show" | "hide";
 export type ModelThinkingMode = "auto" | "always" | "never";
 export type WorkspaceLabelMode = "name" | "smart" | "path";
 export type TitleSource = "fallback" | "llm";
+export type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
+
+export interface GoalSnapshot {
+	id: string;
+	objective: string;
+	status: GoalStatus;
+	timeUsedSeconds: number;
+	activeTurnStartedAt?: number | null;
+	updatedAt?: number;
+}
 
 export interface SegmentConfig {
 	id: SegmentId;
@@ -44,6 +54,10 @@ interface SandboxConfig {
 	enabled: boolean;
 }
 
+interface GoalConfig {
+	enabled: boolean;
+}
+
 export interface GitConfig {
 	showDirty: boolean;
 	showAheadBehind: boolean;
@@ -68,7 +82,7 @@ interface TokensConfig {
 }
 
 export interface GlanceConfig {
-	version: 3;
+	version: 4;
 	enabled: boolean;
 	theme: GlanceThemeName;
 	icons: IconMode;
@@ -78,6 +92,7 @@ export interface GlanceConfig {
 	autoModel: AutoModelConfig;
 	permissionGate: PermissionGateConfig;
 	sandbox: SandboxConfig;
+	goal: GoalConfig;
 	segments: SegmentConfig[];
 	model: {
 		customNames: Record<string, string>;
@@ -140,6 +155,7 @@ export interface GlanceState {
 		enabled: boolean;
 		reason?: string;
 	};
+	goal: GoalSnapshot | null;
 	context: {
 		tokens: number | null;
 		window: number;

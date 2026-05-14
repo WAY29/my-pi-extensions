@@ -410,6 +410,9 @@ class GlanceConfigPane implements Component {
 			inputRow("Title model", this.draft.title.model, "Use model or provider/model. Empty uses local fallback.", (value) => {
 				this.draft.title.model = value.trim();
 			}),
+			toggleRow("Goal footer", this.draft.goal.enabled, "Show the active pi-goal objective below the input box.", () => {
+				this.draft.goal.enabled = !this.draft.goal.enabled;
+			}),
 		];
 	}
 
@@ -420,7 +423,7 @@ class GlanceConfigPane implements Component {
 			inputRow(
 				"Add rule",
 				this.currentWorkspacePath ? "current cwd" : "",
-				"Press Enter to edit the path first, then the model. Bare model names use the current provider.",
+				"Press Enter to edit the path first, then the model. Bare model names prefer a configured model id; use provider/model to disambiguate.",
 				(value) => this.beginAutoModelRuleEdit("Add rule", undefined, value),
 				"new",
 				this.currentWorkspacePath,
@@ -430,7 +433,7 @@ class GlanceConfigPane implements Component {
 				return inputRow(
 					`Rule ${index + 1}`,
 					autoModelRuleSummary(rule.directory, rule.model),
-					`Edit ${fullRule}. First update the path, then the model. Clear the path to delete this rule. Bare model names use the current provider.`,
+					`Edit ${fullRule}. First update the path, then the model. Clear the path to delete this rule. Bare model names prefer a configured model id; use provider/model to disambiguate.`,
 					(value) => this.beginAutoModelRuleEdit(`Rule ${index + 1}`, rule.directory, value),
 					"delete",
 					rule.directory,
@@ -560,14 +563,13 @@ class GlanceConfigPane implements Component {
 		}
 
 		const currentModel = previousDirectory ? this.draft.autoModel.workspaceModels[previousDirectory] ?? "" : "";
-		const provider = this.previewState?.model.provider || "the current provider";
 		this.editing = {
 			label: `${label} model`,
 			value: currentModel,
 			emptyValue: "model",
 			apply: (modelValue) => this.finishAutoModelRuleEdit(previousDirectory, directory, modelValue),
 		};
-		this.status = `Editing ${label} model. Use model or provider/model. Bare models use ${provider}.`;
+		this.status = `Editing ${label} model. Use model or provider/model. Bare models prefer a configured model id.`;
 		return false;
 	}
 

@@ -18,7 +18,7 @@ import type {
 } from "./types.js";
 
 const CONFIG_PATH = join(getAgentDir(), "pi-glance", "config.json");
-const CONFIG_VERSION = 3 as const;
+const CONFIG_VERSION = 4 as const;
 
 const DEFAULT_SEGMENTS: SegmentConfig[] = [
 	{ id: "git", enabled: true },
@@ -64,6 +64,9 @@ export function defaultConfig(): GlanceConfig {
 		sandbox: {
 			enabled: true,
 		},
+		goal: {
+			enabled: true,
+		},
 		display: {
 			adaptive: true,
 			showProvider: "auto",
@@ -105,6 +108,7 @@ export function cloneConfig(config: GlanceConfig): GlanceConfig {
 		autoModel: { workspaceModels: { ...config.autoModel.workspaceModels } },
 		permissionGate: { ...config.permissionGate },
 		sandbox: { ...config.sandbox },
+		goal: { ...config.goal },
 		segments: config.segments.map((s) => ({ ...s })),
 		model: { customNames: { ...config.model.customNames }, showThinking: config.model.showThinking },
 		git: { ...config.git },
@@ -183,6 +187,7 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 	const autoModel = record.autoModel && typeof record.autoModel === "object" ? (record.autoModel as Record<string, unknown>) : {};
 	const permissionGate = record.permissionGate && typeof record.permissionGate === "object" ? (record.permissionGate as Record<string, unknown>) : {};
 	const sandbox = record.sandbox && typeof record.sandbox === "object" ? (record.sandbox as Record<string, unknown>) : {};
+	const goal = record.goal && typeof record.goal === "object" ? (record.goal as Record<string, unknown>) : {};
 	const display = record.display && typeof record.display === "object" ? (record.display as Record<string, unknown>) : {};
 	const model = record.model && typeof record.model === "object" ? (record.model as Record<string, unknown>) : {};
 	const git = record.git && typeof record.git === "object" ? (record.git as Record<string, unknown>) : {};
@@ -210,6 +215,9 @@ function normalizeConfig(raw: unknown): GlanceConfig {
 		},
 		sandbox: {
 			enabled: parseBool(sandbox.enabled, defaults.sandbox.enabled),
+		},
+		goal: {
+			enabled: parseBool(goal.enabled, defaults.goal.enabled),
 		},
 		display: {
 			adaptive: parseBool(display.adaptive, defaults.display.adaptive),

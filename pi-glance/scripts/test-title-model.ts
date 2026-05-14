@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
+import { resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
 
 function model(provider: string, id: string, name = id): Model<Api> {
 	return {
@@ -60,6 +60,13 @@ const synthesizedCurrentProviderTitle = resolveTitleModelSpec(registry, anthropi
 assert.equal(synthesizedCurrentProviderTitle?.provider, "anthropic", "bare title model specs should stay on the current provider");
 assert.equal(synthesizedCurrentProviderTitle?.id, "gpt-5.2", "bare title model specs should keep the requested model id");
 assert.equal(synthesizedCurrentProviderTitle?.baseUrl, anthropicCurrent.baseUrl, "synthesized title models should reuse current provider routing");
+
+const autoBareRegisteredModel = resolveAutoModelSpec(registry, anthropicCurrent, "gpt-5.2");
+assert.equal(autoBareRegisteredModel, openaiTitle, "bare auto model specs should switch to the configured provider for a registered model id");
+
+const autoBareUnknownModel = resolveAutoModelSpec(registry, anthropicCurrent, "unlisted-model");
+assert.equal(autoBareUnknownModel?.provider, "anthropic", "unknown bare auto model specs should still fall back to the current provider template");
+assert.equal(autoBareUnknownModel?.id, "unlisted-model", "unknown bare auto model specs should keep the requested model id");
 
 const synthesizedExplicitProviderTitle = resolveTitleModelSpec(registry, anthropicCurrent, "local/gpt-5.2");
 assert.equal(synthesizedExplicitProviderTitle?.provider, "local", "provider/model specs should use the explicit provider");

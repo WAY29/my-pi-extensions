@@ -358,6 +358,19 @@ assert.equal(titleSave.action, "save", "title config pane should save");
 assert.equal(titleSave.config?.title.enabled, false, "saved config should include title enabled toggle");
 assert.equal(titleSave.config?.title.model, "internal/gpt-4o-mini", "saved config should include edited title model");
 
+const goalFooterPane = await makePane();
+press(goalFooterPane.component, "\x1b[C");
+for (let i = 0; i < 8; i++) press(goalFooterPane.component, "\x1b[B");
+assertLineContainsAll(plainText(goalFooterPane.component), ["Goal footer", "on"], "goal footer setting should render");
+assertContains(plainText(goalFooterPane.component), "active pi-goal objective", "goal footer hint should render");
+press(goalFooterPane.component, "\x1b[C");
+press(goalFooterPane.component, "\r");
+assertLineContainsAll(plainText(goalFooterPane.component), ["Goal footer", "off"], "enter should toggle goal footer rendering");
+press(goalFooterPane.component, kittyKey("s"));
+const goalFooterSave = goalFooterPane.done() as { action?: string; config?: GlanceConfig };
+assert.equal(goalFooterSave.action, "save", "goal footer config pane should save");
+assert.equal(goalFooterSave.config?.goal.enabled, false, "saved config should include goal footer toggle");
+
 const kittyShortcutPane = await makePane();
 press(kittyShortcutPane.component, "\x1b[B");
 press(kittyShortcutPane.component, kittyKey("j"));
