@@ -117,6 +117,8 @@ Open `/glance`, select **General**, and configure:
 
 When `Title model` is empty, pi-glance uses a local fallback from the first prompt. If the configured model is unavailable, unauthenticated, times out, or returns an invalid title, pi-glance falls back quietly. Fallback titles are upgraded on the next turn when you later configure a title model. Generated titles are stored in `~/.pi/agent/pi-glance/title.json` keyed by session and restored on reload/resume.
 
+When `Title enabled` is on, pi-glance also mirrors the current session title into pi's session display name, so `/resume` and `pi -r` show that title instead of the raw first prompt. Existing manual session names are preserved unless they still match the last title previously written by pi-glance.
+
 ## Workspace auto model
 
 Open `/glance`, select **Auto model**, and manage the rules directly in the pane.

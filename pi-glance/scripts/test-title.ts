@@ -3,7 +3,14 @@ import { visibleWidth } from "@mariozechner/pi-tui";
 import { defaultConfig } from "../config.js";
 import { stripControls } from "../format.js";
 import { renderInputSurface } from "../renderer.js";
-import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_MAX_WIDTH } from "../title.js";
+import {
+	fallbackTitleFromPrompt,
+	resolveSessionNameUpdate,
+	sanitizeGeneratedTitle,
+	shouldGenerateTitle,
+	shouldSetFallbackTitle,
+	TITLE_MAX_WIDTH,
+} from "../title.js";
 import { testState } from "./helpers.js";
 
 const config = defaultConfig();
@@ -57,6 +64,57 @@ assert.equal(
 	shouldGenerateTitle({ text: "AI title", generating: false, source: "llm", model: "openai/gpt-5.2" }, "anthropic/claude-sonnet-4"),
 	false,
 	"existing AI titles should not be replaced just because the configured title model changes",
+);
+
+assert.deepEqual(
+	resolveSessionNameUpdate({ enabled: true, currentSessionName: undefined, previousTitle: null, nextTitle: "Fix login flow" }),
+	{ action: "set", name: "Fix login flow" },
+	"empty session names should adopt a generated fallback or LLM title",
+);
+assert.deepEqual(
+	resolveSessionNameUpdate({ enabled: true, currentSessionName: "Fix login flow", previousTitle: null, nextTitle: "Refactor auth module" }),
+	{ action: "noop" },
+	"existing manual session names should not be overwritten by pi-glance titles",
+);
+assert.deepEqual(
+	resolveSessionNameUpdate({
+		enabled: true,
+		currentSessionName: "Fix login flow",
+		previousTitle: "Fix login flow",
+		nextTitle: "Refactor auth module",
+	}),
+	{ action: "set", name: "Refactor auth module" },
+	"session names previously managed by pi-glance should upgrade from fallback to later LLM titles",
+);
+assert.deepEqual(
+	resolveSessionNameUpdate({
+		enabled: false,
+		currentSessionName: "Refactor auth module",
+		previousTitle: "Refactor auth module",
+		nextTitle: "Refactor auth module",
+	}),
+	{ action: "clear" },
+	"disabling titles should clear session names only when pi-glance currently owns them",
+);
+assert.deepEqual(
+	resolveSessionNameUpdate({
+		enabled: false,
+		currentSessionName: "Manual name",
+		previousTitle: "Refactor auth module",
+		nextTitle: "Refactor auth module",
+	}),
+	{ action: "noop" },
+	"disabling titles should preserve unrelated manual session names",
+);
+assert.deepEqual(
+	resolveSessionNameUpdate({
+		enabled: true,
+		currentSessionName: "Refactor auth module",
+		previousTitle: "Fix login flow",
+		nextTitle: "Refactor auth module",
+	}),
+	{ action: "noop" },
+	"session names already equal to the target title should not be rewritten",
 );
 
 console.log("✓ title rendering and normalization checks passed");

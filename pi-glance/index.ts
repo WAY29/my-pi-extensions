@@ -23,7 +23,14 @@ import {
 	type SandboxSnapshot,
 } from "./state.js";
 import { resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
-import { fallbackTitleFromPrompt, sanitizeGeneratedTitle, shouldGenerateTitle, shouldSetFallbackTitle, TITLE_CUSTOM_TYPE } from "./title.js";
+import {
+	fallbackTitleFromPrompt,
+	resolveSessionNameUpdate,
+	sanitizeGeneratedTitle,
+	shouldGenerateTitle,
+	shouldSetFallbackTitle,
+	TITLE_CUSTOM_TYPE,
+} from "./title.js";
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
 import type { GlanceConfig, GlanceState, GoalSnapshot, GoalStatus } from "./types.js";
 
@@ -274,10 +281,33 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return { ...title, text };
 	}
 
+	function applySessionNameTitleSync(
+		ctx: ExtensionContext,
+		previousTitle: string | null | undefined,
+		nextTitle: string | null | undefined,
+		enabled: boolean,
+	): void {
+		const update = resolveSessionNameUpdate({
+			enabled,
+			currentSessionName: ctx.sessionManager.getSessionName(),
+			previousTitle,
+			nextTitle,
+		});
+		if (update.action === "set") pi.setSessionName(update.name);
+		else if (update.action === "clear") pi.setSessionName("");
+	}
+
+	function syncSessionNameToCurrentTitle(ctx: ExtensionContext, enabled: boolean): void {
+		if (!state) return;
+		applySessionNameTitleSync(ctx, state.title.text, state.title.text, enabled);
+	}
+
 	function persistTitle(ctx: ExtensionContext, text: string, source: "fallback" | "llm", prompt: string, model?: Model<Api>, attemptedModel?: string): void {
 		if (!state) return;
+		const previousTitle = state.title.text;
 		const modelKey = model ? titleModelKey(model) : attemptedModel;
 		if (setTitleState(state, { text, generating: false, source, prompt, model: modelKey })) renderNow();
+		applySessionNameTitleSync(ctx, previousTitle, text, getConfig().title.enabled);
 		void saveStoredTitle(titleStoreKey(ctx), {
 			text,
 			source,
@@ -290,8 +320,10 @@ export default function piGlance(pi: ExtensionAPI): void {
 		if (!state) return;
 		const stored = await loadStoredTitle(titleStoreKey(ctx));
 		if (stored) {
+			const previousTitle = state.title.text;
 			const title = normalizePersistedTitle(stored);
 			setTitleState(state, { text: title.text, generating: false, source: title.source, prompt: title.prompt, model: title.model });
+			applySessionNameTitleSync(ctx, previousTitle, title.text, config.title.enabled);
 			if (title.text !== stored.text) void saveStoredTitle(titleStoreKey(ctx), title).catch(() => {});
 			const prompt = title.prompt ?? findFirstUserPrompt(ctx);
 			if (prompt) maybeStartTitleGeneration(prompt, ctx);
@@ -300,8 +332,10 @@ export default function piGlance(pi: ExtensionAPI): void {
 
 		const legacy = findLegacyPersistedTitle(ctx);
 		if (legacy) {
+			const previousTitle = state.title.text;
 			const title = normalizePersistedTitle(legacy);
 			setTitleState(state, { text: title.text, generating: false, source: title.source, prompt: title.prompt, model: title.model });
+			applySessionNameTitleSync(ctx, previousTitle, title.text, config.title.enabled);
 			void saveStoredTitle(titleStoreKey(ctx), title).catch(() => {});
 			const prompt = title.prompt ?? findFirstUserPrompt(ctx);
 			if (prompt) maybeStartTitleGeneration(prompt, ctx);
@@ -604,6 +638,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 				if (prompt) maybeStartTitleGeneration(prompt, ctx);
 				else if (!state.title.text && !state.title.generating) await restoreTitle(ctx, config);
 			}
+			if (state) syncSessionNameToCurrentTitle(ctx, config.title.enabled);
 			if (state) {
 				refreshReliableSnapshot(ctx, { model: true, git: true });
 				await refreshSandboxState(ctx);
@@ -625,6 +660,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		const goalState = lastResponse(await emitWithResponses<unknown>("pi-goal:request-state", { from: "pi-glance" }));
 		if (goalState !== undefined) applyGoalState(goalState);
 		await restoreTitle(ctx, config);
+		syncSessionNameToCurrentTitle(ctx, config.title.enabled);
 		installInputSurface(ctx);
 		await applyConfiguredSecurityState(ctx);
 		await refreshSandboxState(ctx);

@@ -44,6 +44,35 @@ export function fallbackTitleFromPrompt(prompt: string): string {
 	return sanitizeGeneratedTitle(prompt, "New chat");
 }
 
+export type SessionNameUpdate = { action: "noop" } | { action: "clear" } | { action: "set"; name: string };
+
+function normalizeSessionName(value: string | null | undefined): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+export function resolveSessionNameUpdate(options: {
+	enabled: boolean;
+	currentSessionName?: string | null;
+	previousTitle?: string | null;
+	nextTitle?: string | null;
+}): SessionNameUpdate {
+	const currentSessionName = normalizeSessionName(options.currentSessionName);
+	const previousTitle = normalizeSessionName(options.previousTitle);
+	const nextTitle = normalizeSessionName(options.nextTitle);
+
+	if (!options.enabled) {
+		if (currentSessionName && previousTitle && currentSessionName === previousTitle) return { action: "clear" };
+		return { action: "noop" };
+	}
+
+	if (!nextTitle || currentSessionName === nextTitle) return { action: "noop" };
+	if (!currentSessionName) return { action: "set", name: nextTitle };
+	if (previousTitle && currentSessionName === previousTitle) return { action: "set", name: nextTitle };
+	return { action: "noop" };
+}
+
 export function shouldSetFallbackTitle(title: { text: string | null; generating: boolean }): boolean {
 	return !title.generating && !title.text;
 }
