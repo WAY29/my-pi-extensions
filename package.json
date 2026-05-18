@@ -26,6 +26,7 @@
       "./code-block-enhancer.ts",
       "./effort.ts",
       "./hide-read-output.ts",
+      "./image-gen.ts",
       "./keydump.ts",
       "./permission-gate.ts",
       "./path-autocomplete-normalizer.ts",

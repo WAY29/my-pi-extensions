@@ -54,6 +54,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
 | `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
+| `image-gen.ts` | 图片工具 | `image_gen` | 为 pi 增加一个 OpenAI 兼容的位图图片生成/编辑工具。支持纯 prompt 生成、工作区路径图片编辑、最近附图回退，以及当当前 relay 无法提供原生透明图时通过本地 chroma-key 抠图得到透明输出。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
 | `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
 | `path-autocomplete-normalizer.ts` | 自动补全 patch | 自动 | 规范化部分文件补全流程产生的重复 `/./` 路径片段。 |
