@@ -617,7 +617,7 @@ export function patchMarkdownCodeBlocks(): boolean {
   const originalRenderToken = proto.renderToken;
   const originalRenderListItem = proto.renderListItem;
 
-  if (typeof originalRender !== "function" || typeof originalRenderToken !== "function" || typeof originalRenderListItem !== "function") {
+  if (typeof originalRender !== "function" || typeof originalRenderToken !== "function") {
     return false;
   }
 
@@ -641,21 +641,26 @@ export function patchMarkdownCodeBlocks(): boolean {
     }
   };
 
-  proto.renderListItem = function (tokens: MarkdownToken[], parentDepth: number, styleContext?: unknown): string[] {
-    const lines: string[] = [];
+  // pi-tui <= older versions rendered list items through renderListItem().
+  // Newer versions render list item tokens via renderToken() inside renderList(),
+  // so the renderToken patch above is already enough and no extra hook exists.
+  if (typeof originalRenderListItem === "function") {
+    proto.renderListItem = function (tokens: MarkdownToken[], parentDepth: number, styleContext?: unknown): string[] {
+      const lines: string[] = [];
 
-    for (const token of tokens) {
-      if (token.type === "code") {
-        const listCodeWidth = Math.max(4, (ENHANCE_CONTEXT.currentWidth ?? 80) - 2);
-        lines.push(...renderCodeBlock(this, token, listCodeWidth));
-        continue;
+      for (const token of tokens) {
+        if (token.type === "code") {
+          const listCodeWidth = Math.max(4, (ENHANCE_CONTEXT.currentWidth ?? 80) - 2);
+          lines.push(...renderCodeBlock(this, token, listCodeWidth));
+          continue;
+        }
+
+        lines.push(...originalRenderListItem.call(this, [token], parentDepth, styleContext));
       }
 
-      lines.push(...originalRenderListItem.call(this, [token], parentDepth, styleContext));
-    }
-
-    return lines;
-  };
+      return lines;
+    };
+  }
 
   proto[PATCHED] = true;
   proto[LEGACY_HIDE_PATCHED] = true;
