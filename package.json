@@ -39,7 +39,8 @@
       "./pi-goal/index.ts",
       "./pi-rewind/index.ts",
       "./pi-sandbox/index.ts",
-      "./plan-mode/index.ts"
+      "./plan-mode/index.ts",
+      "./review/index.ts"
     ]
   },
   "peerDependencies": {

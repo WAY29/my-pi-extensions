@@ -68,6 +68,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
+| `review/` | review workflow | `/review` | Runs an isolated Codex-style code review session with preset target pickers, main-thread live rendering for tool/assistant activity, resumable interrupted reviews, and follow-up actions to resolve all or selected findings. |
 
 ## Extension Relationships
 

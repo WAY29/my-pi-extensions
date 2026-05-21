@@ -68,6 +68,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
+| `review/` | 评审工作流 | `/review` | 启动一个隔离的 Codex 风格代码评审会话，支持预设目标选择、主线程实时工具/assistant 渲染、可恢复的中断评审，以及一键解决全部或选定 findings 的后续动作。 |
 
 ## 扩展之间的关系
 
