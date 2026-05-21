@@ -735,6 +735,14 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
     updateCopyCodeStatus(ctx);
   });
 
+  pi.on("message_update", async (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+
+    const message = event.message as AssistantMessage;
+    rebuildSessionCodeBlockState(ctx, message);
+    updateCopyCodeStatus(ctx);
+  });
+
   pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "assistant") return;
 
