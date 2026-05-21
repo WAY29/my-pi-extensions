@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const extensionConfig = {
@@ -13,6 +13,7 @@ const extensionConfig = {
 const shortcutHint = formatShortcutHint(extensionConfig.shortcut);
 const PATCHED = Symbol.for("pi.code-block-enhancer.patched");
 const LEGACY_HIDE_PATCHED = Symbol.for("pi.hide-code-fence-markers.patched");
+const ASSISTANT_MESSAGE_PATCHED = Symbol.for("pi.code-block-enhancer.assistant-message-patched");
 const ENHANCE_CONTEXT: EnhancementContext = {
   active: false,
   currentIndex: 0,
@@ -78,9 +79,15 @@ interface RenderAssignment {
   startIndex: number;
 }
 
+interface MessageContentAssignment extends RenderAssignment {
+  text: string;
+}
+
 interface CodeBlockSnapshot {
   blocks: CodeBlock[];
   assignmentsByText: Map<string, RenderAssignment[]>;
+  messageAssignmentsByKey: Map<string, MessageContentAssignment[]>;
+  messageAssignmentsByRef: WeakMap<AssistantMessage, MessageContentAssignment[]>;
 }
 
 interface AssignedRenderRange extends RenderAssignment {
@@ -95,8 +102,11 @@ const SESSION_CODE_BLOCK_STATE: SessionCodeBlockState = {
   version: 0,
   blocks: [],
   assignmentsByText: new Map(),
+  messageAssignmentsByKey: new Map(),
+  messageAssignmentsByRef: new WeakMap(),
 };
 const MARKDOWN_RENDER_ASSIGNMENTS = new WeakMap<object, AssignedRenderRange>();
+const DIRECT_MARKDOWN_RENDER_ASSIGNMENTS = new WeakMap<object, AssignedRenderRange>();
 const MARKDOWN_RENDER_RANGE_KEYS = new WeakMap<object, string>();
 const CLAIMED_RENDER_ASSIGNMENTS = new Set<string>();
 let renderAssignmentPassActive = false;
@@ -129,12 +139,12 @@ function appendTextCodeBlocks(
   blocks: CodeBlock[],
   assignmentsByText: Map<string, RenderAssignment[]>,
   nextIndex: number,
-): number {
+): { nextIndex: number; assignment?: MessageContentAssignment } {
   const text = normalizeMarkdownText(rawText);
-  if (!text) return nextIndex;
+  if (!text) return { nextIndex };
 
   const extracted = extractCodeBlocks(text);
-  if (extracted.length === 0) return nextIndex;
+  if (extracted.length === 0) return { nextIndex };
 
   const startIndex = nextIndex;
   for (const block of extracted) {
@@ -144,17 +154,18 @@ function appendTextCodeBlocks(
     });
   }
 
-  const assignment: RenderAssignment = {
+  const assignment: MessageContentAssignment = {
     id: `block-range-${startIndex}`,
     startIndex,
     blockCount: extracted.length,
+    text,
   };
 
   const existing = assignmentsByText.get(text);
   if (existing) existing.push(assignment);
   else assignmentsByText.set(text, [assignment]);
 
-  return nextIndex;
+  return { nextIndex, assignment };
 }
 
 function shouldAppendLiveAssistantMessage(ctx: Pick<CopyContext, "sessionManager">, message: AssistantMessage): boolean {
@@ -168,35 +179,51 @@ function shouldAppendLiveAssistantMessage(ctx: Pick<CopyContext, "sessionManager
   });
 }
 
+function getAssistantMessageKey(message: AssistantMessage): string {
+  return `${message.timestamp}:${getAssistantText(message)}`;
+}
+
 function buildSessionCodeBlockSnapshot(
   ctx: Pick<CopyContext, "sessionManager">,
   liveAssistantMessage?: AssistantMessage,
 ): CodeBlockSnapshot {
   const assignmentsByText = new Map<string, RenderAssignment[]>();
+  const messageAssignmentsByKey = new Map<string, MessageContentAssignment[]>();
+  const messageAssignmentsByRef = new WeakMap<AssistantMessage, MessageContentAssignment[]>();
   const blocks: CodeBlock[] = [];
   const branch = ctx.sessionManager.getBranch();
   let nextIndex = 1;
+
+  const appendMessageAssignments = (message: AssistantMessage) => {
+    const messageAssignments: MessageContentAssignment[] = [];
+
+    for (const content of message.content) {
+      if (content.type !== "text") continue;
+      const result = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
+      nextIndex = result.nextIndex;
+      if (result.assignment) messageAssignments.push(result.assignment);
+    }
+
+    if (messageAssignments.length === 0) return;
+
+    const key = getAssistantMessageKey(message);
+    messageAssignmentsByKey.set(key, messageAssignments);
+    messageAssignmentsByRef.set(message, messageAssignments);
+  };
 
   for (const entry of branch) {
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 
     const message = entry.message as AssistantMessage;
     if (message.stopReason !== "stop") continue;
-
-    for (const content of message.content) {
-      if (content.type !== "text") continue;
-      nextIndex = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
-    }
+    appendMessageAssignments(message);
   }
 
   if (liveAssistantMessage && shouldAppendLiveAssistantMessage(ctx, liveAssistantMessage)) {
-    for (const content of liveAssistantMessage.content) {
-      if (content.type !== "text") continue;
-      nextIndex = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
-    }
+    appendMessageAssignments(liveAssistantMessage);
   }
 
-  return { blocks, assignmentsByText };
+  return { blocks, assignmentsByText, messageAssignmentsByKey, messageAssignmentsByRef };
 }
 
 function rebuildSessionCodeBlockState(ctx: Pick<CopyContext, "sessionManager">, liveAssistantMessage?: AssistantMessage): void {
@@ -204,6 +231,8 @@ function rebuildSessionCodeBlockState(ctx: Pick<CopyContext, "sessionManager">, 
   SESSION_CODE_BLOCK_STATE.version++;
   SESSION_CODE_BLOCK_STATE.blocks = snapshot.blocks;
   SESSION_CODE_BLOCK_STATE.assignmentsByText = snapshot.assignmentsByText;
+  SESSION_CODE_BLOCK_STATE.messageAssignmentsByKey = snapshot.messageAssignmentsByKey;
+  SESSION_CODE_BLOCK_STATE.messageAssignmentsByRef = snapshot.messageAssignmentsByRef;
   CLAIMED_RENDER_ASSIGNMENTS.clear();
 }
 
@@ -217,6 +246,15 @@ function beginRenderAssignmentPass(): void {
   });
 }
 
+function bindDirectRenderAssignment(instance: object, assignment: RenderAssignment): void {
+  DIRECT_MARKDOWN_RENDER_ASSIGNMENTS.set(instance, {
+    version: SESSION_CODE_BLOCK_STATE.version,
+    id: assignment.id,
+    startIndex: assignment.startIndex,
+    blockCount: assignment.blockCount,
+  });
+}
+
 function clearMarkdownRenderCache(instance: MarkdownInternals): void {
   instance.cachedText = undefined;
   instance.cachedWidth = undefined;
@@ -224,6 +262,13 @@ function clearMarkdownRenderCache(instance: MarkdownInternals): void {
 }
 
 function resolveAssignedRenderRange(instance: MarkdownInternals): AssignedRenderRange | undefined {
+  const direct = DIRECT_MARKDOWN_RENDER_ASSIGNMENTS.get(instance as object);
+  if (direct && direct.version === SESSION_CODE_BLOCK_STATE.version) {
+    CLAIMED_RENDER_ASSIGNMENTS.add(direct.id);
+    MARKDOWN_RENDER_ASSIGNMENTS.set(instance as object, direct);
+    return direct;
+  }
+
   const cached = MARKDOWN_RENDER_ASSIGNMENTS.get(instance as object);
   if (cached && cached.version === SESSION_CODE_BLOCK_STATE.version) {
     CLAIMED_RENDER_ASSIGNMENTS.add(cached.id);
@@ -575,6 +620,51 @@ function renderCodeBlock(instance: MarkdownInternals, token: MarkdownToken, widt
   return lines;
 }
 
+function assignMessageMarkdownRanges(message: AssistantMessage, markdowns: object[]): void {
+  const assignments =
+    SESSION_CODE_BLOCK_STATE.messageAssignmentsByRef.get(message) ??
+    SESSION_CODE_BLOCK_STATE.messageAssignmentsByKey.get(getAssistantMessageKey(message));
+  if (!assignments || assignments.length === 0) return;
+
+  let markdownIndex = 0;
+  for (const assignment of assignments) {
+    while (markdownIndex < markdowns.length) {
+      const markdown = markdowns[markdownIndex++]!;
+      const text = normalizeMarkdownText((markdown as MarkdownInternals).text ?? "");
+      if (text !== assignment.text) continue;
+      bindDirectRenderAssignment(markdown, assignment);
+      break;
+    }
+  }
+}
+
+function patchAssistantMessageComponent(): boolean {
+  const proto = AssistantMessageComponent.prototype as AssistantMessageComponent & Record<PropertyKey, unknown> & {
+    updateContent?: (message: AssistantMessage) => void;
+    contentContainer?: { children?: object[] };
+  };
+
+  if (proto[ASSISTANT_MESSAGE_PATCHED] === true) return true;
+
+  const originalUpdateContent = proto.updateContent;
+  if (typeof originalUpdateContent !== "function") return false;
+
+  proto.updateContent = function (message: AssistantMessage): void {
+    originalUpdateContent.call(this, message);
+
+    const children = this.contentContainer?.children;
+    if (!Array.isArray(children) || children.length === 0) return;
+
+    const markdowns = children.filter((child): child is object => child instanceof Markdown);
+    if (markdowns.length === 0) return;
+
+    assignMessageMarkdownRanges(message, markdowns);
+  };
+
+  proto[ASSISTANT_MESSAGE_PATCHED] = true;
+  return true;
+}
+
 function withEnhancementContext(instance: MarkdownInternals, render: () => string[]): string[] {
   const previous = { ...ENHANCE_CONTEXT };
   const assigned = resolveAssignedRenderRange(instance);
@@ -669,6 +759,7 @@ export function patchMarkdownCodeBlocks(): boolean {
 
 export default function codeBlockEnhancer(pi: ExtensionAPI) {
   const patched = patchMarkdownCodeBlocks();
+  const assistantPatched = patchAssistantMessageComponent();
 
   async function copyTextToClipboard(ctx: CopyContext, text: string, message: string): Promise<void> {
     try {
@@ -728,7 +819,7 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    if (!patched) {
+    if (!patched || !assistantPatched) {
       ctx.ui.notify("code-block-enhancer: unsupported pi-tui Markdown internals", "warning");
     }
     rebuildSessionCodeBlockState(ctx);
