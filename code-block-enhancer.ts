@@ -1,5 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { AssistantMessageComponent, copyToClipboard, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageComponent,
+  BranchSummaryMessageComponent,
+  CompactionSummaryMessageComponent,
+  copyToClipboard,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Key, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const extensionConfig = {
@@ -14,6 +21,8 @@ const shortcutHint = formatShortcutHint(extensionConfig.shortcut);
 const PATCHED = Symbol.for("pi.code-block-enhancer.patched");
 const LEGACY_HIDE_PATCHED = Symbol.for("pi.hide-code-fence-markers.patched");
 const ASSISTANT_MESSAGE_PATCHED = Symbol.for("pi.code-block-enhancer.assistant-message-patched");
+const BRANCH_SUMMARY_PATCHED = Symbol.for("pi.code-block-enhancer.branch-summary-patched");
+const COMPACTION_SUMMARY_PATCHED = Symbol.for("pi.code-block-enhancer.compaction-summary-patched");
 const ENHANCE_CONTEXT: EnhancementContext = {
   active: false,
   currentIndex: 0,
@@ -183,6 +192,14 @@ function getAssistantMessageKey(message: AssistantMessage): string {
   return `${message.timestamp}:${getAssistantText(message)}`;
 }
 
+function getBranchSummaryMarkdownText(summary: string): string {
+  return `**Branch Summary**\n\n${summary}`;
+}
+
+function getCompactionSummaryMarkdownText(summary: string, tokensBefore: number): string {
+  return `**Compacted from ${tokensBefore.toLocaleString()} tokens**\n\n${summary}`;
+}
+
 function buildSessionCodeBlockSnapshot(
   ctx: Pick<CopyContext, "sessionManager">,
   liveAssistantMessage?: AssistantMessage,
@@ -211,12 +228,54 @@ function buildSessionCodeBlockSnapshot(
     messageAssignmentsByRef.set(message, messageAssignments);
   };
 
-  for (const entry of branch) {
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+  const appendVisibleEntry = (entry: (typeof branch)[number]) => {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      const message = entry.message as AssistantMessage;
+      if (message.stopReason !== "stop") return;
+      appendMessageAssignments(message);
+      return;
+    }
 
-    const message = entry.message as AssistantMessage;
-    if (message.stopReason !== "stop") continue;
-    appendMessageAssignments(message);
+    if (entry.type === "branch_summary" && entry.summary) {
+      const result = appendTextCodeBlocks(getBranchSummaryMarkdownText(entry.summary), blocks, assignmentsByText, nextIndex);
+      nextIndex = result.nextIndex;
+      return;
+    }
+
+    if (entry.type === "compaction") {
+      const result = appendTextCodeBlocks(
+        getCompactionSummaryMarkdownText(entry.summary, entry.tokensBefore),
+        blocks,
+        assignmentsByText,
+        nextIndex,
+      );
+      nextIndex = result.nextIndex;
+    }
+  };
+
+  const latestCompaction = [...branch].reverse().find((entry) => entry.type === "compaction");
+  if (latestCompaction) {
+    appendVisibleEntry(latestCompaction);
+
+    const compactionIndex = branch.findIndex((entry) => entry.id === latestCompaction.id);
+    let foundFirstKept = false;
+    for (let i = 0; i < compactionIndex; i++) {
+      const entry = branch[i]!;
+      if (entry.id === latestCompaction.firstKeptEntryId) {
+        foundFirstKept = true;
+      }
+      if (foundFirstKept) {
+        appendVisibleEntry(entry);
+      }
+    }
+
+    for (let i = compactionIndex + 1; i < branch.length; i++) {
+      appendVisibleEntry(branch[i]!);
+    }
+  } else {
+    for (const entry of branch) {
+      appendVisibleEntry(entry);
+    }
   }
 
   if (liveAssistantMessage && shouldAppendLiveAssistantMessage(ctx, liveAssistantMessage)) {
@@ -639,29 +698,67 @@ function assignMessageMarkdownRanges(message: AssistantMessage, markdowns: objec
 }
 
 function patchAssistantMessageComponent(): boolean {
-  const proto = AssistantMessageComponent.prototype as AssistantMessageComponent & Record<PropertyKey, unknown> & {
-    updateContent?: (message: AssistantMessage) => void;
+  const proto = AssistantMessageComponent.prototype as unknown as Record<PropertyKey, unknown> & {
+    render?: (width: number) => string[];
     contentContainer?: { children?: object[] };
+    lastMessage?: AssistantMessage;
   };
 
   if (proto[ASSISTANT_MESSAGE_PATCHED] === true) return true;
 
-  const originalUpdateContent = proto.updateContent;
-  if (typeof originalUpdateContent !== "function") return false;
+  const originalRender = proto.render;
+  if (typeof originalRender !== "function") return false;
 
-  proto.updateContent = function (message: AssistantMessage): void {
-    originalUpdateContent.call(this, message);
-
+  proto.render = function (width: number): string[] {
     const children = this.contentContainer?.children;
-    if (!Array.isArray(children) || children.length === 0) return;
+    const message = this.lastMessage;
+    if (message && Array.isArray(children) && children.length > 0) {
+      const markdowns = children.filter((child): child is object => child instanceof Markdown);
+      if (markdowns.length > 0) {
+        assignMessageMarkdownRanges(message, markdowns);
+      }
+    }
 
-    const markdowns = children.filter((child): child is object => child instanceof Markdown);
-    if (markdowns.length === 0) return;
-
-    assignMessageMarkdownRanges(message, markdowns);
+    return originalRender.call(this, width);
   };
 
   proto[ASSISTANT_MESSAGE_PATCHED] = true;
+  return true;
+}
+
+function patchSummaryMessageComponent(
+  component: typeof BranchSummaryMessageComponent | typeof CompactionSummaryMessageComponent,
+  marker: symbol,
+  getText: (message: { summary: string; tokensBefore?: number }) => string,
+): boolean {
+  const proto = component.prototype as unknown as Record<PropertyKey, unknown> & {
+    render?: (width: number) => string[];
+    children?: object[];
+    message?: { summary: string; tokensBefore?: number };
+  };
+
+  if (proto[marker] === true) return true;
+
+  const originalRender = proto.render;
+  if (typeof originalRender !== "function") return false;
+
+  proto.render = function (width: number): string[] {
+    const message = this.message;
+    const children = this.children;
+    if (message && Array.isArray(children) && children.length > 0) {
+      const markdowns = children.filter((child): child is object => child instanceof Markdown);
+      const assignment = SESSION_CODE_BLOCK_STATE.assignmentsByText.get(normalizeMarkdownText(getText(message)))?.[0];
+      if (assignment) {
+        for (const markdown of markdowns) {
+          bindDirectRenderAssignment(markdown, assignment);
+        }
+      }
+    }
+
+    return originalRender.call(this, width);
+  };
+
+  proto[marker] = true;
   return true;
 }
 
@@ -760,6 +857,16 @@ export function patchMarkdownCodeBlocks(): boolean {
 export default function codeBlockEnhancer(pi: ExtensionAPI) {
   const patched = patchMarkdownCodeBlocks();
   const assistantPatched = patchAssistantMessageComponent();
+  const branchSummaryPatched = patchSummaryMessageComponent(
+    BranchSummaryMessageComponent,
+    BRANCH_SUMMARY_PATCHED,
+    (message) => getBranchSummaryMarkdownText(message.summary),
+  );
+  const compactionSummaryPatched = patchSummaryMessageComponent(
+    CompactionSummaryMessageComponent,
+    COMPACTION_SUMMARY_PATCHED,
+    (message) => getCompactionSummaryMarkdownText(message.summary, message.tokensBefore ?? 0),
+  );
 
   async function copyTextToClipboard(ctx: CopyContext, text: string, message: string): Promise<void> {
     try {
@@ -819,7 +926,7 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    if (!patched || !assistantPatched) {
+    if (!patched || !assistantPatched || !branchSummaryPatched || !compactionSummaryPatched) {
       ctx.ui.notify("code-block-enhancer: unsupported pi-tui Markdown internals", "warning");
     }
     rebuildSessionCodeBlockState(ctx);
@@ -854,30 +961,35 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
     updateCopyCodeStatus(ctx);
   });
 
-  pi.registerCommand("copy-code", {
-    description: "Copy code blocks from the current session",
-    getArgumentCompletions: (prefix) => {
-      const lower = prefix.toLowerCase().trimStart();
-      const topLevel = ["all", "fenced", "first", "last"];
-      const fencedTargets = ["all", "first", "last"];
+  const registerCopyCodeCommand = (name: string) => {
+    pi.registerCommand(name, {
+      description: "Copy code blocks from the current session",
+      getArgumentCompletions: (prefix) => {
+        const lower = prefix.toLowerCase().trimStart();
+        const topLevel = ["all", "fenced", "first", "last"];
+        const fencedTargets = ["all", "first", "last"];
 
-      if (lower.startsWith("fenced ")) {
-        const rest = lower.slice("fenced ".length);
-        const matches = fencedTargets
-          .filter((option) => option.startsWith(rest))
-          .map((option) => ({ value: `fenced ${option}`, label: `fenced ${option}` }));
+        if (lower.startsWith("fenced ")) {
+          const rest = lower.slice("fenced ".length);
+          const matches = fencedTargets
+            .filter((option) => option.startsWith(rest))
+            .map((option) => ({ value: `fenced ${option}`, label: `fenced ${option}` }));
+          return matches.length > 0 ? matches : null;
+        }
+
+        const matches = topLevel
+          .filter((option) => option.startsWith(lower))
+          .map((option) => ({ value: option, label: option }));
         return matches.length > 0 ? matches : null;
-      }
+      },
+      handler: async (args, ctx) => {
+        await copyCodeFromSession(ctx, args);
+      },
+    });
+  };
 
-      const matches = topLevel
-        .filter((option) => option.startsWith(lower))
-        .map((option) => ({ value: option, label: option }));
-      return matches.length > 0 ? matches : null;
-    },
-    handler: async (args, ctx) => {
-      await copyCodeFromSession(ctx, args);
-    },
-  });
+  registerCopyCodeCommand("copy-code");
+  registerCopyCodeCommand("code-copy");
 
   pi.registerShortcut(extensionConfig.shortcut, {
     description: "Copy code block from current session",
