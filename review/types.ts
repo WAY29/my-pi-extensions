@@ -4,7 +4,10 @@ export type ReviewTarget =
 	| { type: "uncommittedChanges" }
 	| { type: "baseBranch"; branch: string }
 	| { type: "commit"; sha: string; title?: string }
+	| { type: "folder"; paths: string[] }
 	| { type: "custom"; instructions: string };
+
+export type ReviewSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
 export interface ResolvedReviewRequest {
 	target: ReviewTarget;
@@ -27,6 +30,10 @@ export interface ReviewFinding {
 	body: string;
 	confidence_score: number;
 	priority?: number | null;
+	severity?: ReviewSeverity;
+	category?: string;
+	exploitability?: string;
+	evidence?: string;
 	code_location: ReviewCodeLocation;
 }
 
@@ -35,6 +42,8 @@ export interface ReviewOutput {
 	overall_correctness: string;
 	overall_explanation: string;
 	overall_confidence_score: number;
+	audit_scope?: string;
+	human_reviewer_callouts?: string[];
 }
 
 export interface ReviewResultDetails {
@@ -65,6 +74,7 @@ export interface ReviewRunnerResult extends ReviewResultDetails {
 export interface ReviewLiveState {
 	entries: ReviewLiveEntry[];
 	lastToolById: Map<string, ReviewLiveEntry>;
+	toolArgsById: Map<string, { toolName: string; args: any }>;
 	lastAssistantText: string;
 }
 

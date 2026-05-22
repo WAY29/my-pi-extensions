@@ -1,11 +1,15 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	BASE_BRANCH_PROMPT,
 	BASE_BRANCH_PROMPT_BACKUP,
 	COMMIT_PROMPT,
 	COMMIT_PROMPT_WITH_TITLE,
+	FOLDER_PROMPT,
 	UNCOMMITTED_PROMPT,
 } from "./constants.js";
+import { summarizeText } from "./utils.js";
 import type { CommitEntry, ResolvedReviewRequest, ReviewTarget } from "./types.js";
 
 function replaceTemplate(template: string, replacements: Record<string, string>): string {
@@ -67,15 +71,40 @@ export async function mergeBaseWithHead(pi: ExtensionAPI, cwd: string, branch: s
 	return mergeBase.ok && mergeBase.stdout ? mergeBase.stdout : null;
 }
 
+export async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> {
+	let currentDir = path.resolve(cwd);
+	while (true) {
+		const piDir = path.join(currentDir, ".pi");
+		const guidelinesPath = path.join(currentDir, "REVIEW_GUIDELINES.md");
+		const piStats = await fs.stat(piDir).catch(() => null);
+		if (piStats?.isDirectory()) {
+			const guidelineStats = await fs.stat(guidelinesPath).catch(() => null);
+			if (!guidelineStats?.isFile()) return null;
+			const content = await fs.readFile(guidelinesPath, "utf8").catch(() => "");
+			const trimmed = content.trim();
+			return trimmed || null;
+		}
+		const parentDir = path.dirname(currentDir);
+		if (parentDir === currentDir) return null;
+		currentDir = parentDir;
+	}
+}
+
+function mergePromptWithProjectGuidelines(prompt: string, projectGuidelines: string | null): string {
+	if (!projectGuidelines) return prompt;
+	return `${prompt}\n\nProject review guidelines:\n\n${projectGuidelines}`;
+}
+
 export async function resolveReviewRequest(
 	pi: ExtensionAPI,
 	cwd: string,
 	target: ReviewTarget,
 ): Promise<ResolvedReviewRequest> {
+	const projectGuidelines = await loadProjectReviewGuidelines(cwd);
 	if (target.type === "uncommittedChanges") {
 		return {
 			target,
-			prompt: UNCOMMITTED_PROMPT,
+			prompt: mergePromptWithProjectGuidelines(UNCOMMITTED_PROMPT, projectGuidelines),
 			userFacingHint: "current changes",
 		};
 	}
@@ -84,12 +113,15 @@ export async function resolveReviewRequest(
 		const mergeBase = await mergeBaseWithHead(pi, cwd, target.branch);
 		return {
 			target,
-			prompt: mergeBase
-				? replaceTemplate(BASE_BRANCH_PROMPT, {
+			prompt: mergePromptWithProjectGuidelines(
+				mergeBase
+					? replaceTemplate(BASE_BRANCH_PROMPT, {
 						base_branch: target.branch,
 						merge_base_sha: mergeBase,
 					})
-				: replaceTemplate(BASE_BRANCH_PROMPT_BACKUP, { branch: target.branch }),
+					: replaceTemplate(BASE_BRANCH_PROMPT_BACKUP, { branch: target.branch }),
+				projectGuidelines,
+			),
 			userFacingHint: `changes against '${target.branch}'`,
 		};
 	}
@@ -99,20 +131,36 @@ export async function resolveReviewRequest(
 		const shortSha = target.sha.slice(0, 7);
 		return {
 			target: { ...target, title },
-			prompt: title
-				? replaceTemplate(COMMIT_PROMPT_WITH_TITLE, { sha: target.sha, title })
-				: replaceTemplate(COMMIT_PROMPT, { sha: target.sha }),
+			prompt: mergePromptWithProjectGuidelines(
+				title
+					? replaceTemplate(COMMIT_PROMPT_WITH_TITLE, { sha: target.sha, title })
+					: replaceTemplate(COMMIT_PROMPT, { sha: target.sha }),
+				projectGuidelines,
+			),
 			userFacingHint: title ? `commit ${shortSha}: ${title}` : `commit ${shortSha}`,
+		};
+	}
+
+	if (target.type === "folder") {
+		const normalizedPaths = target.paths.map((item) => item.trim()).filter(Boolean);
+		if (normalizedPaths.length === 0) throw new Error("Audit paths cannot be empty");
+		return {
+			target: { ...target, paths: normalizedPaths },
+			prompt: mergePromptWithProjectGuidelines(
+				replaceTemplate(FOLDER_PROMPT, { paths: normalizedPaths.join(", ") }),
+				projectGuidelines,
+			),
+			userFacingHint: `paths ${summarizeText(normalizedPaths.join(", "), 72)}`,
 		};
 	}
 
 	const prompt = target.instructions.trim();
 	if (!prompt) {
-		throw new Error("Review prompt cannot be empty");
+		throw new Error("Audit instructions cannot be empty");
 	}
 	return {
 		target,
-		prompt,
-		userFacingHint: prompt,
+		prompt: mergePromptWithProjectGuidelines(prompt, projectGuidelines),
+		userFacingHint: summarizeText(prompt, 72),
 	};
 }

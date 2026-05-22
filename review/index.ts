@@ -1,14 +1,15 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { handlePostReviewActions, chooseReviewTarget } from "./actions.js";
+import { chooseReviewTarget } from "./actions.js";
 import { loadReviewResumeState } from "./state.js";
 import { REVIEW_RESULT_MESSAGE, REVIEW_START_MESSAGE } from "./constants.js";
-import { buildReviewSummaryMarkdown } from "./format.js";
+import { buildReviewSummaryMarkdownLocalized } from "./i18n.js";
 import { resolveReviewRequest } from "./git.js";
+import { reviewPreflight } from "./preflight.js";
 import { runNestedReview } from "./runner.js";
 import type { ReviewRunnerResult, ReviewTarget } from "./types.js";
-import { sameReviewTarget } from "./utils.js";
+import { detectConversationLanguage, sameReviewTarget } from "./utils.js";
 
 export default function reviewExtension(pi: ExtensionAPI): void {
 	let reviewRunning = false;
@@ -17,7 +18,7 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	function updateStatus(ctx: ExtensionContext | ExtensionCommandContext): void {
 		if (!ctx.hasUI) return;
 		if (reviewRunning && currentHint) {
-			ctx.ui.setStatus("review", ctx.ui.theme.fg("accent", `review:${currentHint}`));
+			ctx.ui.setStatus("review", ctx.ui.theme.fg("accent", `audit:${currentHint}`));
 		} else {
 			ctx.ui.setStatus("review", undefined);
 		}
@@ -31,18 +32,19 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 		return box;
 	});
 
+
 	pi.registerMessageRenderer(REVIEW_RESULT_MESSAGE, (message, { expanded }, theme) => {
 		const details = message.details as ReviewRunnerResult | undefined;
 		const container = new Container();
 		container.addChild(new DynamicBorder((s: string) => theme.fg("border", s)));
-		container.addChild(new Markdown(message.content, 1, 0, getMarkdownTheme()));
+		container.addChild(new Markdown(typeof message.content === "string" ? message.content : "", 1, 0, getMarkdownTheme()));
 		if (expanded && details) {
 			container.addChild(new Text(theme.fg("dim", ""), 0, 0));
-			container.addChild(new Text(theme.fg("dim", "Raw review JSON:"), 1, 0));
+			container.addChild(new Text(theme.fg("dim", "Raw audit JSON:"), 1, 0));
 			container.addChild(new Text(theme.fg("dim", JSON.stringify(details.reviewOutput, null, 2)), 1, 0));
 			if (details.liveEntries.length > 0) {
 				container.addChild(new Text(theme.fg("dim", ""), 0, 0));
-				container.addChild(new Text(theme.fg("dim", "Live review trace:"), 1, 0));
+				container.addChild(new Text(theme.fg("dim", "Live audit trace:"), 1, 0));
 				container.addChild(new Text(theme.fg("dim", JSON.stringify(details.liveEntries, null, 2)), 1, 0));
 			}
 		}
@@ -55,10 +57,10 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("review", {
-		description: "Run an isolated code review like Codex /review",
+		description: "Run an isolated security-focused code audit",
 		handler: async (args, ctx) => {
 			if (reviewRunning) {
-				ctx.ui.notify("A review is already running.", "warning");
+				ctx.ui.notify("An audit is already running.", "warning");
 				return;
 			}
 			if (!ctx.model) {
@@ -66,9 +68,10 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const resumable = !args.trim() ? loadReviewResumeState(ctx.sessionManager) : null;
-			const target = args.trim()
-				? ({ type: "custom", instructions: args.trim() } satisfies ReviewTarget)
+			const trimmedArgs = args.trim();
+			const resumable = !trimmedArgs ? loadReviewResumeState(ctx.sessionManager) : null;
+			const target = trimmedArgs
+				? ({ type: "custom", instructions: trimmedArgs } satisfies ReviewTarget)
 				: await chooseReviewTarget(pi, ctx);
 			if (!target) return;
 
@@ -76,41 +79,46 @@ export default function reviewExtension(pi: ExtensionAPI): void {
 			const previousHint = currentHint;
 
 			try {
-				const resolved = await resolveReviewRequest(pi, ctx.cwd, target);
+				const reviewLanguage = detectConversationLanguage(ctx.sessionManager, trimmedArgs || JSON.stringify(target));
+				const preflight = await reviewPreflight(pi, ctx.cwd, target);
+				if (!preflight.ok) {
+					ctx.ui.notify(preflight.reason ?? "Unable to start the audit.", "warning");
+					return;
+				}
+				const resolved = await resolveReviewRequest(pi, preflight.reviewCwd, target);
 				currentHint = resolved.userFacingHint;
 				updateStatus(ctx);
 				pi.sendMessage({
 					customType: REVIEW_START_MESSAGE,
-					content: `Code review started: ${resolved.userFacingHint}`,
+					content: `Audit in progress: ${resolved.userFacingHint}`,
 					display: true,
 					details: { hint: resolved.userFacingHint, target: resolved.target },
 				});
 
 				const result = await runNestedReview(
 					pi as any,
-					ctx,
+					{ ...ctx, cwd: preflight.reviewCwd },
 					ctx.model,
 					resolved,
+					reviewLanguage,
 					resumable && sameReviewTarget(resumable.target, target) ? resumable : null,
 				);
 				pi.sendMessage({
 					customType: REVIEW_RESULT_MESSAGE,
-					content: buildReviewSummaryMarkdown(result.hint, result.reviewOutput, Boolean(result.interrupted), result.error),
+					content: buildReviewSummaryMarkdownLocalized(result.hint, result.reviewOutput, Boolean(result.interrupted), reviewLanguage, result.error),
 					display: true,
 					details: result,
 				});
 
-				if (!result.interrupted && !result.error) {
-					await handlePostReviewActions(pi, ctx, result);
-				}
 			} catch (error) {
+				const reviewLanguage = detectConversationLanguage(ctx.sessionManager, trimmedArgs || JSON.stringify(target));
 				const message = error instanceof Error ? error.message : String(error);
 				pi.sendMessage({
 					customType: REVIEW_RESULT_MESSAGE,
-					content: buildReviewSummaryMarkdown(currentHint ?? "review", null, false, message),
+					content: buildReviewSummaryMarkdownLocalized(currentHint ?? "audit", null, false, reviewLanguage, message),
 					display: true,
 					details: {
-						hint: currentHint ?? "review",
+						hint: currentHint ?? "audit",
 						target,
 						reviewOutput: null,
 						rawOutput: "",

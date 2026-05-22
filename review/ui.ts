@@ -1,10 +1,7 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	AssistantMessageComponent,
 	DynamicBorder,
 	getMarkdownTheme,
-	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
@@ -15,8 +12,6 @@ import {
 	SelectList,
 	Text,
 	truncateToWidth,
-	type Component,
-	type TUI,
 } from "@earendil-works/pi-tui";
 import { formatLocation } from "./format.js";
 import type { ReviewFinding, ReviewLiveEntry } from "./types.js";
@@ -133,117 +128,40 @@ export async function showFindingPicker(
 	});
 }
 
-type ReviewRenderItem =
-	| { kind: "status"; key: string; component: Component }
-	| { kind: "tool"; key: string; toolCallId: string; component: ToolExecutionComponent }
-	| { kind: "assistant"; key: string; component: AssistantMessageComponent };
-
-function makeStatusComponent(text: string): Component {
-	return {
-		render(width: number) {
-			return [truncateToWidth(text, width)];
-		},
-		invalidate() {},
-	};
-}
-
-function createAssistantMessage(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		timestamp: Date.now(),
-	};
-}
-
-function isStructuredReviewJson(text: string): boolean {
-	const trimmed = text.trim();
-	if (!trimmed.startsWith("{")) return false;
-	return trimmed.includes('"findings"') && trimmed.includes('"overall_correctness"');
-}
-
-function normalizeToolResult(result: any, isError: boolean): {
-	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-	details?: any;
-	isError: boolean;
-} {
-	if (typeof result === "string") {
-		return { content: [{ type: "text", text: result }], isError };
-	}
-	if (!result || typeof result !== "object") {
-		return { content: [], isError };
-	}
-	if (Array.isArray(result.content)) {
-		return { content: result.content, details: result.details, isError };
-	}
-	if (typeof result.text === "string") {
-		return { content: [{ type: "text", text: result.text }], details: result.details, isError };
-	}
-	return { content: [], details: result.details, isError };
-}
-
-function findToolById(items: ReviewRenderItem[], toolCallId: string): ToolExecutionComponent | undefined {
-	return items.find((item) => item.kind === "tool" && item.toolCallId === toolCallId)?.component as ToolExecutionComponent | undefined;
-}
-
-function ensureToolItem(
-	items: ReviewRenderItem[],
-	tui: TUI,
-	ctx: ExtensionContext | ExtensionCommandContext,
-	toolCallId: string,
-	toolName: string,
-	args: any,
-): ToolExecutionComponent {
-	const existing = findToolById(items, toolCallId);
-	if (existing) {
-		existing.updateArgs(args);
-		existing.markExecutionStarted();
-		existing.setArgsComplete();
-		return existing;
-	}
-	const component = new ToolExecutionComponent(toolName, toolCallId, args, undefined, undefined, tui, ctx.cwd);
-	component.markExecutionStarted();
-	component.setArgsComplete();
-	items.push({ kind: "tool", key: `tool:${toolCallId}`, toolCallId, component });
-	return component;
-}
-
-function applyEventToRenderItems(
-	items: ReviewRenderItem[],
-	tui: TUI,
-	ctx: ExtensionContext | ExtensionCommandContext,
-	event: AgentSessionEvent,
-): boolean {
+function summarizeWorkingEvent(event: AgentSessionEvent): string | null {
 	switch (event.type) {
 		case "tool_execution_start": {
-			ensureToolItem(items, tui, ctx, event.toolCallId, event.toolName, event.args);
-			return true;
+			const args: any = event.args;
+			switch (event.toolName) {
+				case "bash":
+					return `$ ${String(args?.command ?? "").replace(/\s+/g, " ").trim()}`;
+				case "read": {
+					const path = String(args?.path ?? "");
+					const offset = typeof args?.offset === "number" ? args.offset : 1;
+					const limit = typeof args?.limit === "number" ? args.limit : undefined;
+					return limit ? `read ${path}:${offset}-${offset + limit - 1}` : `read ${path}`;
+				}
+				case "grep": {
+					const pattern = String(args?.pattern ?? "");
+					const searchPath = String(args?.path ?? ".");
+					return pattern ? `grep /${pattern}/ in ${searchPath}` : `grep in ${searchPath}`;
+				}
+				case "find":
+					return `find ${String(args?.pattern ?? "*")} in ${String(args?.path ?? ".")}`;
+				case "ls":
+					return `ls ${String(args?.path ?? ".")}`;
+				default:
+					return event.toolName;
+			}
 		}
-		case "tool_execution_update": {
-			const tool = ensureToolItem(items, tui, ctx, event.toolCallId, event.toolName, event.args);
-			tool.updateResult(normalizeToolResult(event.partialResult, false), true);
-			return true;
-		}
-		case "tool_execution_end": {
-			const tool = ensureToolItem(items, tui, ctx, event.toolCallId, event.toolName, (event as any).args ?? {});
-			tool.updateResult(normalizeToolResult(event.result, event.isError), false);
-			return true;
-		}
-		case "message_end": {
-			const message = event.message as { role?: string; content?: unknown };
-			if (message.role !== "assistant") return false;
-			const text = Array.isArray(message.content)
-				? message.content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("\n")
-				: "";
-			if (!text.trim() || isStructuredReviewJson(text)) return false;
-			const component = new AssistantMessageComponent(createAssistantMessage(text), true, getMarkdownTheme());
-			items.push({ kind: "assistant", key: `assistant:${items.length}`, component });
-			return true;
-		}
+		case "tool_execution_end":
+			return event.isError ? `${event.toolName} failed` : null;
 		case "auto_retry_start":
-			items.push({ kind: "status", key: `status:${items.length}`, component: makeStatusComponent(`Retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`) });
-			return true;
+			return `retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`;
+		case "agent_end":
+			return event.willRetry ? "audit turn ended, retry queued" : null;
 		default:
-			return false;
+			return null;
 	}
 }
 
@@ -259,96 +177,75 @@ export async function showReviewLivePanel<T>(
 		abortSignal: AbortSignal;
 	}) => Promise<void>,
 ): Promise<T> {
-	return ctx.ui.custom<T>((tui, theme, _kb, done) => {
-		const items: ReviewRenderItem[] = [];
-		let status = "Reviewing…";
-		let scrollOffset = 0;
-		let finished = false;
-		let failed = false;
-
-		const push = (entry: ReviewLiveEntry) => {
-			const color = entry.kind === "error" ? theme.fg("error", `✗ ${entry.text}`) : theme.fg("dim", entry.text);
-			items.push({ kind: "status", key: `status:${items.length}`, component: makeStatusComponent(color) });
-			tui.requestRender();
-		};
-
-		const pushEvent = (event: AgentSessionEvent) => {
-			if (applyEventToRenderItems(items, tui, ctx, event)) {
-				tui.requestRender();
-			}
-		};
-
-		const finish = (value: T) => {
-			finished = true;
-			done(value);
-		};
-		const fail = (error: unknown) => {
-			failed = true;
-			push({ kind: "error", text: error instanceof Error ? error.message : String(error), isError: true });
-		};
-
+	if (!ctx.hasUI) {
 		const abortController = new AbortController();
+		return await new Promise<T>((resolve, reject) => {
+			void run({
+				setStatus() {},
+				push() {},
+				pushEvent() {},
+				finish: resolve,
+				fail: reject,
+				abortSignal: abortController.signal,
+			}).catch(reject);
+		});
+	}
+
+	let currentStatus = title;
+	let finished = false;
+	const abortController = new AbortController();
+	let unsubscribeInput: (() => void) | null = null;
+
+	const renderStatus = () => {
+		ctx.ui.setStatus("review-live", currentStatus);
+	};
+
+	renderStatus();
+
+	unsubscribeInput = ctx.ui.onTerminalInput((data) => {
+		if (matchesKey(data, Key.escape) && !finished) {
+			abortController.abort();
+			return { consume: true };
+		}
+		return undefined;
+	});
+
+	return await new Promise<T>((resolve, reject) => {
+		const cleanup = () => {
+			finished = true;
+			unsubscribeInput?.();
+			unsubscribeInput = null;
+			ctx.ui.setStatus("review-live", undefined);
+		};
 		void run({
 			setStatus(message: string) {
-				status = message;
-				tui.requestRender();
+				currentStatus = message.trim() || title;
+				renderStatus();
 			},
-			push,
-			pushEvent,
-			finish,
-			fail,
+			push(entry: ReviewLiveEntry) {
+				const text = entry.kind === "error" ? `✗ ${entry.text}` : entry.text;
+				currentStatus = text;
+				renderStatus();
+			},
+			pushEvent(event: AgentSessionEvent) {
+				const summary = summarizeWorkingEvent(event);
+				if (!summary) return;
+				currentStatus = summary;
+				renderStatus();
+			},
+			finish(value: T) {
+				cleanup();
+				resolve(value);
+			},
+			fail(error: unknown) {
+				cleanup();
+				reject(error instanceof Error ? error : new Error(String(error)));
+			},
 			abortSignal: abortController.signal,
 		}).catch((error) => {
-			fail(error);
+			cleanup();
+			reject(error);
 		});
-
-		return {
-			render(width: number): string[] {
-				const lines: string[] = [];
-				const border = theme.fg("border", "─".repeat(Math.max(0, width)));
-				lines.push(border);
-				lines.push(truncateToWidth(theme.fg("accent", theme.bold(title)), width));
-				if (status.trim()) {
-					lines.push(truncateToWidth(theme.fg("dim", status), width));
-				}
-				lines.push(border);
-
-				const renderedBody = items.flatMap((item) => item.component.render(width));
-				const viewportHeight = Math.max(10, tui.terminal.rows - 7);
-				const maxOffset = Math.max(0, renderedBody.length - viewportHeight);
-				scrollOffset = Math.max(0, Math.min(scrollOffset, maxOffset));
-				const start = Math.max(0, renderedBody.length - viewportHeight - scrollOffset);
-				const visible = renderedBody.slice(start, start + viewportHeight);
-				for (const line of visible) lines.push(truncateToWidth(line, width, ""));
-				for (let i = visible.length; i < viewportHeight; i++) lines.push("");
-
-				lines.push(border);
-				const footer = failed ? theme.fg("error", "Review failed") : theme.fg("dim", "esc cancel • ↑↓ scroll");
-				lines.push(truncateToWidth(footer, width));
-				return lines;
-			},
-			invalidate() {
-				for (const item of items) item.component.invalidate();
-			},
-			handleInput(data: string) {
-				if (matchesKey(data, Key.up)) {
-					scrollOffset += 1;
-					tui.requestRender();
-					return;
-				}
-				if (matchesKey(data, Key.down)) {
-					scrollOffset = Math.max(0, scrollOffset - 1);
-					tui.requestRender();
-					return;
-				}
-				if (matchesKey(data, Key.escape) && !finished) {
-					status = "Stopping…";
-					abortController.abort();
-					tui.requestRender();
-				}
-			},
-			dispose() {},
-		};
 	});
 }
 

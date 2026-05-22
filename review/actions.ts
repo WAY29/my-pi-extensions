@@ -1,13 +1,19 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { buildResolvePrompt } from "./format.js";
 import {
 	currentBranchName,
 	listLocalBranches,
 	recentCommits,
 } from "./git.js";
 import { loadReviewResumeState } from "./state.js";
-import { showFindingPicker, showSelectList } from "./ui.js";
-import type { ReviewRunnerResult, ReviewTarget } from "./types.js";
+import { showSelectList } from "./ui.js";
+import type { ReviewTarget } from "./types.js";
+
+function parseReviewPaths(value: string): string[] {
+	return value
+		.split(/\s+/)
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0);
+}
 
 export async function chooseReviewTarget(
 	pi: ExtensionAPI,
@@ -18,32 +24,39 @@ export async function chooseReviewTarget(
 	}
 
 	const resumable = loadReviewResumeState(ctx.sessionManager);
-	const preset = await showSelectList(ctx, "Select a review preset", [
+	const preset = await showSelectList(ctx, "Select an audit mode", [
 		...(resumable
 			? [
 				{
 					value: "resume",
-					label: `Continue interrupted review`,
+					label: "Continue interrupted audit",
 					description: resumable.hint,
 				},
 			]
 			: []),
 		{
 			value: "base",
-			label: "Review against a base branch",
-			description: "(PR Style)",
+			label: "Audit branch diff",
+			description: "compare HEAD against a selected base branch",
 		},
 		{
 			value: "uncommitted",
-			label: "Review uncommitted changes",
+			label: "Audit current changes",
+			description: "staged + unstaged + untracked",
 		},
 		{
 			value: "commit",
-			label: "Review a commit",
+			label: "Audit one commit",
+		},
+		{
+			value: "folder",
+			label: "Audit folders/files",
+			description: "read code directly, not a diff",
 		},
 		{
 			value: "custom",
-			label: "Custom review instructions",
+			label: "Custom audit instructions",
+			description: "describe exactly what to audit",
 		},
 	]);
 
@@ -51,9 +64,19 @@ export async function chooseReviewTarget(
 	if (preset === "resume") return resumable?.target ?? null;
 	if (preset === "uncommitted") return { type: "uncommittedChanges" };
 	if (preset === "custom") {
-		const custom = await ctx.ui.editor("Custom review instructions", "");
+		const custom = await ctx.ui.editor("Custom audit instructions", "");
 		if (!custom?.trim()) return null;
 		return { type: "custom", instructions: custom.trim() };
+	}
+	if (preset === "folder") {
+		const input = await ctx.ui.editor(
+			"Files/folders to audit (space-separated or one per line)",
+			".",
+		);
+		if (!input?.trim()) return null;
+		const paths = parseReviewPaths(input);
+		if (paths.length === 0) return null;
+		return { type: "folder", paths };
 	}
 
 	if (preset === "base") {
@@ -68,7 +91,7 @@ export async function chooseReviewTarget(
 			label: `${current} -> ${branch}`,
 			description: branch,
 		}));
-		const choice = await showSelectList(ctx, "Select a base branch", branchItems, "Type to search branches");
+		const choice = await showSelectList(ctx, "Select a base branch to compare against", branchItems, "Type to search branches");
 		return choice ? { type: "baseBranch", branch: choice } : null;
 	}
 
@@ -83,7 +106,7 @@ export async function chooseReviewTarget(
 			label: commit.subject,
 			description: commit.sha.slice(0, 12),
 		}));
-		const choice = await showSelectList(ctx, "Select a commit to review", commitItems, "Type to search commits");
+		const choice = await showSelectList(ctx, "Select a commit", commitItems, "Type to search commits");
 		if (!choice) return null;
 		const selected = commits.find((commit) => commit.sha === choice);
 		return { type: "commit", sha: choice, title: selected?.subject };
@@ -92,52 +115,3 @@ export async function chooseReviewTarget(
 	return null;
 }
 
-export async function handlePostReviewActions(
-	pi: ExtensionAPI,
-	ctx: ExtensionCommandContext,
-	result: ReviewRunnerResult,
-): Promise<void> {
-	const reviewOutput = result.reviewOutput;
-	if (!ctx.hasUI) return;
-
-	const options = reviewOutput && reviewOutput.findings.length > 0
-		? ["Resolve all findings", "Resolve selected findings", "Open full review JSON in editor", "Do nothing"]
-		: ["Open full review JSON in editor", "Do nothing"];
-	const choice = await ctx.ui.select("Review complete - what next?", options);
-	if (!choice || choice === "Do nothing") return;
-
-	if (choice === "Open full review JSON in editor") {
-		ctx.ui.setEditorText(
-			JSON.stringify(
-				{
-					hint: result.hint,
-					target: result.target,
-					rawOutput: result.rawOutput,
-					reviewOutput: result.reviewOutput,
-					liveEntries: result.liveEntries,
-				},
-				null,
-				2,
-			),
-		);
-		ctx.ui.notify("Review JSON loaded into editor.", "info");
-		return;
-	}
-
-	if (!reviewOutput || reviewOutput.findings.length === 0) return;
-
-	if (choice === "Resolve all findings") {
-		pi.sendUserMessage(buildResolvePrompt(reviewOutput.findings, result.hint));
-		return;
-	}
-
-	if (choice === "Resolve selected findings") {
-		const selected = await showFindingPicker(ctx, reviewOutput.findings);
-		if (!selected || selected.length === 0) {
-			ctx.ui.notify("No findings selected.", "warning");
-			return;
-		}
-		const selectedFindings = selected.map((index) => reviewOutput.findings[index]).filter(Boolean);
-		pi.sendUserMessage(buildResolvePrompt(selectedFindings, result.hint));
-	}
-}

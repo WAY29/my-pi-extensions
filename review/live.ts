@@ -25,8 +25,11 @@ function describeToolCall(toolName: string, args: any): string {
 			const limit = typeof args?.limit === "number" ? args.limit : undefined;
 			return limit ? `read ${path}:${offset}-${offset + limit - 1}` : `read ${path}`;
 		}
-		case "grep":
-			return `grep /${String(args?.pattern ?? "")}/ in ${String(args?.path ?? ".")}`;
+		case "grep": {
+			const pattern = String(args?.pattern ?? "");
+			const searchPath = String(args?.path ?? ".");
+			return pattern ? `grep /${pattern}/ in ${searchPath}` : `grep in ${searchPath}`;
+		}
 		case "find":
 			return `find ${String(args?.pattern ?? "*")} in ${String(args?.path ?? ".")}`;
 		case "ls":
@@ -77,7 +80,7 @@ export function createReviewEventFormatter(): ReviewEventFormatter {
 					const text = summarizeEndResult(event.result);
 					return text
 						? { kind: "toolResult", text, toolCallId: event.toolCallId, isError: event.isError }
-						: { kind: event.isError ? "error" : "status", text: `${event.toolName} ${event.isError ? "failed" : "done"}`, toolCallId: event.toolCallId, isError: event.isError };
+						: null;
 				}
 				case "message_end": {
 					const message = event.message as { role?: string; content?: unknown };
@@ -86,7 +89,7 @@ export function createReviewEventFormatter(): ReviewEventFormatter {
 					return text ? { kind: "assistant", text } : null;
 				}
 				case "agent_end":
-					return { kind: "status", text: event.willRetry ? "Review turn ended; retry queued" : "Review turn ended" };
+					return { kind: "status", text: event.willRetry ? "Audit turn ended; retry queued" : "Audit turn ended" };
 				case "auto_retry_start":
 					return { kind: "status", text: `Retrying… ${shorten(event.errorMessage, 100)}` };
 				default:
@@ -100,11 +103,15 @@ export function createReviewLiveState(): ReviewLiveState {
 	return {
 		entries: [],
 		lastToolById: new Map(),
+		toolArgsById: new Map(),
 		lastAssistantText: "",
 	};
 }
 
 export function applyReviewLiveEvent(state: ReviewLiveState, formatter: ReviewEventFormatter, event: AgentSessionEvent): ReviewLiveEntry | null {
+	if (event.type === "tool_execution_start") {
+		state.toolArgsById.set(event.toolCallId, { toolName: event.toolName, args: event.args });
+	}
 	const entry = formatter.format(event);
 	if (!entry) return null;
 	state.entries.push(entry);

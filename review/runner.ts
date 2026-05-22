@@ -10,9 +10,16 @@ import {
 	type ExtensionContext,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { REVIEW_PROMPT, REVIEW_TOOLS } from "./constants.js";
-import { applyReviewLiveEvent, createReviewEventFormatter, createReviewLiveState } from "./live.js";
+import {
+	CHANGE_AUDIT_SYSTEM_PROMPT,
+	CUSTOM_AUDIT_SYSTEM_PROMPT,
+	localizeAuditSystemPrompt,
+	REVIEW_TOOLS,
+	SNAPSHOT_AUDIT_SYSTEM_PROMPT,
+} from "./constants.js";
 import { findLastAssistantText, parseReviewOutput } from "./format.js";
+import type { ReviewLanguage } from "./i18n.js";
+import { applyReviewLiveEvent, createReviewEventFormatter, createReviewLiveState } from "./live.js";
 import { REVIEW_CONTINUE_PROMPT, getReviewSessionDir, persistReviewState, type ReviewResumeState } from "./state.js";
 import { showReviewLivePanel } from "./ui.js";
 import type { ResolvedReviewRequest, ReviewRunnerResult } from "./types.js";
@@ -31,11 +38,26 @@ function customResourceLoader(reviewPrompt: string): ResourceLoader {
 	};
 }
 
+function selectSystemPrompt(resolved: ResolvedReviewRequest, language: ReviewLanguage): string {
+	const basePrompt = (() => {
+		switch (resolved.target.type) {
+			case "custom":
+				return CUSTOM_AUDIT_SYSTEM_PROMPT;
+			case "folder":
+				return SNAPSHOT_AUDIT_SYSTEM_PROMPT;
+			default:
+				return CHANGE_AUDIT_SYSTEM_PROMPT;
+		}
+	})();
+	return localizeAuditSystemPrompt(basePrompt, language);
+}
+
 export async function runNestedReview(
 	pi: Pick<ExtensionAPI, "appendEntry">,
 	ctx: ExtensionContext | ExtensionCommandContext,
 	model: Model<any>,
 	resolved: ResolvedReviewRequest,
+	language: ReviewLanguage,
 	resumeState?: ReviewResumeState | null,
 ): Promise<ReviewRunnerResult> {
 	const settingsManager = SettingsManager.inMemory({
@@ -51,7 +73,7 @@ export async function runNestedReview(
 		cwd: ctx.cwd,
 		model,
 		modelRegistry: ctx.modelRegistry,
-		resourceLoader: customResourceLoader(REVIEW_PROMPT),
+		resourceLoader: customResourceLoader(selectSystemPrompt(resolved, language)),
 		tools: REVIEW_TOOLS,
 		sessionManager: reviewSessionManager,
 		settingsManager,
@@ -62,7 +84,7 @@ export async function runNestedReview(
 	let interrupted = false;
 	let rawOutput = "";
 	const reviewSessionFile = reviewSessionManager.getSessionFile();
-	if (!reviewSessionFile) throw new Error("Failed to create review session file.");
+	if (!reviewSessionFile) throw new Error("Failed to create audit session file.");
 
 	const persist = (status: ReviewResumeState["status"]) => {
 		persistReviewState(pi as any, {
@@ -92,12 +114,12 @@ export async function runNestedReview(
 		let inferredError = error
 			?? lastAssistant?.errorMessage
 			?? (lastAssistant?.stopReason && lastAssistant.stopReason !== "stop" && lastAssistant.stopReason !== "end"
-				? `Review session ended with stopReason=${lastAssistant.stopReason}`
+				? `Audit session ended with stopReason=${lastAssistant.stopReason}`
 				: undefined)
-			?? (rawOutput.trim() ? undefined : "Review session ended without producing reviewer JSON output.");
+			?? (rawOutput.trim() ? undefined : "Audit session ended without producing structured JSON output.");
 		const reviewOutput = !inferredError && rawOutput.trim() ? parseReviewOutput(rawOutput) : null;
 		if (!inferredError && reviewOutput && reviewOutput.findings.length === 0 && !rawOutput.trimStart().startsWith("{")) {
-			inferredError = rawOutput.trim() || "Review session failed before producing structured JSON output.";
+			inferredError = rawOutput.trim() || "Audit session failed before producing structured JSON output.";
 		}
 		return {
 			hint: resolved.userFacingHint,
@@ -114,39 +136,56 @@ export async function runNestedReview(
 
 	try {
 		if (ctx.hasUI) {
-			return await showReviewLivePanel(ctx, `${resumeState ? "Resuming" : "Reviewing"} ${resolved.userFacingHint}...`, async (api) => {
-				onLiveEntry = (_entry) => {};
-				onLiveEvent = (event) => {
-					api.pushEvent(event);
-				};
-				try {
-					if (api.abortSignal.aborted) {
-						interrupted = true;
-						persist("interrupted");
-						api.finish(finalize());
-						return;
-					}
-					api.abortSignal.addEventListener(
-						"abort",
-						() => {
+			const baseStatus = `Audit: ${resolved.userFacingHint}`;
+			return await showReviewLivePanel(
+				ctx,
+				baseStatus,
+				async (api) => {
+					api.setStatus(`${baseStatus}: preparing isolated session`);
+					onLiveEntry = (_entry) => {};
+					onLiveEvent = (event) => {
+						if (event.type === "tool_execution_start") {
+							const summary = formatter.format(event)?.text ?? event.toolName;
+							api.setStatus(`${baseStatus}: ${summary}`);
+						} else if (event.type === "tool_execution_end" && event.isError) {
+							const summary = (event as any).toolName ? `${event.toolName} failed` : "step failed";
+							api.setStatus(`${baseStatus}: ${summary}`);
+						} else if (event.type === "auto_retry_start") {
+							api.setStatus(`${baseStatus}: retry ${event.attempt}/${event.maxAttempts} - ${event.errorMessage}`);
+						} else if (event.type === "agent_end" && event.willRetry) {
+							api.setStatus(`${baseStatus}: retry queued`);
+						}
+						api.pushEvent(event);
+					};
+					try {
+						if (api.abortSignal.aborted) {
 							interrupted = true;
 							persist("interrupted");
-							void session.abort();
-						},
-						{ once: true },
-					);
-					await session.prompt(prompt);
-					persist("completed");
-					api.finish(finalize());
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					persist(interrupted ? "interrupted" : "completed");
-					api.finish(finalize(interrupted ? undefined : message));
-				} finally {
-					onLiveEntry = null;
-					onLiveEvent = null;
-				}
-			});
+							api.finish(finalize());
+							return;
+						}
+						api.abortSignal.addEventListener(
+							"abort",
+							() => {
+								interrupted = true;
+								persist("interrupted");
+								void session.abort();
+							},
+							{ once: true },
+						);
+						await session.prompt(prompt);
+						persist("completed");
+						api.finish(finalize());
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						persist(interrupted ? "interrupted" : "completed");
+						api.finish(finalize(interrupted ? undefined : message));
+					} finally {
+						onLiveEntry = null;
+						onLiveEvent = null;
+					}
+				},
+			);
 		}
 
 		await session.prompt(prompt);
