@@ -230,6 +230,8 @@ export async function showReviewLivePanel<T>(
 			pushEvent(event: AgentSessionEvent) {
 				const summary = summarizeWorkingEvent(event);
 				if (!summary) return;
+				if (event.type === "tool_execution_end" && !event.isError) return;
+				if (event.type === "tool_execution_start") return;
 				currentStatus = summary;
 				renderStatus();
 			},

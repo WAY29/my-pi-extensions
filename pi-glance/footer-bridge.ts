@@ -5,6 +5,7 @@ import { stripControls } from "./format.js";
 import type { GlanceConfig, GlanceState, GoalSnapshot } from "./types.js";
 
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
+const REVIEW_STATUS_KEYS = ["review-live", "review"] as const;
 
 function formatElapsed(seconds: number): string {
 	const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -41,8 +42,25 @@ export function renderGoalFooterLine(state: GlanceState, config: GlanceConfig, w
 	return truncateToWidth(`${prefix}${objective}${suffix}`, width, "…");
 }
 
+function reviewStatusText(footerData: ReadonlyFooterDataProvider): string | undefined {
+	const statuses = footerData.getExtensionStatuses();
+	for (const key of REVIEW_STATUS_KEYS) {
+		const value = statuses.get(key);
+		if (value && stripControls(value).trim()) return stripControls(value).trim();
+	}
+	return undefined;
+}
+
+function renderReviewFooterLine(footerData: ReadonlyFooterDataProvider, width: number, now = Date.now()): string | undefined {
+	const status = reviewStatusText(footerData);
+	if (!status || width <= 0) return undefined;
+	const marker = SPINNER_FRAMES[Math.floor(now / 250) % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
+	return truncateToWidth(`${marker} ${status}`, width, "…");
+}
+
 export class GlanceFooterBridge implements Component {
 	private goalTimer: ReturnType<typeof setInterval> | undefined;
+	private reviewTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
 		private readonly getState: () => GlanceState,
@@ -55,6 +73,7 @@ export class GlanceFooterBridge implements Component {
 
 	dispose(): void {
 		this.stopGoalTimer();
+		this.stopReviewTimer();
 	}
 
 	invalidate(): void {
@@ -63,8 +82,12 @@ export class GlanceFooterBridge implements Component {
 
 	render(width: number): string[] {
 		this.sync();
-		const line = renderGoalFooterLine(this.getState(), this.getConfig(), width);
-		return line ? [line] : [];
+		const lines: string[] = [];
+		const goalLine = renderGoalFooterLine(this.getState(), this.getConfig(), width);
+		const reviewLine = renderReviewFooterLine(this.footerData, width);
+		if (goalLine) lines.push(goalLine);
+		if (reviewLine) lines.push(reviewLine);
+		return lines;
 	}
 
 	private sync(): void {
@@ -78,6 +101,7 @@ export class GlanceFooterBridge implements Component {
 		}
 
 		this.syncGoalTimer(state);
+		this.syncReviewTimer();
 		if (changed) state.version++;
 	}
 
@@ -91,9 +115,25 @@ export class GlanceFooterBridge implements Component {
 		this.goalTimer = setInterval(() => this.requestRender?.(), 250);
 	}
 
+	private syncReviewTimer(): void {
+		const shouldSpin = !!reviewStatusText(this.footerData) && !!this.requestRender;
+		if (!shouldSpin) {
+			this.stopReviewTimer();
+			return;
+		}
+		if (this.reviewTimer) return;
+		this.reviewTimer = setInterval(() => this.requestRender?.(), 250);
+	}
+
 	private stopGoalTimer(): void {
 		if (!this.goalTimer) return;
 		clearInterval(this.goalTimer);
 		this.goalTimer = undefined;
+	}
+
+	private stopReviewTimer(): void {
+		if (!this.reviewTimer) return;
+		clearInterval(this.reviewTimer);
+		this.reviewTimer = undefined;
 	}
 }
