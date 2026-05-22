@@ -128,43 +128,6 @@ export async function showFindingPicker(
 	});
 }
 
-function summarizeWorkingEvent(event: AgentSessionEvent): string | null {
-	switch (event.type) {
-		case "tool_execution_start": {
-			const args: any = event.args;
-			switch (event.toolName) {
-				case "bash":
-					return `$ ${String(args?.command ?? "").replace(/\s+/g, " ").trim()}`;
-				case "read": {
-					const path = String(args?.path ?? "");
-					const offset = typeof args?.offset === "number" ? args.offset : 1;
-					const limit = typeof args?.limit === "number" ? args.limit : undefined;
-					return limit ? `read ${path}:${offset}-${offset + limit - 1}` : `read ${path}`;
-				}
-				case "grep": {
-					const pattern = String(args?.pattern ?? "");
-					const searchPath = String(args?.path ?? ".");
-					return pattern ? `grep /${pattern}/ in ${searchPath}` : `grep in ${searchPath}`;
-				}
-				case "find":
-					return `find ${String(args?.pattern ?? "*")} in ${String(args?.path ?? ".")}`;
-				case "ls":
-					return `ls ${String(args?.path ?? ".")}`;
-				default:
-					return event.toolName;
-			}
-		}
-		case "tool_execution_end":
-			return event.isError ? `${event.toolName} failed` : null;
-		case "auto_retry_start":
-			return `retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`;
-		case "agent_end":
-			return event.willRetry ? "audit turn ended, retry queued" : null;
-		default:
-			return null;
-	}
-}
-
 export async function showReviewLivePanel<T>(
 	ctx: ExtensionContext | ExtensionCommandContext,
 	title: string,
@@ -227,13 +190,10 @@ export async function showReviewLivePanel<T>(
 				currentStatus = text;
 				renderStatus();
 			},
-			pushEvent(event: AgentSessionEvent) {
-				const summary = summarizeWorkingEvent(event);
-				if (!summary) return;
-				if (event.type === "tool_execution_end" && !event.isError) return;
-				if (event.type === "tool_execution_start") return;
-				currentStatus = summary;
-				renderStatus();
+			pushEvent(_event: AgentSessionEvent) {
+				// The caller is responsible for sending fully-formed status text.
+				// Do not derive fallback summaries here, or we may clobber prefixes like
+				// `Audit: <hint>: <action>` with bare tool names such as `grep failed`.
 			},
 			finish(value: T) {
 				cleanup();
