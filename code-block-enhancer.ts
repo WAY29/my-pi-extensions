@@ -3,6 +3,7 @@ import {
   AssistantMessageComponent,
   BranchSummaryMessageComponent,
   CompactionSummaryMessageComponent,
+  buildSessionContext,
   copyToClipboard,
   type ExtensionAPI,
   type ExtensionContext,
@@ -177,14 +178,21 @@ function appendTextCodeBlocks(
   return { nextIndex, assignment };
 }
 
+function getVisibleSessionMessages(ctx: Pick<CopyContext, "sessionManager">): ReturnType<typeof buildSessionContext>["messages"] {
+  return buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages;
+}
+
 function shouldAppendLiveAssistantMessage(ctx: Pick<CopyContext, "sessionManager">, message: AssistantMessage): boolean {
   const targetText = getAssistantText(message);
   if (!targetText) return false;
 
-  return !ctx.sessionManager.getBranch().some((entry) => {
-    if (entry.type !== "message" || entry.message.role !== "assistant") return false;
-    const branchMessage = entry.message as AssistantMessage;
-    return branchMessage === message || (branchMessage.timestamp === message.timestamp && getAssistantText(branchMessage) === targetText);
+  return !getVisibleSessionMessages(ctx).some((contextMessage) => {
+    if (contextMessage.role !== "assistant") return false;
+
+    const assistantMessage = contextMessage as AssistantMessage;
+    if (assistantMessage.stopReason !== "stop") return false;
+
+    return assistantMessage === message || (assistantMessage.timestamp === message.timestamp && getAssistantText(assistantMessage) === targetText);
   });
 }
 
@@ -208,7 +216,6 @@ function buildSessionCodeBlockSnapshot(
   const messageAssignmentsByKey = new Map<string, MessageContentAssignment[]>();
   const messageAssignmentsByRef = new WeakMap<AssistantMessage, MessageContentAssignment[]>();
   const blocks: CodeBlock[] = [];
-  const branch = ctx.sessionManager.getBranch();
   let nextIndex = 1;
 
   const appendMessageAssignments = (message: AssistantMessage) => {
@@ -228,53 +235,29 @@ function buildSessionCodeBlockSnapshot(
     messageAssignmentsByRef.set(message, messageAssignments);
   };
 
-  const appendVisibleEntry = (entry: (typeof branch)[number]) => {
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      const message = entry.message as AssistantMessage;
-      if (message.stopReason !== "stop") return;
-      appendMessageAssignments(message);
-      return;
+  for (const message of getVisibleSessionMessages(ctx)) {
+    if (message.role === "assistant") {
+      const assistantMessage = message as AssistantMessage;
+      if (assistantMessage.stopReason !== "stop") continue;
+      appendMessageAssignments(assistantMessage);
+      continue;
     }
 
-    if (entry.type === "branch_summary" && entry.summary) {
-      const result = appendTextCodeBlocks(getBranchSummaryMarkdownText(entry.summary), blocks, assignmentsByText, nextIndex);
+    if (message.role === "branchSummary" && typeof message.summary === "string") {
+      const result = appendTextCodeBlocks(getBranchSummaryMarkdownText(message.summary), blocks, assignmentsByText, nextIndex);
       nextIndex = result.nextIndex;
-      return;
+      continue;
     }
 
-    if (entry.type === "compaction") {
+    if (message.role === "compactionSummary" && typeof message.summary === "string") {
+      const tokensBefore = typeof message.tokensBefore === "number" ? message.tokensBefore : 0;
       const result = appendTextCodeBlocks(
-        getCompactionSummaryMarkdownText(entry.summary, entry.tokensBefore),
+        getCompactionSummaryMarkdownText(message.summary, tokensBefore),
         blocks,
         assignmentsByText,
         nextIndex,
       );
       nextIndex = result.nextIndex;
-    }
-  };
-
-  const latestCompaction = [...branch].reverse().find((entry) => entry.type === "compaction");
-  if (latestCompaction) {
-    appendVisibleEntry(latestCompaction);
-
-    const compactionIndex = branch.findIndex((entry) => entry.id === latestCompaction.id);
-    let foundFirstKept = false;
-    for (let i = 0; i < compactionIndex; i++) {
-      const entry = branch[i]!;
-      if (entry.id === latestCompaction.firstKeptEntryId) {
-        foundFirstKept = true;
-      }
-      if (foundFirstKept) {
-        appendVisibleEntry(entry);
-      }
-    }
-
-    for (let i = compactionIndex + 1; i < branch.length; i++) {
-      appendVisibleEntry(branch[i]!);
-    }
-  } else {
-    for (const entry of branch) {
-      appendVisibleEntry(entry);
     }
   }
 
