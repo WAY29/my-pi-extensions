@@ -32,7 +32,7 @@ type State = {
 const STATUS_KEY = "00-working-status";
 const TICK_MS = 1000;
 const ACTION_LABELS: Record<ActionKey, string> = {
-	thinking: "Working...",
+	thinking: "Thinking...",
 	responding: "Writing Response...",
 	bash: "Running Command...",
 	read: "Reading File...",
