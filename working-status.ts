@@ -30,6 +30,7 @@ type State = {
 };
 
 const STATUS_KEY = "00-working-status";
+const FINISHED_WIDGET_KEY = "working-status-finished";
 const TICK_MS = 1000;
 const ACTION_LABELS: Record<ActionKey, string> = {
 	thinking: "Thinking...",
@@ -101,10 +102,16 @@ function getEffectiveAction(state: State): ActionKey | null {
 	return state.currentAction ?? "thinking";
 }
 
+function clearFinishedWidget(ctx: ExtensionContext) {
+	ctx.ui.setWidget(FINISHED_WIDGET_KEY, undefined);
+}
+
 function setFinishedAppearance(ctx: ExtensionContext, durationMs: number) {
-	const message = ctx.ui.theme.fg("dim", `Finished working in ${formatDuration(durationMs)}`);
-	ctx.ui.setWorkingMessage(message);
-	ctx.ui.setStatus(STATUS_KEY, message);
+	const message = `Finished working in ${formatDuration(durationMs)}`;
+	const dimMessage = ctx.ui.theme.fg("dim", message);
+	ctx.ui.setWorkingMessage(dimMessage);
+	ctx.ui.setStatus(STATUS_KEY, dimMessage);
+	ctx.ui.setWidget(FINISHED_WIDGET_KEY, [dimMessage]);
 }
 
 function setRunningAppearance(ctx: ExtensionContext, state: State) {
@@ -114,6 +121,7 @@ function setRunningAppearance(ctx: ExtensionContext, state: State) {
 	const duration = formatDuration(Date.now() - state.agentStartedAt);
 	ctx.ui.setWorkingMessage(`${label} (${duration})`);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
+	clearFinishedWidget(ctx);
 }
 
 function refreshUI(state: State) {
@@ -132,6 +140,7 @@ function refreshUI(state: State) {
 
 	ctx.ui.setWorkingMessage();
 	ctx.ui.setStatus(STATUS_KEY, undefined);
+	clearFinishedWidget(ctx);
 }
 
 function stopTimer(state: State) {
@@ -171,6 +180,7 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		state.lastCtx = ctx;
+		clearFinishedWidget(ctx);
 		ctx.ui.setWorkingIndicator({
 			frames: [ctx.ui.theme.fg("accent", "⠋"), ctx.ui.theme.fg("accent", "⠙"), ctx.ui.theme.fg("accent", "⠹"), ctx.ui.theme.fg("accent", "⠸"), ctx.ui.theme.fg("accent", "⠼"), ctx.ui.theme.fg("accent", "⠴"), ctx.ui.theme.fg("accent", "⠦"), ctx.ui.theme.fg("accent", "⠧"), ctx.ui.theme.fg("accent", "⠇"), ctx.ui.theme.fg("accent", "⠏")],
 			intervalMs: 80,
@@ -253,6 +263,7 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 		state.hasAssistantStreamedText = false;
 		state.finishedDurationMs = null;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		clearFinishedWidget(ctx);
 		ctx.ui.setWorkingMessage();
 		ctx.ui.setWorkingIndicator();
 	});
