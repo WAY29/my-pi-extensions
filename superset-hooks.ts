@@ -13,6 +13,8 @@
  *   pi `before_agent_start`    -> `UserPromptSubmit`
  *   pi `tool_execution_start`  -> `request_user_input` (AskUserQuestion only)
  *   pi `tool_execution_end`    -> `Start` (AskUserQuestion finished; agent resumes work)
+ *   pi `session_before_compact`-> `Start` (/compact starts; show amber working dot)
+ *   pi `session_compact`       -> `Stop` (/compact finished; show end)
  *   pi `agent_end`             -> `Stop` (final end only; skip auto-retry handoff)
  *   pi `session_shutdown`      -> `Stop`
  *
@@ -151,6 +153,22 @@ export default function (pi: ExtensionAPI) {
 		// continue the turn. Emit Start again so Superset transitions from the
 		// red "needs attention" state back to amber "working" until agent_end.
 		fireLifecycle("Start", ctx);
+	});
+
+	pi.on("session_before_compact", async (_event, ctx) => {
+		if (shouldSkip(ctx)) return;
+
+		// `/compact` is a harness-level operation rather than a normal agent run,
+		// so `before_agent_start`/`agent_end` do not cover it. Emit Start so
+		// Superset shows the amber working dot while compaction is running.
+		fireLifecycle("Start", ctx);
+	});
+
+	pi.on("session_compact", async (_event, ctx) => {
+		if (shouldSkip(ctx)) return;
+
+		activeAttentionIds.clear();
+		fireLifecycle("Stop", ctx);
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
