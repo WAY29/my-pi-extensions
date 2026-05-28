@@ -29,7 +29,6 @@
       "./image-gen.ts",
       "./keydump.ts",
       "./permission-gate.ts",
-      "./path-autocomplete-normalizer.ts",
       "./pretty-image-paste.ts",
       "./progress-checkpoints.ts",
       "./retry-stream-read-error.ts",

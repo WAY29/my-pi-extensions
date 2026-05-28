@@ -57,7 +57,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `image-gen.ts` | image tool | `image_gen` | Adds an OpenAI-compatible raster image generation/editing tool for pi. Supports prompt-only generation, workspace-path edits, recent attached-image fallback, and transparent-output fallback via local chroma-key removal when the configured relay cannot serve native transparency. |
 | `keydump.ts` | command/debug UI | `/keydump` | Shows raw key sequences received by pi. Useful when debugging terminal keybindings. |
 | `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm` or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
-| `path-autocomplete-normalizer.ts` | autocomplete patch | automatic | Normalizes repeated `/./` path segments produced by some file-completion flows. |
 | `pretty-image-paste.ts` | input/image helper | automatic | Replaces pasted pi clipboard image paths with readable `[Image #n]` labels, then attaches the referenced images when the prompt is submitted. |
 | `progress-checkpoints.ts` | prompt helper | `/progress`, `/progress-checkpoints` | Injects a progress-checkpoint policy so the assistant gives short status updates around multi-step or tool-heavy work. |
 | `retry-stream-read-error.ts` | retry patch | automatic | Treats `stream_read_error` assistant failures as retryable by patching pi's retry classifier, with a warning when the current pi version is unsupported. |

@@ -57,7 +57,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `image-gen.ts` | 图片工具 | `image_gen` | 为 pi 增加一个 OpenAI 兼容的位图图片生成/编辑工具。支持纯 prompt 生成、工作区路径图片编辑、最近附图回退，以及当当前 relay 无法提供原生透明图时通过本地 chroma-key 抠图得到透明输出。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
 | `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
-| `path-autocomplete-normalizer.ts` | 自动补全 patch | 自动 | 规范化部分文件补全流程产生的重复 `/./` 路径片段。 |
 | `pretty-image-paste.ts` | 输入/图片辅助 | 自动 | 将粘贴进编辑器的 pi 剪贴板图片路径替换为易读的 `[Image #n]` 标签，并在提交时附加对应图片。 |
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
