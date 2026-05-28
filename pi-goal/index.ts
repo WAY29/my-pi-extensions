@@ -20,10 +20,15 @@ type GoalState = {
 
 type GoalEventKind = "active" | "continuation" | "paused" | "resumed" | "cleared" | "budget_limited" | "complete";
 
+type GoalSnapshot = GoalState & {
+	activeTurnStartedAt: number | null;
+};
+
 let goal: GoalState | null = null;
 let statusBarEnabled = true;
 let activeTurnStartedAt: number | null = null;
 let continuationQueued = false;
+let continuationTimer: ReturnType<typeof setTimeout> | null = null;
 
 function parseTokenBudget(input: string): { objective: string; tokenBudget: number | null; error?: string } {
 	const match = input.match(/(?:^|\s)--tokens(?:=|\s+)([0-9]+(?:\.[0-9]+)?\s*[kKmM]?)(?:\s|$)/);
@@ -160,6 +165,19 @@ function updateStatusBar(ctx: ExtensionContext) {
 	ctx.ui.setStatus(CUSTOM_TYPE, statusBarEnabled ? statusLine(goal) ?? "" : "");
 }
 
+function currentGoalSnapshot(): GoalSnapshot | null {
+	return goal ? { ...goal, activeTurnStartedAt: goal.status === "active" ? activeTurnStartedAt : null } : null;
+}
+
+function emitGoalState(pi: ExtensionAPI) {
+	pi.events.emit("pi-goal:state", { goal: currentGoalSnapshot(), statusBarEnabled });
+}
+
+function respondWithGoalState(event: unknown) {
+	const respond = (event as { respond?: (response: { goal: GoalSnapshot | null; statusBarEnabled: boolean }) => void })?.respond;
+	if (typeof respond === "function") respond({ goal: currentGoalSnapshot(), statusBarEnabled });
+}
+
 const GOAL_TOOL_NAMES = ["get_goal", "update_goal"];
 
 // Expose goal tools to the LLM only while a goal is actively being pursued.
@@ -173,15 +191,18 @@ function syncGoalTools(pi: ExtensionAPI) {
 }
 
 function persist(pi: ExtensionAPI, ctx: ExtensionContext, next: GoalState | null) {
+	if (next?.status !== "active") activeTurnStartedAt = null;
 	goal = next;
 	pi.appendEntry(CUSTOM_TYPE, { goal: next, statusBarEnabled });
 	updateStatusBar(ctx);
 	syncGoalTools(pi);
+	emitGoalState(pi);
 }
 
 function persistSettings(pi: ExtensionAPI, ctx: ExtensionContext) {
 	pi.appendEntry(CUSTOM_TYPE, { goal, statusBarEnabled });
 	updateStatusBar(ctx);
+	emitGoalState(pi);
 }
 
 function continuationPrompt(state: GoalState): string {
@@ -236,17 +257,52 @@ The system has marked the goal as budget_limited, so do not start new substantiv
 Do not call update_goal unless the goal is actually complete.`;
 }
 
-function queueContinuation(pi: ExtensionAPI, state: GoalState) {
+function clearQueuedContinuation() {
+	if (continuationTimer !== null) {
+		clearTimeout(continuationTimer);
+		continuationTimer = null;
+	}
+	continuationQueued = false;
+}
+
+function queueContinuation(pi: ExtensionAPI, ctx: ExtensionContext, state: GoalState) {
 	if (continuationQueued || state.status !== "active") return;
 	continuationQueued = true;
-	queueMicrotask(() => {
-		continuationQueued = false;
-		if (!goal || goal.id !== state.id || goal.status !== "active") return;
-		emitGoalEvent(pi, "continuation", goal, { triggerTurn: true, deliverAs: "followUp" });
-	});
+
+	const tick = () => {
+		continuationTimer = setTimeout(() => {
+			continuationTimer = null;
+			if (!goal || goal.id !== state.id || goal.status !== "active") {
+				continuationQueued = false;
+				return;
+			}
+
+			// `agent_end` fires before pi fully becomes idle. If we inject the
+			// continuation too early, it gets queued onto the just-finished run's
+			// follow-up queue after the drain point has already passed, so no next
+			// turn starts. Wait until the session is truly idle, then trigger a
+			// fresh turn explicitly.
+			if (!ctx.isIdle()) {
+				tick();
+				return;
+			}
+
+			if (ctx.hasPendingMessages()) {
+				continuationQueued = false;
+				return;
+			}
+
+			continuationQueued = false;
+			emitGoalEvent(pi, "continuation", goal, { triggerTurn: true });
+		}, 0);
+	};
+
+	tick();
 }
 
 export default function piGoal(pi: ExtensionAPI) {
+	pi.events.on("pi-goal:request-state", respondWithGoalState);
+
 	pi.registerMessageRenderer(EVENT_TYPE, (message, { expanded }, theme) => {
 		const details = message.details as { kind?: GoalEventKind; goal?: GoalState | null; timestamp?: number } | undefined;
 		const kind = details?.kind ?? "continuation";
@@ -371,7 +427,7 @@ export default function piGoal(pi: ExtensionAPI) {
 				const next = { ...goal, status, updatedAt: now };
 				persist(pi, ctx, next);
 				emitGoalEvent(pi, status === "active" ? "resumed" : "paused", next);
-				if (status === "active" && ctx.isIdle()) queueContinuation(pi, next);
+				if (status === "active" && ctx.isIdle()) queueContinuation(pi, ctx, next);
 				return;
 			}
 
@@ -408,7 +464,7 @@ export default function piGoal(pi: ExtensionAPI) {
 		const restored = latestStateFromSession(ctx);
 		goal = restored.goal;
 		statusBarEnabled = restored.statusBarEnabled;
-		continuationQueued = false;
+		clearQueuedContinuation();
 		activeTurnStartedAt = null;
 		// Hide goal tools from the LLM unless we have an active goal to pursue.
 		syncGoalTools(pi);
@@ -425,6 +481,7 @@ export default function piGoal(pi: ExtensionAPI) {
 			return;
 		}
 		updateStatusBar(ctx);
+		emitGoalState(pi);
 		if (goal?.status === "active") {
 			// Fresh session_start with an active goal restored from disk.
 			// Notify the human; the next agent_end will deliver the full
@@ -437,11 +494,16 @@ export default function piGoal(pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", (_event, _ctx) => {
-		activeTurnStartedAt = Date.now();
+		activeTurnStartedAt = goal?.status === "active" ? Date.now() : null;
+		emitGoalState(pi);
 	});
 
 	pi.on("turn_end", (event, ctx) => {
-		if (!goal || goal.status !== "active") return;
+		if (!goal || goal.status !== "active") {
+			activeTurnStartedAt = null;
+			emitGoalState(pi);
+			return;
+		}
 		const elapsed = activeTurnStartedAt ? Math.max(0, Math.round((Date.now() - activeTurnStartedAt) / 1000)) : 0;
 		activeTurnStartedAt = null;
 		const tokenDelta = tokenDeltaFromUsage((event.message as { usage?: UsageSnapshot } | undefined)?.usage);
@@ -460,8 +522,28 @@ export default function piGoal(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (event, ctx) => {
+		const wasAborted =
+			ctx.signal?.aborted ||
+			event.messages.some((message) => message.role === "assistant" && message.stopReason === "aborted");
+
+		if (wasAborted) {
+			if (goal?.status === "active") {
+				const next: GoalState = { ...goal, status: "paused", updatedAt: Date.now() };
+				persist(pi, ctx, next);
+				ctx.ui.notify(
+					`‖ Goal paused after interrupt: ${truncateObjective(next.objective)}\nUse /goal resume to continue, or /goal clear to stop.`,
+					"info",
+				);
+			}
+			return;
+		}
+
 		if (!goal || goal.status !== "active" || ctx.hasPendingMessages()) return;
-		queueContinuation(pi, goal);
+		queueContinuation(pi, ctx, goal);
+	});
+
+	pi.on("session_shutdown", () => {
+		clearQueuedContinuation();
 	});
 }
