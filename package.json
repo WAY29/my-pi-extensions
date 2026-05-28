@@ -35,6 +35,7 @@
       "./stable-scroll.ts",
       "./sudo-auth.ts",
       "./superset-hooks.ts",
+      "./working-status.ts", 
       "./superset-hooks/attention.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
