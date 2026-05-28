@@ -13,7 +13,7 @@
  *   pi `before_agent_start`    -> `UserPromptSubmit`
  *   pi `tool_execution_start`  -> `request_user_input` (AskUserQuestion only)
  *   pi `tool_execution_end`    -> `Start` (AskUserQuestion finished; agent resumes work)
- *   pi `agent_end`             -> `Stop`
+ *   pi `agent_end`             -> `Stop` (final end only; skip auto-retry handoff)
  *   pi `session_shutdown`      -> `Stop`
  *
  * Notes:
@@ -153,8 +153,10 @@ export default function (pi: ExtensionAPI) {
 		fireLifecycle("Start", ctx);
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_end", async (event, ctx) => {
 		if (shouldSkip(ctx)) return;
+		if (event.willRetry) return;
+
 		activeAttentionIds.clear();
 		fireLifecycle("Stop", ctx);
 	});
