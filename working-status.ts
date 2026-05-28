@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type ActionKey =
+	| "working"
 	| "thinking"
 	| "responding"
 	| "bash"
@@ -33,6 +34,7 @@ const STATUS_KEY = "00-working-status";
 const FINISHED_WIDGET_KEY = "working-status-finished";
 const TICK_MS = 1000;
 const ACTION_LABELS: Record<ActionKey, string> = {
+	working: "Working...",
 	thinking: "Thinking...",
 	responding: "Writing Response...",
 	bash: "Running Command...",
@@ -98,8 +100,10 @@ function getEffectiveAction(state: State): ActionKey | null {
 	const latestToolAction = getLatestToolAction(state);
 	if (latestToolAction) return latestToolAction;
 	if (state.agentStartedAt == null) return null;
+	if (state.currentAction === "thinking") return "thinking";
+	if (state.currentAction === "working") return "working";
 	if (state.lastToolAction) return state.lastToolAction;
-	return state.currentAction ?? "thinking";
+	return state.currentAction ?? "working";
 }
 
 function clearFinishedWidget(ctx: ExtensionContext) {
@@ -159,7 +163,7 @@ function ensureTimer(state: State) {
 
 function resetForNewAgent(state: State) {
 	state.agentStartedAt = Date.now();
-	state.currentAction = "thinking";
+	state.currentAction = "working";
 	state.lastToolAction = null;
 	state.activeTools.clear();
 	state.hasAssistantStreamedText = false;
@@ -201,17 +205,21 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 		if (state.activeTools.size > 0) return;
 
 		const streamEventType = event.assistantMessageEvent.type;
+		if (streamEventType === "thinking_start" || streamEventType === "thinking_delta" || streamEventType === "thinking_end") {
+			state.currentAction = "thinking";
+			refreshUI(state);
+			return;
+		}
+
 		if (streamEventType === "text_start" || streamEventType === "text_delta" || streamEventType === "text_end") {
 			state.hasAssistantStreamedText = true;
-			if (!state.lastToolAction) {
-				state.currentAction = "thinking";
-				refreshUI(state);
-			}
+			state.currentAction = state.lastToolAction ?? state.currentAction ?? "working";
+			refreshUI(state);
 			return;
 		}
 
 		if (!state.hasAssistantStreamedText && !state.lastToolAction) {
-			state.currentAction = "thinking";
+			state.currentAction = state.currentAction === "thinking" ? "thinking" : "working";
 			refreshUI(state);
 		}
 	});
@@ -234,7 +242,7 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 		state.lastCtx = ctx;
 		state.activeTools.delete(event.toolCallId);
 		if (state.agentStartedAt == null) return;
-		state.currentAction = state.activeTools.size > 0 ? getLatestToolAction(state) : state.lastToolAction ?? "thinking";
+		state.currentAction = state.activeTools.size > 0 ? getLatestToolAction(state) : state.lastToolAction ?? "working";
 		refreshUI(state);
 	});
 
