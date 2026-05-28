@@ -91,6 +91,7 @@ interface RenderAssignment {
 
 interface MessageContentAssignment extends RenderAssignment {
   text: string;
+  contentIndex: number;
 }
 
 interface CodeBlockSnapshot {
@@ -149,6 +150,7 @@ function appendTextCodeBlocks(
   blocks: CodeBlock[],
   assignmentsByText: Map<string, RenderAssignment[]>,
   nextIndex: number,
+  contentIndex = -1,
 ): { nextIndex: number; assignment?: MessageContentAssignment } {
   const text = normalizeMarkdownText(rawText);
   if (!text) return { nextIndex };
@@ -169,6 +171,7 @@ function appendTextCodeBlocks(
     startIndex,
     blockCount: extracted.length,
     text,
+    contentIndex,
   };
 
   const existing = assignmentsByText.get(text);
@@ -221,9 +224,10 @@ function buildSessionCodeBlockSnapshot(
   const appendMessageAssignments = (message: AssistantMessage) => {
     const messageAssignments: MessageContentAssignment[] = [];
 
-    for (const content of message.content) {
+    for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
+      const content = message.content[contentIndex];
       if (content.type !== "text") continue;
-      const result = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex);
+      const result = appendTextCodeBlocks(content.text, blocks, assignmentsByText, nextIndex, contentIndex);
       nextIndex = result.nextIndex;
       if (result.assignment) messageAssignments.push(result.assignment);
     }
@@ -662,19 +666,66 @@ function renderCodeBlock(instance: MarkdownInternals, token: MarkdownToken, widt
   return lines;
 }
 
-function assignMessageMarkdownRanges(message: AssistantMessage, markdowns: object[]): void {
+function isMarkdownLike(value: unknown): value is MarkdownInternals & object {
+  if (typeof value !== "object" || value === null) return false;
+
+  const candidate = value as {
+    render?: unknown;
+    renderToken?: unknown;
+    theme?: { codeBlock?: unknown; codeBlockBorder?: unknown } | null;
+  };
+
+  return (
+    typeof candidate.render === "function" &&
+    typeof candidate.renderToken === "function" &&
+    typeof candidate.theme?.codeBlock === "function" &&
+    typeof candidate.theme?.codeBlockBorder === "function"
+  );
+}
+
+function assignMessageMarkdownRanges(
+  message: AssistantMessage,
+  markdowns: Array<MarkdownInternals & object>,
+  hideThinkingBlock: boolean,
+): void {
   const assignments =
     SESSION_CODE_BLOCK_STATE.messageAssignmentsByRef.get(message) ??
     SESSION_CODE_BLOCK_STATE.messageAssignmentsByKey.get(getAssistantMessageKey(message));
   if (!assignments || assignments.length === 0) return;
 
+  const assignmentsByContentIndex = new Map(assignments.map((assignment) => [assignment.contentIndex, assignment] as const));
+  const boundAssignmentIds = new Set<string>();
   let markdownIndex = 0;
-  for (const assignment of assignments) {
-    while (markdownIndex < markdowns.length) {
+
+  for (let contentIndex = 0; contentIndex < message.content.length && markdownIndex < markdowns.length; contentIndex++) {
+    const content = message.content[contentIndex];
+
+    if (content.type === "text" && content.text.trim()) {
       const markdown = markdowns[markdownIndex++]!;
-      const text = normalizeMarkdownText((markdown as MarkdownInternals).text ?? "");
+      const assignment = assignmentsByContentIndex.get(contentIndex);
+      if (!assignment) continue;
+      bindDirectRenderAssignment(markdown, assignment);
+      boundAssignmentIds.add(assignment.id);
+      continue;
+    }
+
+    if (content.type === "thinking" && content.thinking.trim() && !hideThinkingBlock) {
+      markdownIndex++;
+    }
+  }
+
+  if (boundAssignmentIds.size === assignments.length) return;
+
+  let fallbackMarkdownIndex = 0;
+  for (const assignment of assignments) {
+    if (boundAssignmentIds.has(assignment.id)) continue;
+
+    while (fallbackMarkdownIndex < markdowns.length) {
+      const markdown = markdowns[fallbackMarkdownIndex++]!;
+      const text = normalizeMarkdownText(markdown.text ?? "");
       if (text !== assignment.text) continue;
       bindDirectRenderAssignment(markdown, assignment);
+      boundAssignmentIds.add(assignment.id);
       break;
     }
   }
@@ -684,6 +735,7 @@ function patchAssistantMessageComponent(): boolean {
   const proto = AssistantMessageComponent.prototype as unknown as Record<PropertyKey, unknown> & {
     render?: (width: number) => string[];
     contentContainer?: { children?: object[] };
+    hideThinkingBlock?: boolean;
     lastMessage?: AssistantMessage;
   };
 
@@ -696,9 +748,9 @@ function patchAssistantMessageComponent(): boolean {
     const children = this.contentContainer?.children;
     const message = this.lastMessage;
     if (message && Array.isArray(children) && children.length > 0) {
-      const markdowns = children.filter((child): child is object => child instanceof Markdown);
+      const markdowns = children.filter(isMarkdownLike);
       if (markdowns.length > 0) {
-        assignMessageMarkdownRanges(message, markdowns);
+        assignMessageMarkdownRanges(message, markdowns, this.hideThinkingBlock === true);
       }
     }
 
@@ -729,7 +781,7 @@ function patchSummaryMessageComponent(
     const message = this.message;
     const children = this.children;
     if (message && Array.isArray(children) && children.length > 0) {
-      const markdowns = children.filter((child): child is object => child instanceof Markdown);
+      const markdowns = children.filter(isMarkdownLike);
       const assignment = SESSION_CODE_BLOCK_STATE.assignmentsByText.get(normalizeMarkdownText(getText(message)))?.[0];
       if (assignment) {
         for (const markdown of markdowns) {
