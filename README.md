@@ -63,6 +63,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `stable-scroll.ts` | UI patch | automatic | Filters terminal clear-scrollback sequences during normal redraws so TUI refreshes do not wipe scrollback, while allowing session-start clears. |
 | `sudo-auth.ts` | sudo helper | automatic | Provides a TUI askpass bridge for `sudo` in bash commands. Passwords are cached in extension memory only and cleared on authentication failure or session shutdown. |
 | `superset-hooks.ts` | integration hook | automatic | Integrates pi with Superset terminal lifecycle notifications by calling Superset's `notify.sh`. Sends working, input-needed, and completion signals so Superset can show the correct pane status colors for pi sessions. |
+| `superset-hooks/attention.ts` | helper module | automatic | Shared helper for emitting temporary “awaiting user attention” lifecycle signals to Superset-aware extensions such as `superset-hooks.ts`, `permission-gate.ts`, and `pi-sandbox/`. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
 | `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
@@ -160,6 +161,7 @@ Use `pretty-image-paste.ts` when pasting multiple screenshots or clipboard image
 
 - The root `package.json` declares the package extension entries under `pi.extensions`. Keep it in sync when adding or removing top-level extensions.
 - `bash-tool-coordinator.ts` is a helper module, but it is still listed in the package manifest so package installs mirror the local auto-discovered extension directory.
+- `superset-hooks/attention.ts` is also a helper module. It exists so multiple extensions can share the same Superset attention signaling without duplicating event-name and start/end bookkeeping logic.
 - `pi-glance/` and `pi-sandbox/` have their own `package.json` files and may also be usable as standalone pi packages.
 - The root `sandbox.json` is a recommended macOS `pi-sandbox/` policy copied from `~/.pi/agent/sandbox.json`; keep it separate from `pi-sandbox/sandbox.json`, which belongs to the standalone package source.
 - `pi-sandbox/dist/` is intentionally kept because `pi-sandbox/index.ts` re-exports `./dist/index.js`.

@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { withSupersetAttention } from "./superset-hooks/attention";
 
 type MatchRange = { start: number; end: number };
 
@@ -131,7 +132,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const highlightedCommand = highlightRanges(command, dangerousMatches, ctx.ui.theme.getFgAnsi("accent"));
-			const choice = await selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]);
+			const choice = await withSupersetAttention(pi, "permission-gate", () =>
+				selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]),
+			);
 
 			if (choice !== "Yes") {
 				return { block: true, reason: "Blocked by user" };

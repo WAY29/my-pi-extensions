@@ -29,6 +29,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+	SUPERSET_ATTENTION_EVENT,
+	type SupersetAttentionEvent,
+} from "./superset-hooks/attention";
 
 type HookCtx = Pick<ExtensionContext, "hasUI" | "sessionManager">;
 
@@ -86,6 +90,37 @@ export default function (pi: ExtensionAPI) {
 	const notifyScript = getNotifyScriptPath();
 	if (!existsSync(notifyScript)) return;
 
+	let lastCtx: HookCtx | undefined;
+	const activeAttentionIds = new Set<string>();
+
+	function rememberCtx(ctx: HookCtx | undefined): void {
+		if (ctx) lastCtx = ctx;
+	}
+
+	function fireLifecycle(eventName: string, ctx?: HookCtx): void {
+		rememberCtx(ctx);
+		fire(notifyScript, eventName, ctx ?? lastCtx);
+	}
+
+	pi.events.on(SUPERSET_ATTENTION_EVENT, (data: unknown) => {
+		const event = data && typeof data === "object" ? (data as Partial<SupersetAttentionEvent>) : undefined;
+		if (!event?.id || !event.phase) return;
+
+		const previousSize = activeAttentionIds.size;
+		if (event.phase === "start") {
+			activeAttentionIds.add(event.id);
+			if (previousSize === 0 && activeAttentionIds.size === 1) {
+				fireLifecycle("request_user_input");
+			}
+			return;
+		}
+
+		activeAttentionIds.delete(event.id);
+		if (previousSize > 0 && activeAttentionIds.size === 0) {
+			fireLifecycle("Start");
+		}
+	});
+
 	// Do not emit SessionStart from pi's `session_start`.
 	//
 	// In pi, `session_start` fires as soon as the UI/session opens or reloads,
@@ -96,13 +131,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		if (shouldSkip(ctx)) return;
-		fire(notifyScript, "UserPromptSubmit", ctx);
+		fireLifecycle("UserPromptSubmit", ctx);
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
 		if (shouldSkip(ctx)) return;
 		if (event.toolName !== "AskUserQuestion") return;
-		fire(notifyScript, "request_user_input", ctx);
+		fireLifecycle("request_user_input", ctx);
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
@@ -115,18 +150,20 @@ export default function (pi: ExtensionAPI) {
 		// The question was answered and the tool finished, so pi is about to
 		// continue the turn. Emit Start again so Superset transitions from the
 		// red "needs attention" state back to amber "working" until agent_end.
-		fire(notifyScript, "Start", ctx);
+		fireLifecycle("Start", ctx);
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (shouldSkip(ctx)) return;
-		fire(notifyScript, "Stop", ctx);
+		activeAttentionIds.clear();
+		fireLifecycle("Stop", ctx);
 	});
 
 	// Ensure Superset does not get stuck in a running state on quit/reload/
 	// new-session/resume/fork, even if pi stops mid-turn.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (shouldSkip(ctx)) return;
-		fire(notifyScript, "Stop", ctx);
+		activeAttentionIds.clear();
+		fireLifecycle("Stop", ctx);
 	});
 }
