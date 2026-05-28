@@ -34,6 +34,7 @@
       "./retry-stream-read-error.ts",
       "./stable-scroll.ts",
       "./sudo-auth.ts",
+      "./superset-hooks.ts",
       "./pi-glance/index.ts",
       "./pi-goal/index.ts",
       "./pi-rewind/index.ts",
