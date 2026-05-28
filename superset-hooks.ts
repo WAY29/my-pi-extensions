@@ -61,7 +61,7 @@ function getSessionId(ctx: HookCtx): string | undefined {
 	return ctx.sessionManager.getSessionFile() ?? undefined;
 }
 
-function fire(notifyScript: string, eventName: string, ctx?: HookCtx): void {
+function fire(notifyScript: string, eventName: string, ctx?: HookCtx): Promise<void> {
 	const payload: Record<string, string> = {
 		hook_event_name: eventName,
 	};
@@ -71,19 +71,24 @@ function fire(notifyScript: string, eventName: string, ctx?: HookCtx): void {
 		payload.session_id = sessionId;
 	}
 
-	try {
-		const child = spawn(notifyScript, [JSON.stringify(payload)], {
-			stdio: "ignore",
-			detached: true,
-			env: { ...process.env, SUPERSET_AGENT_ID: "pi" },
-		});
-		child.on("error", () => {
-			// Never let notification failures affect pi.
-		});
-		child.unref();
-	} catch {
-		// spawn() can throw synchronously (ENOENT/EACCES). Stay silent.
-	}
+	return new Promise((resolve) => {
+		try {
+			const child = spawn(notifyScript, [JSON.stringify(payload)], {
+				stdio: "ignore",
+				env: { ...process.env, SUPERSET_AGENT_ID: "pi" },
+			});
+			child.once("error", () => {
+				// Never let notification failures affect pi.
+				resolve();
+			});
+			child.once("close", () => {
+				resolve();
+			});
+		} catch {
+			// spawn() can throw synchronously (ENOENT/EACCES). Stay silent.
+			resolve();
+		}
+	});
 }
 
 export default function (pi: ExtensionAPI) {
@@ -93,15 +98,53 @@ export default function (pi: ExtensionAPI) {
 	if (!existsSync(notifyScript)) return;
 
 	let lastCtx: HookCtx | undefined;
+	let notifyQueue: Promise<void> = Promise.resolve();
+	let pendingStopTimer: ReturnType<typeof setTimeout> | null = null;
 	const activeAttentionIds = new Set<string>();
+	const STOP_DEBOUNCE_MS = 250;
 
 	function rememberCtx(ctx: HookCtx | undefined): void {
 		if (ctx) lastCtx = ctx;
 	}
 
-	function fireLifecycle(eventName: string, ctx?: HookCtx): void {
+	function cancelPendingStop(): void {
+		if (pendingStopTimer) {
+			clearTimeout(pendingStopTimer);
+			pendingStopTimer = null;
+		}
+	}
+
+	function queueLifecycle(eventName: string, ctx?: HookCtx): Promise<void> {
 		rememberCtx(ctx);
-		fire(notifyScript, eventName, ctx ?? lastCtx);
+		const effectiveCtx = ctx ?? lastCtx;
+
+		// Serialize notify.sh invocations so Start/Stop cannot overtake each
+		// other when consecutive lifecycle events happen close together.
+		notifyQueue = notifyQueue
+			.catch(() => undefined)
+			.then(() => fire(notifyScript, eventName, effectiveCtx));
+		return notifyQueue;
+	}
+
+	function fireLifecycle(eventName: string, ctx?: HookCtx): void {
+		cancelPendingStop();
+		void queueLifecycle(eventName, ctx);
+	}
+
+	function scheduleStop(ctx?: HookCtx): void {
+		rememberCtx(ctx);
+		const effectiveCtx = ctx ?? lastCtx;
+		cancelPendingStop();
+		pendingStopTimer = setTimeout(() => {
+			pendingStopTimer = null;
+			void queueLifecycle("Stop", effectiveCtx);
+		}, STOP_DEBOUNCE_MS);
+	}
+
+	function flushStop(ctx?: HookCtx): Promise<void> {
+		activeAttentionIds.clear();
+		cancelPendingStop();
+		return queueLifecycle("Stop", ctx);
 	}
 
 	pi.events.on(SUPERSET_ATTENTION_EVENT, (data: unknown) => {
@@ -168,22 +211,22 @@ export default function (pi: ExtensionAPI) {
 		if (shouldSkip(ctx)) return;
 
 		activeAttentionIds.clear();
-		fireLifecycle("Stop", ctx);
+		scheduleStop(ctx);
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
 		if (shouldSkip(ctx)) return;
 		if (event.willRetry) return;
+		if (ctx.hasPendingMessages()) return;
 
 		activeAttentionIds.clear();
-		fireLifecycle("Stop", ctx);
+		scheduleStop(ctx);
 	});
 
 	// Ensure Superset does not get stuck in a running state on quit/reload/
 	// new-session/resume/fork, even if pi stops mid-turn.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (shouldSkip(ctx)) return;
-		activeAttentionIds.clear();
-		fireLifecycle("Stop", ctx);
+		await flushStop(ctx);
 	});
 }
