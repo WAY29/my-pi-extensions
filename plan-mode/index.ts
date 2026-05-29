@@ -579,19 +579,22 @@ ${FALLBACK_DONE_TAG_INSTRUCTIONS}
 			}
 
 			if (todoItems.every((t) => t.completed)) {
-				pi.sendMessage(
-					{
-						customType: "plan-complete",
-						content: `**Plan Complete!** ✓\n\n${todoItems.length}/${todoItems.length} steps completed.`,
-						display: true,
-					},
-					{ triggerTurn: false },
-				);
+				const completedSteps = todoItems.length;
 				executionMode = false;
 				todoItems = [];
 				await releasePlanModeRestrictions(ctx);
 				updateStatus(ctx);
 				persistState(); // Save cleared state so resume doesn't restore old execution mode
+				setTimeout(() => {
+					pi.sendMessage(
+						{
+							customType: "plan-complete",
+							content: `**Plan Complete!** ✓\n\n${completedSteps}/${completedSteps} steps completed.`,
+							display: true,
+						},
+						{ triggerTurn: false },
+					);
+				}, 0);
 			}
 			return;
 		}
@@ -606,75 +609,88 @@ ${FALLBACK_DONE_TAG_INSTRUCTIONS}
 				todoItems = extracted;
 			}
 		}
-
-		// Show every plan step before execution; the 3-item window is only for execution progress.
-		if (todoItems.length > 0) {
-			const todoListText = todoItems.map((item) => formatPlainTodoItem(item, "☐")).join("\n");
-			pi.sendMessage(
-				{
-					customType: "plan-todo-list",
-					content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
-		}
 		persistState();
 
-		const choices = [
-			todoItems.length > 0 ? "Execute the plan (track progress)" : "Execute the plan",
-			...(todoItems.length > 0 ? [CLEAR_CONTEXT_EXECUTE_CHOICE] : []),
-			"Stay in plan mode",
-			"Refine the plan",
-		];
-		const choice = await ctx.ui.select("Plan mode - what next?", choices);
+		setTimeout(() => {
+			void (async () => {
+				if (!planModeEnabled || executionMode || !ctx.hasUI) return;
 
-		if (choice === CLEAR_CONTEXT_EXECUTE_CHOICE) {
-			if (lastCommandContext) {
-				const commandCtx = lastCommandContext;
-				setTimeout(() => {
-					void executePlanWithClearedContext(commandCtx).catch((error) => {
-						const message = error instanceof Error ? error.message : String(error);
-						try {
-							commandCtx.ui.notify(`Clear-context execution failed: ${message}`, "error");
-						} catch {
-							// The command context may be stale if session replacement partially completed.
-						}
-					});
-				}, 0);
-			} else {
-				ctx.ui.setEditorText("/plan-execute-clear-context");
-				ctx.ui.notify(
-					"Clear-context execution must create a new session. Press Enter to run /plan-execute-clear-context.",
-					"warning",
-				);
-			}
-		} else if (choice?.startsWith("Execute")) {
-			planModeEnabled = false;
-			executionMode = todoItems.length > 0;
-			await releasePlanModeRestrictions(ctx);
-			updateStatus(ctx);
-			persistState();
+				// Show every plan step before execution; the 3-item window is only for execution progress.
+				if (todoItems.length > 0) {
+					const todoListText = todoItems.map((item) => formatPlainTodoItem(item, "☐")).join("\n");
+					pi.sendMessage(
+						{
+							customType: "plan-todo-list",
+							content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
+							display: true,
+						},
+						{ triggerTurn: false },
+					);
+				}
 
-			const execMessage = buildPlanExecutionMessage(todoItems, /*clearContext*/ false);
-			pi.sendMessage(
-				{
-					customType: "plan-execution-start",
-					content: `**Executing approved plan**\n\n${todoItems.length} step${todoItems.length === 1 ? "" : "s"} approved. Progress will be tracked below.`,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
-			pi.sendMessage(
-				{ customType: PLAN_MODE_EXECUTE_ENTRY, content: execMessage, display: false, details: { clearContext: false } },
-				{ triggerTurn: true },
-			);
-		} else if (choice === "Refine the plan") {
-			const refinement = await ctx.ui.editor("Refine the plan:", "");
-			if (refinement?.trim()) {
-				pi.sendUserMessage(refinement.trim());
-			}
-		}
+				const choices = [
+					todoItems.length > 0 ? "Execute the plan (track progress)" : "Execute the plan",
+					...(todoItems.length > 0 ? [CLEAR_CONTEXT_EXECUTE_CHOICE] : []),
+					"Stay in plan mode",
+					"Refine the plan",
+				];
+				const choice = await ctx.ui.select("Plan mode - what next?", choices);
+
+				if (choice === CLEAR_CONTEXT_EXECUTE_CHOICE) {
+					if (lastCommandContext) {
+						const commandCtx = lastCommandContext;
+						setTimeout(() => {
+							void executePlanWithClearedContext(commandCtx).catch((error) => {
+								const message = error instanceof Error ? error.message : String(error);
+								try {
+									commandCtx.ui.notify(`Clear-context execution failed: ${message}`, "error");
+								} catch {
+									// The command context may be stale if session replacement partially completed.
+								}
+							});
+						}, 0);
+					} else {
+						ctx.ui.setEditorText("/plan-execute-clear-context");
+						ctx.ui.notify(
+							"Clear-context execution must create a new session. Press Enter to run /plan-execute-clear-context.",
+							"warning",
+						);
+					}
+				} else if (choice?.startsWith("Execute")) {
+					planModeEnabled = false;
+					executionMode = todoItems.length > 0;
+					await releasePlanModeRestrictions(ctx);
+					updateStatus(ctx);
+					persistState();
+
+					const execMessage = buildPlanExecutionMessage(todoItems, /*clearContext*/ false);
+					pi.sendMessage(
+						{
+							customType: "plan-execution-start",
+							content: `**Executing approved plan**\n\n${todoItems.length} step${todoItems.length === 1 ? "" : "s"} approved. Progress will be tracked below.`,
+							display: true,
+						},
+						{ triggerTurn: false },
+					);
+					pi.sendMessage(
+						{ customType: PLAN_MODE_EXECUTE_ENTRY, content: execMessage, display: false, details: { clearContext: false } },
+						{ triggerTurn: true },
+					);
+				} else if (choice === "Refine the plan") {
+					const refinement = await ctx.ui.editor("Refine the plan:", "");
+					if (refinement?.trim()) {
+						pi.sendUserMessage(refinement.trim());
+					}
+				}
+			})().catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				try {
+					ctx.ui.notify(`Plan mode follow-up failed: ${message}`, "error");
+				} catch {
+					// The context can be stale after reload/session replacement.
+				}
+			});
+		}, 0);
 	});
 
 	// Restore state on session start/resume
