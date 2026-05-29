@@ -22,9 +22,7 @@ type ActiveTool = {
 type State = {
 	agentStartedAt: number | null;
 	currentAction: ActionKey | null;
-	lastToolAction: ActionKey | null;
 	activeTools: Map<string, ActiveTool>;
-	hasAssistantStreamedText: boolean;
 	finishedDurationMs: number | null;
 	timer: ReturnType<typeof setInterval> | null;
 	lastCtx: ExtensionContext | null;
@@ -88,9 +86,7 @@ function toolToAction(toolName: string): ActionKey {
 
 function getEffectiveAction(state: State): ActionKey | null {
 	if (state.agentStartedAt == null) return null;
-	if (state.currentAction) return state.currentAction;
-	if (state.lastToolAction) return state.lastToolAction;
-	return "working";
+	return state.currentAction ?? "working";
 }
 
 function clearFinishedWidget(ctx: ExtensionContext) {
@@ -151,9 +147,7 @@ function ensureTimer(state: State) {
 function resetForNewAgent(state: State) {
 	state.agentStartedAt = Date.now();
 	state.currentAction = "working";
-	state.lastToolAction = null;
 	state.activeTools.clear();
-	state.hasAssistantStreamedText = false;
 	state.finishedDurationMs = null;
 }
 
@@ -161,9 +155,7 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 	const state: State = {
 		agentStartedAt: null,
 		currentAction: null,
-		lastToolAction: null,
 		activeTools: new Map(),
-		hasAssistantStreamedText: false,
 		finishedDurationMs: null,
 		timer: null,
 		lastCtx: null,
@@ -193,25 +185,21 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 
 		const streamEvent = event.assistantMessageEvent;
 		const streamEventType = streamEvent.type;
+
 		if (streamEventType === "thinking_start" || streamEventType === "thinking_delta" || streamEventType === "thinking_end") {
-			if (!state.lastToolAction) {
-				state.currentAction = "thinking";
-				refreshUI(state);
-			}
+			state.currentAction = "thinking";
+			refreshUI(state);
 			return;
 		}
 
 		if (streamEventType === "toolcall_end") {
-			const action = toolToAction(streamEvent.toolCall.name);
-			state.currentAction = action;
-			state.lastToolAction = action;
+			state.currentAction = toolToAction(streamEvent.toolCall.name);
 			refreshUI(state);
 			return;
 		}
 
 		if (streamEventType === "text_start" || streamEventType === "text_delta" || streamEventType === "text_end") {
-			state.hasAssistantStreamedText = true;
-			state.currentAction = state.lastToolAction ?? "responding";
+			state.currentAction = "responding";
 			refreshUI(state);
 		}
 	});
@@ -226,16 +214,12 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 			startedAt: Date.now(),
 		});
 		state.currentAction = action;
-		state.lastToolAction = action;
 		refreshUI(state);
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
 		state.lastCtx = ctx;
 		state.activeTools.delete(event.toolCallId);
-		if (state.agentStartedAt == null) return;
-		state.currentAction = state.lastToolAction ?? state.currentAction ?? "working";
-		refreshUI(state);
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -245,8 +229,6 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 		}
 		state.activeTools.clear();
 		state.currentAction = null;
-		state.lastToolAction = null;
-		state.hasAssistantStreamedText = false;
 		state.finishedDurationMs = Date.now() - state.agentStartedAt;
 		state.agentStartedAt = null;
 		stopTimer(state);
@@ -258,9 +240,7 @@ export default function workingStatusExtension(pi: ExtensionAPI) {
 		stopTimer(state);
 		state.agentStartedAt = null;
 		state.currentAction = null;
-		state.lastToolAction = null;
 		state.activeTools.clear();
-		state.hasAssistantStreamedText = false;
 		state.finishedDurationMs = null;
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		clearFinishedWidget(ctx);
