@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createReadToolDefinition, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { isAbsolute, relative } from "node:path";
 
 type ReadRenderTheme = {
 	fg(color: "accent" | "dim" | "toolOutput" | "toolTitle" | "warning", text: string): string;
@@ -74,12 +75,23 @@ function getNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function shortenPath(path: string): string {
-	if (path.length <= MAX_PATH_DISPLAY_LENGTH) {
-		return path;
+function normalizeDisplayPath(path: string): string {
+	const displayPath = isAbsolute(path) ? relative(process.cwd(), path) || "." : path;
+
+	if (displayPath.startsWith("./") && !displayPath.startsWith("../")) {
+		return displayPath.slice(2);
 	}
 
-	return `...${path.slice(-(MAX_PATH_DISPLAY_LENGTH - 3))}`;
+	return displayPath;
+}
+
+function shortenPath(path: string): string {
+	const normalizedPath = normalizeDisplayPath(path);
+	if (normalizedPath.length <= MAX_PATH_DISPLAY_LENGTH) {
+		return normalizedPath;
+	}
+
+	return `...${normalizedPath.slice(-(MAX_PATH_DISPLAY_LENGTH - 3))}`;
 }
 
 function formatReadLineRange(args: ReadToolArgs | undefined, theme: ReadRenderTheme): string {
