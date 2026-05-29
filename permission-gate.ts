@@ -132,8 +132,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const highlightedCommand = highlightRanges(command, dangerousMatches, ctx.ui.theme.getFgAnsi("accent"));
-			const choice = await withSupersetAttention(pi, "permission-gate", () =>
-				selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]),
+			const choice = await withSupersetAttention(
+				pi,
+				"permission-gate",
+				() => selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]),
+				undefined,
+				"permission",
 			);
 
 			if (choice !== "Yes") {

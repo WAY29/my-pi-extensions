@@ -10,6 +10,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { withSupersetAttention } from "./superset-hooks/attention";
+
 // Types
 interface QuestionOption {
 	value: string;
@@ -144,7 +146,8 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			const isMulti = questions.length > 1;
 			const totalTabs = questions.length + 1; // questions + Submit
 
-			const result = await ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
+			const result = await withSupersetAttention(pi, "AskUserQuestion", () =>
+				ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
 				// State
 				let currentTab = 0;
 				let optionIndex = 0;
@@ -486,7 +489,8 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 					},
 					handleInput,
 				};
-			});
+				}),
+			);
 
 			if (result.cancelled) {
 				return {

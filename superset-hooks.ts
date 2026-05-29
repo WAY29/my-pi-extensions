@@ -34,6 +34,7 @@ import { join } from "node:path";
 import {
 	SUPERSET_ATTENTION_EVENT,
 	type SupersetAttentionEvent,
+	type SupersetAttentionKind,
 } from "./superset-hooks/attention";
 
 type HookCtx = Pick<ExtensionContext, "hasUI" | "sessionManager">;
@@ -101,6 +102,7 @@ export default function (pi: ExtensionAPI) {
 	let notifyQueue: Promise<void> = Promise.resolve();
 	let pendingStopTimer: ReturnType<typeof setTimeout> | null = null;
 	const activeAttentionIds = new Set<string>();
+	const attentionKinds = new Map<string, SupersetAttentionKind>();
 	const STOP_DEBOUNCE_MS = 250;
 
 	function rememberCtx(ctx: HookCtx | undefined): void {
@@ -143,6 +145,7 @@ export default function (pi: ExtensionAPI) {
 
 	function flushStop(ctx?: HookCtx): Promise<void> {
 		activeAttentionIds.clear();
+		attentionKinds.clear();
 		cancelPendingStop();
 		return queueLifecycle("Stop", ctx);
 	}
@@ -154,6 +157,7 @@ export default function (pi: ExtensionAPI) {
 		const previousSize = activeAttentionIds.size;
 		if (event.phase === "start") {
 			activeAttentionIds.add(event.id);
+			attentionKinds.set(event.id, event.kind ?? "input");
 			if (previousSize === 0 && activeAttentionIds.size === 1) {
 				fireLifecycle("request_user_input");
 			}
@@ -161,6 +165,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		activeAttentionIds.delete(event.id);
+		attentionKinds.delete(event.id);
 		if (previousSize > 0 && activeAttentionIds.size === 0) {
 			fireLifecycle("Start");
 		}
@@ -211,6 +216,7 @@ export default function (pi: ExtensionAPI) {
 		if (shouldSkip(ctx)) return;
 
 		activeAttentionIds.clear();
+		attentionKinds.clear();
 		scheduleStop(ctx);
 	});
 
@@ -220,6 +226,7 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.hasPendingMessages()) return;
 
 		activeAttentionIds.clear();
+		attentionKinds.clear();
 		scheduleStop(ctx);
 	});
 
