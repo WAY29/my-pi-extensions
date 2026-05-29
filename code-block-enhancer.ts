@@ -24,6 +24,12 @@ const LEGACY_HIDE_PATCHED = Symbol.for("pi.hide-code-fence-markers.patched");
 const ASSISTANT_MESSAGE_PATCHED = Symbol.for("pi.code-block-enhancer.assistant-message-patched");
 const BRANCH_SUMMARY_PATCHED = Symbol.for("pi.code-block-enhancer.branch-summary-patched");
 const COMPACTION_SUMMARY_PATCHED = Symbol.for("pi.code-block-enhancer.compaction-summary-patched");
+const ORIGINAL_MARKDOWN_RENDER = Symbol.for("pi.code-block-enhancer.original-markdown-render");
+const ORIGINAL_MARKDOWN_RENDER_TOKEN = Symbol.for("pi.code-block-enhancer.original-markdown-render-token");
+const ORIGINAL_MARKDOWN_RENDER_LIST_ITEM = Symbol.for("pi.code-block-enhancer.original-markdown-render-list-item");
+const ORIGINAL_ASSISTANT_MESSAGE_RENDER = Symbol.for("pi.code-block-enhancer.original-assistant-message-render");
+const ORIGINAL_BRANCH_SUMMARY_RENDER = Symbol.for("pi.code-block-enhancer.original-branch-summary-render");
+const ORIGINAL_COMPACTION_SUMMARY_RENDER = Symbol.for("pi.code-block-enhancer.original-compaction-summary-render");
 const ENHANCE_CONTEXT: EnhancementContext = {
   active: false,
   currentIndex: 0,
@@ -739,9 +745,11 @@ function patchAssistantMessageComponent(): boolean {
     lastMessage?: AssistantMessage;
   };
 
-  if (proto[ASSISTANT_MESSAGE_PATCHED] === true) return true;
+  if (typeof proto[ORIGINAL_ASSISTANT_MESSAGE_RENDER] !== "function") {
+    proto[ORIGINAL_ASSISTANT_MESSAGE_RENDER] = proto.render;
+  }
 
-  const originalRender = proto.render;
+  const originalRender = proto[ORIGINAL_ASSISTANT_MESSAGE_RENDER];
   if (typeof originalRender !== "function") return false;
 
   proto.render = function (width: number): string[] {
@@ -764,6 +772,7 @@ function patchAssistantMessageComponent(): boolean {
 function patchSummaryMessageComponent(
   component: typeof BranchSummaryMessageComponent | typeof CompactionSummaryMessageComponent,
   marker: symbol,
+  originalRenderMarker: symbol,
   getText: (message: { summary: string; tokensBefore?: number }) => string,
 ): boolean {
   const proto = component.prototype as unknown as Record<PropertyKey, unknown> & {
@@ -772,9 +781,11 @@ function patchSummaryMessageComponent(
     message?: { summary: string; tokensBefore?: number };
   };
 
-  if (proto[marker] === true) return true;
+  if (typeof proto[originalRenderMarker] !== "function") {
+    proto[originalRenderMarker] = proto.render;
+  }
 
-  const originalRender = proto.render;
+  const originalRender = proto[originalRenderMarker];
   if (typeof originalRender !== "function") return false;
 
   proto.render = function (width: number): string[] {
@@ -807,7 +818,9 @@ function withEnhancementContext(instance: MarkdownInternals, render: () => strin
   const instanceKey = instance as object;
   const previousRangeKey = MARKDOWN_RENDER_RANGE_KEYS.get(instanceKey);
 
-  if (previousRangeKey !== undefined && previousRangeKey !== rangeKey) {
+  if (assigned && previousRangeKey === undefined && Array.isArray(instance.cachedLines) && instance.cachedLines.length > 0) {
+    clearMarkdownRenderCache(instance);
+  } else if (previousRangeKey !== undefined && previousRangeKey !== rangeKey) {
     clearMarkdownRenderCache(instance);
   }
   MARKDOWN_RENDER_RANGE_KEYS.set(instanceKey, rangeKey);
@@ -833,11 +846,19 @@ export function patchMarkdownCodeBlocks(): boolean {
     renderListItem?: RenderListItem;
   } & Record<PropertyKey, unknown>;
 
-  if (proto[PATCHED] === true) return true;
+  if (typeof proto[ORIGINAL_MARKDOWN_RENDER] !== "function") {
+    proto[ORIGINAL_MARKDOWN_RENDER] = proto.render;
+  }
+  if (typeof proto[ORIGINAL_MARKDOWN_RENDER_TOKEN] !== "function") {
+    proto[ORIGINAL_MARKDOWN_RENDER_TOKEN] = proto.renderToken;
+  }
+  if (typeof proto.renderListItem === "function" && typeof proto[ORIGINAL_MARKDOWN_RENDER_LIST_ITEM] !== "function") {
+    proto[ORIGINAL_MARKDOWN_RENDER_LIST_ITEM] = proto.renderListItem;
+  }
 
-  const originalRender = proto.render;
-  const originalRenderToken = proto.renderToken;
-  const originalRenderListItem = proto.renderListItem;
+  const originalRender = proto[ORIGINAL_MARKDOWN_RENDER];
+  const originalRenderToken = proto[ORIGINAL_MARKDOWN_RENDER_TOKEN];
+  const originalRenderListItem = proto[ORIGINAL_MARKDOWN_RENDER_LIST_ITEM];
 
   if (typeof originalRender !== "function" || typeof originalRenderToken !== "function") {
     return false;
@@ -895,11 +916,13 @@ export default function codeBlockEnhancer(pi: ExtensionAPI) {
   const branchSummaryPatched = patchSummaryMessageComponent(
     BranchSummaryMessageComponent,
     BRANCH_SUMMARY_PATCHED,
+    ORIGINAL_BRANCH_SUMMARY_RENDER,
     (message) => getBranchSummaryMarkdownText(message.summary),
   );
   const compactionSummaryPatched = patchSummaryMessageComponent(
     CompactionSummaryMessageComponent,
     COMPACTION_SUMMARY_PATCHED,
+    ORIGINAL_COMPACTION_SUMMARY_RENDER,
     (message) => getCompactionSummaryMarkdownText(message.summary, message.tokensBefore ?? 0),
   );
 
