@@ -12,6 +12,8 @@ export default defineConfig({
   bundle: true,
   splitting: false,
   treeshake: true,
+  skipNodeModulesBundle: false,
+  noExternal: [/.*/],
   external: [
     "@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent",
