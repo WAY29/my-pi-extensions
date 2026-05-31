@@ -71,6 +71,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 | `review/` | 评审工作流 | `/review` | 启动一个隔离的 Codex 风格代码评审会话，支持预设目标选择、主线程实时工具/assistant 渲染、可恢复的中断评审，以及一键解决全部或选定 findings 的后续动作。 |
+| `any-access/` | Web 访问/搜索 | `web_search`, `code_search`, `fetch_content`, `get_search_content` | 聚焦版 Tinyfish/Exa Web 搜索与内容访问扩展，支持 GitHub 感知抓取、`includeContent` 后台补抓，以及轻量 TUI 活动显示。 |
 
 ## 扩展之间的关系
 

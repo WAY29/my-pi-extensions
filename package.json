@@ -42,8 +42,16 @@
       "./pi-rewind/index.ts",
       "./pi-sandbox/index.ts",
       "./plan-mode/index.ts",
-      "./review/index.ts"
+      "./review/index.ts",
+      "./any-access/index.ts"
     ]
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "@tiny-fish/sdk": "^0.0.8",
+    "linkedom": "^0.18.12",
+    "p-limit": "^6.2.0",
+    "turndown": "^7.2.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

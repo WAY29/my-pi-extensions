@@ -1,0 +1,61 @@
+{
+  "name": "pi-any-access",
+  "version": "0.1.0",
+  "description": "Focused web search and content access for Pi with Tinyfish-first search/fetch, zero-config Exa fallback, and GitHub repo cloning",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "web-search",
+    "fetch",
+    "tinyfish",
+    "exa",
+    "github"
+  ],
+  "files": [
+    "index.ts",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist .tmp-test-dist",
+    "build": "tsup",
+    "build:test": "tsc -p tsconfig.test.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build:test --silent && node --test test/*.test.mjs",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "@tiny-fish/sdk": "^0.0.8",
+    "linkedom": "^0.18.12",
+    "p-limit": "^6.2.0",
+    "turndown": "^7.2.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.1",
+    "typebox": "*",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
