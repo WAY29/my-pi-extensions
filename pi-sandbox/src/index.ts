@@ -99,7 +99,7 @@ import {
   registerBashToolPlugin,
   releaseBashToolOwner,
 } from "../../bash-tool-coordinator";
-import { withSupersetAttention } from "../../superset-hooks/attention";
+import { withNotifyHookAttention } from "../../notify-hook/attention";
 import { createDirectLinuxSandboxCommand } from "./direct-linux-sandbox";
 import {
   createDirectMacSandboxCommand,
@@ -1523,7 +1523,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<TAction | "abort"> {
     if (!ctx.hasUI) return "abort";
 
-    return withSupersetAttention(pi, "pi-sandbox", async () => {
+    return withNotifyHookAttention(pi, "pi-sandbox", async () => {
       const result = await ctx.ui.custom<TAction | "abort">((tui, theme, _kb, done) => {
       let selectedIndex = 0;
       let pendingAction: TAction | "abort" | null = null;
@@ -1624,7 +1624,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       return result ?? "abort";
-    });
+    }, undefined, "permission");
   }
 
   async function promptDomainBlock(

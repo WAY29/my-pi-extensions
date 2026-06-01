@@ -6,7 +6,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { withSupersetAttention } from "./superset-hooks/attention";
+import { withNotifyHookAttention } from "./notify-hook/attention";
 
 type MatchRange = { start: number; end: number };
 
@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const highlightedCommand = highlightRanges(command, dangerousMatches, ctx.ui.theme.getFgAnsi("accent"));
-			const choice = await withSupersetAttention(
+			const choice = await withNotifyHookAttention(
 				pi,
 				"permission-gate",
 				() => selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]),

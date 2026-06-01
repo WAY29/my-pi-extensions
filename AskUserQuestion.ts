@@ -10,7 +10,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { withSupersetAttention } from "./superset-hooks/attention";
+import { withNotifyHookAttention } from "./notify-hook/attention";
 
 // Types
 interface QuestionOption {
@@ -146,7 +146,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			const isMulti = questions.length > 1;
 			const totalTabs = questions.length + 1; // questions + Submit
 
-			const result = await withSupersetAttention(pi, "AskUserQuestion", () =>
+			const result = await withNotifyHookAttention(pi, "AskUserQuestion", () =>
 				ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
 				// State
 				let currentTab = 0;

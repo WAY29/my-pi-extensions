@@ -12,7 +12,7 @@ import {
   registerBashToolPlugin,
   releaseBashToolOwner,
 } from "./bash-tool-coordinator";
-import { withSupersetAttention } from "./superset-hooks/attention";
+import { withNotifyHookAttention } from "./notify-hook/attention";
 
 const STATUS_KEY = "sudo-auth";
 const SOCKET_NAME = "askpass.sock";
@@ -386,7 +386,7 @@ export default function sudoAuth(pi: ExtensionAPI) {
       return { ok: false, reason: "sudo requires interactive password input, but UI is not available" };
     }
 
-    const password = await withSupersetAttention(pi, "sudo-auth", () => promptForPassword(ctx, attempt), undefined, "auth");
+    const password = await withNotifyHookAttention(pi, "sudo-auth", () => promptForPassword(ctx, attempt), undefined, "auth");
     if (password === undefined) return { ok: false, reason: "sudo authentication cancelled" };
 
     credential = { password };

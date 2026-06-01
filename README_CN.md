@@ -62,8 +62,8 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
 | `stable-scroll.ts` | UI patch | 自动 | 过滤正常重绘时的终端清空 scrollback 序列，避免 TUI 刷新抹掉滚动历史，同时保留会话启动时的清屏。 |
 | `sudo-auth.ts` | sudo 辅助 | 自动 | 为 bash 命令中的 `sudo` 提供 TUI askpass 桥接。密码只缓存在扩展内存中，并会在认证失败或会话结束时清除。 |
-| `superset-hooks.ts` | 集成钩子 | 自动 | 通过调用 Superset 的 `notify.sh`，把 pi 接入 Superset 的终端生命周期通知。会发送工作中、等待用户输入和完成信号，让 Superset 能为 pi 会话显示正确的 pane 状态颜色。 |
-| `superset-hooks/attention.ts` | 辅助模块 | 自动 | 为 `superset-hooks.ts`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
+| `notify-hook.ts` | 集成钩子 | 自动 | 面向外部平台的通用通知桥接层，用于转发 pi 生命周期事件和临时“等待用户介入”状态。当前内置的是 Superset adapter（调用 Superset 的 `notify.sh`），但核心扩展本身不与 Superset 绑定，后续可继续增加其它通知后端。 |
+| `notify-hook/attention.ts` | 辅助模块 | 自动 | 为 `notify-hook.ts`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
 | `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
@@ -161,7 +161,8 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 
 - 根目录 `package.json` 通过 `pi.extensions` 声明 package 的扩展入口。新增或删除顶层扩展时需要同步更新。
 - `bash-tool-coordinator.ts` 是辅助模块，但仍列在 package manifest 中，以便 package 安装方式尽量贴近本地自动发现的扩展目录。
-- `superset-hooks/attention.ts` 也是辅助模块。它让多个扩展可以共享同一套 Superset attention 信号，而不用重复实现事件名和 start/end 状态维护逻辑。
+- `notify-hook/attention.ts` 也是辅助模块。它让多个扩展可以共享同一套临时“等待用户介入”信号，而不用重复实现事件名和 start/end 状态维护逻辑。
+- `notify-hook/adapters/superset.ts` 存放当前的 Superset 适配器。后续新增其它平台时，建议继续放在 `notify-hook/adapters/` 下，保持顶层扩展本身与具体平台解耦。
 - `pi-glance/` 和 `pi-sandbox/` 拥有自己的 `package.json`，也可能可以作为独立 pi 包使用。
 - 根目录 `sandbox.json` 是从 `~/.pi/agent/sandbox.json` 复制来的 macOS 推荐 `pi-sandbox/` 策略；它应与属于独立包源码的 `pi-sandbox/sandbox.json` 分开维护。
 - `pi-sandbox/dist/` 被有意保留，因为 `pi-sandbox/index.ts` 会重新导出 `./dist/index.js`。

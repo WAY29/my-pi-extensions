@@ -9708,7 +9708,15 @@ function index_default(pi) {
   ];
   async function showPermissionPrompt(ctx, title, options) {
     if (!ctx.hasUI) return "abort";
-    const result = await ctx.ui.custom((tui, theme, _kb, done) => {
+    const attentionId = `pi-sandbox:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    pi.events.emit("notify-hook:attention", {
+      id: attentionId,
+      phase: "start",
+      source: "pi-sandbox",
+      kind: "permission"
+    });
+    try {
+      const result = await ctx.ui.custom((tui, theme, _kb, done) => {
       let selectedIndex = 0;
       let pendingAction = null;
       function resolve5(action) {
@@ -9787,7 +9795,15 @@ function index_default(pi) {
         }
       };
     });
-    return result ?? "abort";
+      return result ?? "abort";
+    } finally {
+      pi.events.emit("notify-hook:attention", {
+        id: attentionId,
+        phase: "end",
+        source: "pi-sandbox",
+        kind: "permission"
+      });
+    }
   }
   async function promptDomainBlock(ctx, domain) {
     return showPermissionPrompt(
