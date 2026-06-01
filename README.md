@@ -66,7 +66,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `superset-hooks/attention.ts` | helper module | automatic | Shared helper for emitting temporary “awaiting user attention” lifecycle signals to Superset-aware extensions such as `superset-hooks.ts`, `permission-gate.ts`, and `pi-sandbox/`. |
 | `working-status.ts` | working indicator/UI status | automatic | Replaces pi's streaming `Working...` text with action-aware labels and a live elapsed timer. Keeps showing the most recent tool action while the model continues, and leaves a dim `Finished working in ...` status after `agent_end` until the next run. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
-| `pi-goal/` | goal manager | `/goal`, `get_goal`, `update_goal` | Tracks a long-running thread goal, optional token budget, continuation prompts, status bar state, and verified completion via tool call. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
@@ -151,7 +150,6 @@ Use `/glance` → **Auto model** to add exact cwd rules that switch models autom
 
 Use these together:
 
-- `pi-goal/` to keep the agent focused on a user-defined objective.
 - `progress-checkpoints.ts` to keep public progress updates concise.
 - `effort.ts` to adjust reasoning level without opening settings.
 

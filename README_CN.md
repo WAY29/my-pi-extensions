@@ -66,7 +66,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `superset-hooks/attention.ts` | 辅助模块 | 自动 | 为 `superset-hooks.ts`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
 | `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
-| `pi-goal/` | 目标管理器 | `/goal`, `get_goal`, `update_goal` | 跟踪长期会话目标、可选 token 预算、继续提示、状态栏状态，并通过工具调用验证完成情况。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
@@ -151,7 +150,6 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 
 搭配使用：
 
-- `pi-goal/`：让 agent 聚焦于用户定义的目标。
 - `progress-checkpoints.ts`：保持公开进度更新简洁。
 - `effort.ts`：无需打开设置即可调整推理级别。
 

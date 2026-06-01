@@ -38,7 +38,6 @@
       "./working-status.ts", 
       "./superset-hooks/attention.ts",
       "./pi-glance/index.ts",
-      "./pi-goal/index.ts",
       "./pi-rewind/index.ts",
       "./pi-sandbox/index.ts",
       "./plan-mode/index.ts",
