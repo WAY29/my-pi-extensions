@@ -407,7 +407,7 @@ class GlanceConfigPane implements Component {
 			toggleRow("Title enabled", this.draft.title.enabled, "Show a session title below the input box.", () => {
 				this.draft.title.enabled = !this.draft.title.enabled;
 			}),
-			inputRow("Title model", this.draft.title.model, "Use model or provider/model. Empty uses local fallback.", (value) => {
+			inputRow("Title model", this.draft.title.model, "Use model[:thinking] or provider/model[:thinking]. Empty uses local fallback.", (value) => {
 				this.draft.title.model = value.trim();
 			}),
 			toggleRow("Goal footer", this.draft.goal.enabled, "Show the active pi-goal objective below the input box.", () => {

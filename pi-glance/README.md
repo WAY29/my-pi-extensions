@@ -113,7 +113,7 @@ pi-glance never renders full absolute paths in the title: home paths are shorten
 Open `/glance`, select **General**, and configure:
 
 - `Title enabled` — show or hide the session title below the input box.
-- `Title model` — optional small model for title generation. Use `model` to prefer the current provider and then other configured providers, or `provider/model` to select a provider explicitly.
+- `Title model` — optional small model for title generation. Use `model[:thinking]` to prefer the current provider and then other configured providers, or `provider/model[:thinking]` to select a provider explicitly.
 
 When `Title model` is empty, pi-glance uses a local fallback from the first prompt. If the configured model is unavailable, unauthenticated, times out, or returns an invalid title, pi-glance falls back quietly. Fallback titles are upgraded on the next turn when you later configure a title model. Generated titles are stored in `~/.pi/agent/pi-glance/title.json` keyed by session and restored on reload/resume.
 

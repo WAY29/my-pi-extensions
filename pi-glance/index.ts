@@ -23,7 +23,7 @@ import {
 	type PlanModeSnapshot,
 	type SandboxSnapshot,
 } from "./state.js";
-import { resolveAutoModelSelection, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
+import { resolveAutoModelSelection, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
 import {
 	fallbackTitleFromPrompt,
 	resolveSessionNameUpdate,
@@ -364,8 +364,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		modelId?: string;
 	};
 
-	function resolveTitleModel(ctx: ExtensionContext, spec: string): Model<Api> | undefined {
-		return resolveTitleModelSpec(ctx.modelRegistry, ctx.model, spec);
+	function resolveTitleModel(ctx: ExtensionContext, spec: string): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
+		return resolveTitleModelSelection(ctx.modelRegistry, ctx.model, spec);
 	}
 
 	function resolveWorkspaceAutoModel(ctx: ExtensionContext, spec: string): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
@@ -394,7 +394,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 			const snapshot = await captureGlobalSettingsSnapshot();
 			try {
 				if (ctx.model.provider !== defaultModel.provider || ctx.model.id !== defaultModel.modelId) {
-					const restored = resolveTitleModel(ctx, `${defaultModel.provider}/${defaultModel.modelId}`);
+					const restored = resolveTitleModelSpec(ctx.modelRegistry, ctx.model, `${defaultModel.provider}/${defaultModel.modelId}`);
 					if (!restored) return undefined;
 					const switched = await pi.setModel(restored);
 					if (!switched) return undefined;
@@ -441,7 +441,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return formatAutoModelNotice(selection.model, nextThinkingLevel);
 	}
 
-	async function generateTitle(generationId: number, ctx: ExtensionContext, prompt: string, model: Model<Api>, fallback: string, signal: AbortSignal): Promise<void> {
+	async function generateTitle(generationId: number, ctx: ExtensionContext, prompt: string, model: Model<Api>, fallback: string, signal: AbortSignal, thinkingLevel?: ThinkingLevel): Promise<void> {
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
@@ -474,6 +474,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 					signal: controller.signal,
 					maxTokens: 64,
 					timeoutMs: 8000,
+					...(model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}),
 				},
 			);
 
@@ -514,10 +515,10 @@ export default function piGlance(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const model = resolveTitleModel(ctx, modelSpec);
-		const targetModel = model ? titleModelKey(model) : modelSpec;
+		const selection = resolveTitleModel(ctx, modelSpec);
+		const targetModel = selection ? `${titleModelKey(selection.model)}${selection.thinkingLevel ? `:${selection.thinkingLevel}` : ""}` : modelSpec;
 		if (!shouldGenerateTitle(state.title, targetModel)) return;
-		if (!model) {
+		if (!selection) {
 			persistTitle(ctx, fallback, "fallback", titlePrompt, undefined, modelSpec);
 			return;
 		}
@@ -525,8 +526,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		titleAbort?.abort();
 		titleAbort = new AbortController();
 		const generationId = ++titleGenerationId;
-		if (setTitleState(state, { text: null, generating: true, source: null, prompt: titlePrompt, model: titleModelKey(model) })) renderNow();
-		void generateTitle(generationId, ctx, titlePrompt, model, fallback, titleAbort.signal);
+		if (setTitleState(state, { text: null, generating: true, source: null, prompt: titlePrompt, model: targetModel })) renderNow();
+		void generateTitle(generationId, ctx, titlePrompt, selection.model, fallback, titleAbort.signal, selection.thinkingLevel);
 	}
 
 	function refreshReliableSnapshot(ctx: ExtensionContext, options: { model?: boolean; git?: boolean } = {}): void {

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
+import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
 
 function model(provider: string, id: string, name = id): Model<Api> {
 	return {
@@ -61,6 +61,18 @@ const synthesizedCurrentProviderTitle = resolveTitleModelSpec(registry, anthropi
 assert.equal(synthesizedCurrentProviderTitle?.provider, "anthropic", "bare title model specs should stay on the current provider");
 assert.equal(synthesizedCurrentProviderTitle?.id, "gpt-5.2", "bare title model specs should keep the requested model id");
 assert.equal(synthesizedCurrentProviderTitle?.baseUrl, anthropicCurrent.baseUrl, "synthesized title models should reuse current provider routing");
+
+const titleThinkingSelection = resolveTitleModelSelection(registry, anthropicCurrent, "openai/gpt-5.2:off");
+assert.equal(titleThinkingSelection?.model, openaiTitle, "title model selections should resolve provider/model exactly before applying thinking");
+assert.equal(titleThinkingSelection?.thinkingLevel, "off", "title model selections should parse explicit thinking shorthand");
+
+const bareTitleThinkingSelection = resolveTitleModelSelection(registry, anthropicCurrent, "gpt-5.2:high");
+assert.equal(bareTitleThinkingSelection?.model, openaiTitle, "bare title model thinking specs should preserve exact registered bare model matches before applying thinking");
+assert.equal(bareTitleThinkingSelection?.thinkingLevel, "high", "bare title model thinking specs should parse thinking shorthand");
+
+const titleColonIdSelection = resolveTitleModelSelection(registry, anthropicCurrent, "llama3.1:8b:low");
+assert.equal(titleColonIdSelection?.model, ollamaColonId, "title model selections should still resolve exact colon model ids when a thinking suffix is added");
+assert.equal(titleColonIdSelection?.thinkingLevel, "low", "title model selections should support trailing thinking shorthand on colon model ids");
 
 const autoBareRegisteredModel = resolveAutoModelSpec(registry, anthropicCurrent, "gpt-5.2");
 assert.equal(autoBareRegisteredModel, openaiTitle, "bare auto model specs should switch to the configured provider for a registered model id");
