@@ -7603,6 +7603,32 @@ function releaseBashToolOwner(pi) {
   state.cwd = void 0;
 }
 
+// ../notify-hook/attention.ts
+var NOTIFY_HOOK_ATTENTION_EVENT = "notify-hook:attention";
+function createNotifyHookAttentionId(source) {
+  return `${source}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+function emitNotifyHookAttention(pi, phase, id, source, kind = "input") {
+  const event = { id, phase, source, kind };
+  pi.events.emit(NOTIFY_HOOK_ATTENTION_EVENT, event);
+}
+async function withNotifyHookAttention(pi, source, fn, id = createNotifyHookAttentionId(source), kind = "input") {
+  emitNotifyHookAttention(pi, "start", id, source, kind);
+  try {
+    return await fn();
+  } finally {
+    emitNotifyHookAttention(pi, "end", id, source, kind);
+  }
+}
+
+// ../_shared/startup-info-shared.js
+var STARTUP_INFO_ADD_EVENT = "pi-startup-info:add";
+function addStartupInfo(emit, message) {
+  const text2 = typeof message === "string" ? message.trim() : "";
+  if (!text2) return;
+  emit(STARTUP_INFO_ADD_EVENT, { message: text2 });
+}
+
 // src/direct-linux-sandbox.ts
 import * as fs6 from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
@@ -9708,102 +9734,88 @@ function index_default(pi) {
   ];
   async function showPermissionPrompt(ctx, title, options) {
     if (!ctx.hasUI) return "abort";
-    const attentionId = `pi-sandbox:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    pi.events.emit("notify-hook:attention", {
-      id: attentionId,
-      phase: "start",
-      source: "pi-sandbox",
-      kind: "permission"
-    });
-    try {
+    return withNotifyHookAttention(pi, "pi-sandbox", async () => {
       const result = await ctx.ui.custom((tui, theme, _kb, done) => {
-      let selectedIndex = 0;
-      let pendingAction = null;
-      function resolve5(action) {
-        done(action);
-      }
-      return {
-        render(width) {
-          const lines = [];
-          lines.push(truncateToWidth(theme.fg("warning", title), width));
-          lines.push("");
-          for (let i = 0; i < options.length; i++) {
-            const opt = options[i];
-            const isSelected = i === selectedIndex;
-            const isPending = pendingAction === opt.action;
-            const prefix = isSelected ? " \u2192 " : "   ";
-            const keyHint = theme.fg("accent", `[${opt.key}]`);
-            let label = opt.label;
-            if (opt.hint) {
-              label += `  ${theme.fg("dim", opt.hint)}`;
+        let selectedIndex = 0;
+        let pendingAction = null;
+        function resolve5(action) {
+          done(action);
+        }
+        return {
+          render(width) {
+            const lines = [];
+            lines.push(truncateToWidth(theme.fg("warning", title), width));
+            lines.push("");
+            for (let i = 0; i < options.length; i++) {
+              const opt = options[i];
+              const isSelected = i === selectedIndex;
+              const isPending = pendingAction === opt.action;
+              const prefix = isSelected ? " \u2192 " : "   ";
+              const keyHint = theme.fg("accent", `[${opt.key}]`);
+              let label = opt.label;
+              if (opt.hint) {
+                label += `  ${theme.fg("dim", opt.hint)}`;
+              }
+              if (isPending) {
+                label += `  ${theme.fg("warning", "\u2192 press Enter to confirm")}`;
+              }
+              const line = `${prefix}${keyHint} ${label}`;
+              lines.push(truncateToWidth(line, width));
             }
-            if (isPending) {
-              label += `  ${theme.fg("warning", "\u2192 press Enter to confirm")}`;
-            }
-            const line = `${prefix}${keyHint} ${label}`;
-            lines.push(truncateToWidth(line, width));
-          }
-          lines.push("");
-          const footer = pendingAction ? "\u2191\u2193 navigate  enter confirm  esc cancel" : "\u2191\u2193 navigate  enter select  esc/ctrl+c cancel";
-          lines.push(truncateToWidth(theme.fg("dim", footer), width));
-          return lines;
-        },
-        handleInput(data) {
-          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-            resolve5("abort");
-            return;
-          }
-          if (matchesKey(data, Key.enter)) {
-            if (pendingAction) {
-              resolve5(pendingAction);
-            } else {
-              resolve5(options[selectedIndex]?.action ?? "abort");
-            }
-            return;
-          }
-          if (matchesKey(data, Key.up)) {
-            selectedIndex = Math.max(0, selectedIndex - 1);
-            pendingAction = null;
-            tui.requestRender();
-            return;
-          }
-          if (matchesKey(data, Key.down)) {
-            selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
-            pendingAction = null;
-            tui.requestRender();
-            return;
-          }
-          for (let i = 0; i < options.length; i++) {
-            const opt = options[i];
-            if (data === opt.key) {
-              resolve5(opt.action);
+            lines.push("");
+            const footer = pendingAction ? "\u2191\u2193 navigate  enter confirm  esc cancel" : "\u2191\u2193 navigate  enter select  esc/ctrl+c cancel";
+            lines.push(truncateToWidth(theme.fg("dim", footer), width));
+            return lines;
+          },
+          handleInput(data) {
+            if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+              resolve5("abort");
               return;
             }
-            if (data.toLowerCase() === opt.key.toLowerCase()) {
-              if (opt.confirm) {
-                pendingAction = opt.action;
-                selectedIndex = i;
+            if (matchesKey(data, Key.enter)) {
+              if (pendingAction) {
+                resolve5(pendingAction);
               } else {
-                resolve5(opt.action);
+                resolve5(options[selectedIndex]?.action ?? "abort");
               }
+              return;
+            }
+            if (matchesKey(data, Key.up)) {
+              selectedIndex = Math.max(0, selectedIndex - 1);
+              pendingAction = null;
               tui.requestRender();
               return;
             }
+            if (matchesKey(data, Key.down)) {
+              selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+              pendingAction = null;
+              tui.requestRender();
+              return;
+            }
+            for (let i = 0; i < options.length; i++) {
+              const opt = options[i];
+              if (data === opt.key) {
+                resolve5(opt.action);
+                return;
+              }
+              if (data.toLowerCase() === opt.key.toLowerCase()) {
+                if (opt.confirm) {
+                  pendingAction = opt.action;
+                  selectedIndex = i;
+                } else {
+                  resolve5(opt.action);
+                }
+                tui.requestRender();
+                return;
+              }
+            }
+          },
+          invalidate() {
           }
-        },
-        invalidate() {
-        }
-      };
-    });
-      return result ?? "abort";
-    } finally {
-      pi.events.emit("notify-hook:attention", {
-        id: attentionId,
-        phase: "end",
-        source: "pi-sandbox",
-        kind: "permission"
+        };
       });
-    }
+      return result ?? "abort";
+    }, void 0, "permission");
   }
   async function promptDomainBlock(ctx, domain) {
     return showPermissionPrompt(
@@ -10157,6 +10169,10 @@ Check denyWrite in:
     const result = await enableSandbox(ctx);
     if (result.accepted) return;
     const type = result.reason?.startsWith("Sandbox initialization failed") ? "error" : result.reason?.includes("config") ? "info" : "warning";
+    if (type === "info") {
+      addStartupInfo(pi.events.emit.bind(pi.events), result.reason ?? "Sandbox disabled");
+      return;
+    }
     ctx.ui.notify(result.reason ?? "Sandbox disabled", type);
   });
   pi.on("session_shutdown", async () => {

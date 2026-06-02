@@ -36,6 +36,7 @@
       "./sudo-auth.ts",
       "./notify-hook.ts",
       "./working-status.ts", 
+      "./startup-info.ts",
       "./notify-hook/attention.ts",
       "./pi-glance/index.ts",
       "./pi-rewind/index.ts",

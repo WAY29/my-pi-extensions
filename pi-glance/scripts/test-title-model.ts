@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
+import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
 
 function model(provider: string, id: string, name = id): Model<Api> {
 	return {
@@ -41,8 +41,9 @@ const anthropicShared = model("anthropic", "shared-title-model");
 const openaiTitle = model("openai", "gpt-5.2");
 const openaiShared = model("openai", "shared-title-model");
 const unavailableOnly = model("local", "offline-title-model");
+const ollamaColonId = model("ollama", "llama3.1:8b");
 
-const registry = new FakeRegistry([anthropicCurrent, anthropicShared, openaiTitle, openaiShared, unavailableOnly], [anthropicCurrent, anthropicShared, openaiTitle]);
+const registry = new FakeRegistry([anthropicCurrent, anthropicShared, openaiTitle, openaiShared, unavailableOnly, ollamaColonId], [anthropicCurrent, anthropicShared, openaiTitle, ollamaColonId]);
 
 assert.equal(
 	resolveTitleModelSpec(registry, anthropicCurrent, "openai/gpt-5.2"),
@@ -67,6 +68,22 @@ assert.equal(autoBareRegisteredModel, openaiTitle, "bare auto model specs should
 const autoBareUnknownModel = resolveAutoModelSpec(registry, anthropicCurrent, "unlisted-model");
 assert.equal(autoBareUnknownModel?.provider, "anthropic", "unknown bare auto model specs should still fall back to the current provider template");
 assert.equal(autoBareUnknownModel?.id, "unlisted-model", "unknown bare auto model specs should keep the requested model id");
+
+const autoThinkingSelection = resolveAutoModelSelection(registry, anthropicCurrent, "gpt-5.2:high");
+assert.equal(autoThinkingSelection?.model, openaiTitle, "auto model selections should resolve the requested model before applying thinking");
+assert.equal(autoThinkingSelection?.thinkingLevel, "high", "auto model selections should parse bare model thinking shorthand");
+
+const autoProviderThinkingSelection = resolveAutoModelSelection(registry, anthropicCurrent, "openai/gpt-5.2:medium");
+assert.equal(autoProviderThinkingSelection?.model, openaiTitle, "provider/model auto model selections should resolve exactly");
+assert.equal(autoProviderThinkingSelection?.thinkingLevel, "medium", "provider/model auto model selections should parse thinking shorthand");
+
+const autoColonIdSelection = resolveAutoModelSelection(registry, anthropicCurrent, "llama3.1:8b");
+assert.equal(autoColonIdSelection?.model, ollamaColonId, "auto model selections should prefer exact model ids that contain colons");
+assert.equal(autoColonIdSelection?.thinkingLevel, undefined, "exact colon model ids should not be misparsed as thinking shorthand");
+
+const autoColonIdWithThinking = resolveAutoModelSelection(registry, anthropicCurrent, "llama3.1:8b:low");
+assert.equal(autoColonIdWithThinking?.model, ollamaColonId, "colon model ids should still resolve when a thinking suffix is added");
+assert.equal(autoColonIdWithThinking?.thinkingLevel, "low", "colon model ids should support a trailing thinking shorthand");
 
 const synthesizedExplicitProviderTitle = resolveTitleModelSpec(registry, anthropicCurrent, "local/gpt-5.2");
 assert.equal(synthesizedExplicitProviderTitle?.provider, "local", "provider/model specs should use the explicit provider");

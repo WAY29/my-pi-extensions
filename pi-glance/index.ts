@@ -1,11 +1,12 @@
 import { completeSimple, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { captureGlobalSettingsSnapshot, getWorkspaceAutoModelSpec, loadGlobalDefaultModelReference, restoreGlobalSettingsSnapshot } from "./auto-model.js";
+import { captureGlobalSettingsSnapshot, formatAutoModelNotice, getWorkspaceAutoModelSpec, loadGlobalDefaultModelReference, restoreGlobalSettingsSnapshot } from "./auto-model.js";
 import { cloneConfig, loadConfig, saveConfig } from "./config.js";
 import { GlanceEditor } from "./editor.js";
 import { GlanceFooterBridge } from "./footer-bridge.js";
 import { GitRefresher } from "./git.js";
 import { showGlancePane } from "./pane.js";
+import { addStartupInfo } from "../_shared/startup-info-shared.js";
 import {
 	clearContextUsage,
 	computeUsageTotals,
@@ -22,7 +23,7 @@ import {
 	type PlanModeSnapshot,
 	type SandboxSnapshot,
 } from "./state.js";
-import { resolveAutoModelSpec, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
+import { resolveAutoModelSelection, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
 import {
 	fallbackTitleFromPrompt,
 	resolveSessionNameUpdate,
@@ -33,6 +34,7 @@ import {
 } from "./title.js";
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
 import type { GlanceConfig, GlanceState, GoalSnapshot, GoalStatus } from "./types.js";
+import type { ThinkingLevel } from "./title-model.js";
 
 type PermissionGateStateResponse = {
 	available?: boolean;
@@ -366,8 +368,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return resolveTitleModelSpec(ctx.modelRegistry, ctx.model, spec);
 	}
 
-	function resolveWorkspaceAutoModel(ctx: ExtensionContext, spec: string): Model<Api> | undefined {
-		return resolveAutoModelSpec(ctx.modelRegistry, ctx.model, spec);
+	function resolveWorkspaceAutoModel(ctx: ExtensionContext, spec: string): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
+		return resolveAutoModelSelection(ctx.modelRegistry, ctx.model, spec);
 	}
 
 	function findLastAutoModelEntry(ctx: ExtensionContext): AutoModelEntryData | undefined {
@@ -380,46 +382,63 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return undefined;
 	}
 
-	async function applyWorkspaceAutoModel(ctx: ExtensionContext): Promise<void> {
+	async function applyWorkspaceAutoModel(ctx: ExtensionContext): Promise<string | undefined> {
 		const workspace = ctx.sessionManager.getCwd() || ctx.cwd;
 		const modelSpec = getWorkspaceAutoModelSpec(getConfig().autoModel.workspaceModels, workspace);
 		if (!modelSpec) {
 			const lastAuto = findLastAutoModelEntry(ctx);
 			const defaultModel = await loadGlobalDefaultModelReference();
-			if (!lastAuto || !defaultModel || !ctx.model) return;
-			if (ctx.model.provider !== lastAuto.provider || ctx.model.id !== lastAuto.modelId) return;
-			if (ctx.model.provider === defaultModel.provider && ctx.model.id === defaultModel.modelId) return;
-			const restored = resolveTitleModel(ctx, `${defaultModel.provider}/${defaultModel.modelId}`);
-			if (!restored) return;
+			if (!lastAuto || !defaultModel || !ctx.model) return undefined;
+			if (ctx.model.provider !== lastAuto.provider || ctx.model.id !== lastAuto.modelId) return undefined;
+
 			const snapshot = await captureGlobalSettingsSnapshot();
-			const switched = await pi.setModel(restored);
-			if (!switched) return;
-			await restoreGlobalSettingsSnapshot(snapshot);
-			if (ctx.hasUI) ctx.ui.notify(`Auto model cleared: ${titleModelKey(restored)}`, "info");
-			return;
+			try {
+				if (ctx.model.provider !== defaultModel.provider || ctx.model.id !== defaultModel.modelId) {
+					const restored = resolveTitleModel(ctx, `${defaultModel.provider}/${defaultModel.modelId}`);
+					if (!restored) return undefined;
+					const switched = await pi.setModel(restored);
+					if (!switched) return undefined;
+				}
+				if (defaultModel.thinkingLevel) {
+					pi.setThinkingLevel(defaultModel.thinkingLevel);
+				}
+			} finally {
+				await restoreGlobalSettingsSnapshot(snapshot);
+			}
+			return formatAutoModelNotice(defaultModel);
 		}
 
-		const model = resolveWorkspaceAutoModel(ctx, modelSpec);
-		if (!model) {
+		const selection = resolveWorkspaceAutoModel(ctx, modelSpec);
+		if (!selection) {
 			if (ctx.hasUI) ctx.ui.notify(`Auto model could not resolve \"${modelSpec}\".`, "warning");
-			return;
+			return undefined;
 		}
 
-		const nextModelKey = titleModelKey(model);
-		if (ctx.model && titleModelKey(ctx.model) === nextModelKey) {
-			if (ctx.hasUI) ctx.ui.notify(`Auto model: ${nextModelKey}`, "info");
-			return;
+		const nextModelKey = titleModelKey(selection.model);
+		const nextThinkingLevel = selection.thinkingLevel;
+		const sameModel = Boolean(ctx.model && titleModelKey(ctx.model) === nextModelKey);
+		const sameThinking = !nextThinkingLevel || pi.getThinkingLevel() === nextThinkingLevel;
+		if (sameModel && sameThinking) {
+			return formatAutoModelNotice(selection.model, nextThinkingLevel);
 		}
 
 		const snapshot = await captureGlobalSettingsSnapshot();
-		const switched = await pi.setModel(model);
-		if (!switched) {
-			if (ctx.hasUI) ctx.ui.notify(`Auto model is unavailable: ${modelSpec}`, "warning");
-			return;
+		try {
+			if (!sameModel) {
+				const switched = await pi.setModel(selection.model);
+				if (!switched) {
+					if (ctx.hasUI) ctx.ui.notify(`Auto model is unavailable: ${modelSpec}`, "warning");
+					return undefined;
+				}
+				pi.appendEntry<AutoModelEntryData>(AUTO_MODEL_CUSTOM_TYPE, { provider: selection.model.provider, modelId: selection.model.id });
+			}
+			if (nextThinkingLevel) {
+				pi.setThinkingLevel(nextThinkingLevel);
+			}
+		} finally {
+			await restoreGlobalSettingsSnapshot(snapshot);
 		}
-		pi.appendEntry<AutoModelEntryData>(AUTO_MODEL_CUSTOM_TYPE, { provider: model.provider, modelId: model.id });
-		await restoreGlobalSettingsSnapshot(snapshot);
-		if (ctx.hasUI) ctx.ui.notify(`Auto model: ${nextModelKey}`, "info");
+		return formatAutoModelNotice(selection.model, nextThinkingLevel);
 	}
 
 	async function generateTitle(generationId: number, ctx: ExtensionContext, prompt: string, model: Model<Api>, fallback: string, signal: AbortSignal): Promise<void> {
@@ -655,7 +674,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 		state = createInitialState(ctx, config, pi.getThinkingLevel());
 		if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
 		if (pendingGoalState !== undefined) setGoalSnapshot(state, pendingGoalState);
-		await applyWorkspaceAutoModel(ctx);
+		const autoModelNotice = await applyWorkspaceAutoModel(ctx);
+		addStartupInfo(pi.events.emit.bind(pi.events), autoModelNotice);
 		refreshModel(state, ctx, getConfig(), pi.getThinkingLevel());
 		const goalState = lastResponse(await emitWithResponses<unknown>("pi-goal:request-state", { from: "pi-glance" }));
 		if (goalState !== undefined) applyGoalState(goalState);

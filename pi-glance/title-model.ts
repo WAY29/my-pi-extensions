@@ -6,6 +6,18 @@ export interface TitleModelRegistry {
 	getAvailable(): Model<Api>[];
 }
 
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export interface AutoModelSelection {
+	model: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+}
+
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+	return (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export function titleModelKey(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
 }
@@ -33,6 +45,21 @@ function cloneForModelId(template: Model<Api>, modelId: string): Model<Api> {
 function synthesizeProviderModel(registry: TitleModelRegistry, provider: string, modelId: string): Model<Api> | undefined {
 	const template = findByProvider(registry.getAvailable(), provider) ?? findByProvider(registry.getAll(), provider);
 	return template ? cloneForModelId(template, modelId) : undefined;
+}
+
+function findExactAutoModel(registry: TitleModelRegistry, spec: string): Model<Api> | undefined {
+	const trimmed = spec.trim();
+	if (!trimmed) return undefined;
+
+	const slash = trimmed.indexOf("/");
+	if (slash >= 0) {
+		const provider = trimmed.slice(0, slash).trim();
+		const modelId = trimmed.slice(slash + 1).trim();
+		if (!provider || !modelId) return undefined;
+		return registry.find(provider, modelId);
+	}
+
+	return findByModelId(registry.getAvailable(), trimmed) ?? findByModelId(registry.getAll(), trimmed);
 }
 
 export function resolveTitleModelSpec(
@@ -85,4 +112,29 @@ export function resolveAutoModelSpec(
 		findByModelId(registry.getAll(), trimmed) ??
 		(currentModel ? cloneForModelId(currentModel, trimmed) : undefined)
 	);
+}
+
+export function resolveAutoModelSelection(
+	registry: TitleModelRegistry,
+	currentModel: Model<Api> | undefined,
+	spec: string,
+): AutoModelSelection | undefined {
+	const trimmed = spec.trim();
+	if (!trimmed) return undefined;
+
+	const exactModel = findExactAutoModel(registry, trimmed);
+	if (exactModel) return { model: exactModel };
+
+	const lastColon = trimmed.lastIndexOf(":");
+	if (lastColon >= 0) {
+		const modelSpec = trimmed.slice(0, lastColon).trim();
+		const thinkingSpec = trimmed.slice(lastColon + 1).trim();
+		if (modelSpec && isThinkingLevel(thinkingSpec)) {
+			const resolved = resolveAutoModelSelection(registry, currentModel, modelSpec);
+			return resolved ? { ...resolved, thinkingLevel: thinkingSpec } : undefined;
+		}
+	}
+
+	const model = resolveAutoModelSpec(registry, currentModel, trimmed);
+	return model ? { model } : undefined;
 }

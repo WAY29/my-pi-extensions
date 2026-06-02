@@ -132,11 +132,12 @@ Open `/glance`, select **Auto model**, and manage the rules directly in the pane
 For rule editing:
 
 - Step 1 asks for the path and defaults to the current workspace for new rules.
-- Step 2 asks for the model. You can enter either `provider/model` or a bare `model` name.
+- Step 2 asks for the model. You can enter `model[:thinking]` or `provider/model[:thinking]`.
+- Examples: `gpt-5.2`, `gpt-5.2:high`, `anthropic/claude-sonnet-4:medium`.
 - Bare model names prefer a configured model id across available providers; use `provider/model` to disambiguate.
 - Relative paths resolve from the current workspace while editing in `/glance`.
 
-On `session_start`, pi-glance checks the exact session cwd, switches to the configured model when a rule matches, and shows a notification. If no rule matches, pi keeps the default model.
+On `session_start`, pi-glance checks the exact session cwd, switches to the configured model when a rule matches, and applies the optional thinking level when provided. If no rule matches, pi keeps the default model and default thinking level.
 
 ## Git status
 

@@ -2,6 +2,7 @@ import { rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import type { ThinkingLevel } from "./title-model.js";
 
 const GLOBAL_SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
@@ -18,6 +19,7 @@ export interface GlobalSettingsSnapshot {
 export interface DefaultModelReference {
 	provider: string;
 	modelId: string;
+	thinkingLevel?: ThinkingLevel;
 }
 
 function expandHomePath(path: string): string {
@@ -89,13 +91,24 @@ export async function restoreGlobalSettingsSnapshot(snapshot: GlobalSettingsSnap
 	await writeFile(path, snapshot.text ?? "", "utf8");
 }
 
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
 export async function loadGlobalDefaultModelReference(path = GLOBAL_SETTINGS_PATH): Promise<DefaultModelReference | undefined> {
 	try {
 		const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 		const provider = typeof parsed.defaultProvider === "string" ? parsed.defaultProvider.trim() : "";
 		const modelId = typeof parsed.defaultModel === "string" ? parsed.defaultModel.trim() : "";
-		return provider && modelId ? { provider, modelId } : undefined;
+		const rawThinkingLevel = typeof parsed.defaultThinkingLevel === "string" ? parsed.defaultThinkingLevel.trim() : "";
+		const thinkingLevel = THINKING_LEVELS.has(rawThinkingLevel as ThinkingLevel) ? (rawThinkingLevel as ThinkingLevel) : undefined;
+		return provider && modelId ? { provider, modelId, thinkingLevel } : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+export function formatAutoModelNotice(model: { provider: string; modelId: string; thinkingLevel?: ThinkingLevel } | { provider: string; id: string }, thinkingLevel?: ThinkingLevel): string {
+	const modelId = "modelId" in model ? model.modelId : model.id;
+	const level = thinkingLevel ?? ("thinkingLevel" in model ? model.thinkingLevel : undefined);
+	const suffix = level ? `:${level}` : "";
+	return `AutoModel switched to ${model.provider}/${modelId}${suffix}`;
 }

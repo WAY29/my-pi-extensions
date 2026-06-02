@@ -100,6 +100,7 @@ import {
   releaseBashToolOwner,
 } from "../../bash-tool-coordinator";
 import { withNotifyHookAttention } from "../../notify-hook/attention";
+import { addStartupInfo } from "../../_shared/startup-info-shared.js";
 import { createDirectLinuxSandboxCommand } from "./direct-linux-sandbox";
 import {
   createDirectMacSandboxCommand,
@@ -2094,6 +2095,10 @@ export default function (pi: ExtensionAPI) {
       : result.reason?.includes("config")
         ? "info"
         : "warning";
+    if (type === "info") {
+      addStartupInfo(pi.events.emit.bind(pi.events), result.reason ?? "Sandbox disabled");
+      return;
+    }
     ctx.ui.notify(result.reason ?? "Sandbox disabled", type);
   });
 

@@ -423,7 +423,7 @@ class GlanceConfigPane implements Component {
 			inputRow(
 				"Add rule",
 				this.currentWorkspacePath ? "current cwd" : "",
-				"Press Enter to edit the path first, then the model. Bare model names prefer a configured model id; use provider/model to disambiguate.",
+				"Press Enter to edit the path first, then the model. Use model[:thinking] or provider/model[:thinking]. Bare model names prefer a configured model id.",
 				(value) => this.beginAutoModelRuleEdit("Add rule", undefined, value),
 				"new",
 				this.currentWorkspacePath,
@@ -433,7 +433,7 @@ class GlanceConfigPane implements Component {
 				return inputRow(
 					`Rule ${index + 1}`,
 					autoModelRuleSummary(rule.directory, rule.model),
-					`Edit ${fullRule}. First update the path, then the model. Clear the path to delete this rule. Bare model names prefer a configured model id; use provider/model to disambiguate.`,
+					`Edit ${fullRule}. First update the path, then the model. Clear the path to delete that rule. Use model[:thinking] or provider/model[:thinking]. Bare model names prefer a configured model id.`,
 					(value) => this.beginAutoModelRuleEdit(`Rule ${index + 1}`, rule.directory, value),
 					"delete",
 					rule.directory,
@@ -447,7 +447,7 @@ class GlanceConfigPane implements Component {
 			infoRow(
 				"Current match",
 				currentMatch || "default",
-				currentMatch ? `session_start will switch to ${currentMatch} for this exact cwd.` : "No exact rule for the current workspace. pi keeps the default model.",
+				currentMatch ? `session_start will switch to ${currentMatch} for this exact cwd.` : "No exact rule for the current workspace. pi keeps the default model and effort.",
 			),
 			infoRow("Rules", `${rules.length}`, "Rules match the session cwd exactly. Add a rule first, then edit path and model separately."),
 		];
@@ -569,14 +569,14 @@ class GlanceConfigPane implements Component {
 			emptyValue: "model",
 			apply: (modelValue) => this.finishAutoModelRuleEdit(previousDirectory, directory, modelValue),
 		};
-		this.status = `Editing ${label} model. Use model or provider/model. Bare models prefer a configured model id.`;
+		this.status = `Editing ${label} model. Use model[:thinking] or provider/model[:thinking]. Bare models prefer a configured model id.`;
 		return false;
 	}
 
 	private finishAutoModelRuleEdit(previousDirectory: string | undefined, directory: string, value: string): boolean | void {
 		const model = value.trim();
 		if (!model) {
-			this.status = "Model required. Use model or provider/model.";
+			this.status = "Model required. Use model[:thinking] or provider/model[:thinking].";
 			return false;
 		}
 		if (previousDirectory && previousDirectory !== directory) {

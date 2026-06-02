@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
 	captureGlobalSettingsSnapshot,
+	formatAutoModelNotice,
 	formatWorkspaceModelRule,
 	getWorkspaceAutoModelSpec,
 	listWorkspaceModelRules,
@@ -89,14 +90,20 @@ assert.equal(
 	"unconfigured workspaces should fall back to the default model",
 );
 
+assert.equal(
+	formatAutoModelNotice({ provider: "openai", modelId: "gpt-5.2", thinkingLevel: "high" }),
+	"AutoModel switched to openai/gpt-5.2:high",
+	"auto model notices should mention the switched model in English",
+);
+
 const settingsDir = await mkdtemp(join(tmpdir(), "pi-glance-settings-"));
 const settingsPath = join(settingsDir, "settings.json");
-const originalText = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.2", theme: "dark" }, null, 2);
+const originalText = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.2", defaultThinkingLevel: "medium", theme: "dark" }, null, 2);
 await restoreGlobalSettingsSnapshot({ existed: true, text: originalText }, settingsPath);
 assert.deepEqual(
 	await loadGlobalDefaultModelReference(settingsPath),
-	{ provider: "openai", modelId: "gpt-5.2" },
-	"global default model references should be read from settings.json",
+	{ provider: "openai", modelId: "gpt-5.2", thinkingLevel: "medium" },
+	"global default model references should be read from settings.json, including default thinking level",
 );
 const snapshot = await captureGlobalSettingsSnapshot(settingsPath);
 await restoreGlobalSettingsSnapshot({ existed: true, text: JSON.stringify({ defaultProvider: "anthropic", defaultModel: "claude-sonnet-4" }) }, settingsPath);
