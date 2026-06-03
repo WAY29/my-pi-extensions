@@ -11,6 +11,7 @@ import {
   clearResults,
   generateId,
   getResult,
+  resolveStoredFetchContent,
   restoreFromSession,
   SESSION_ENTRY_TYPE,
   storeResult,
@@ -20,6 +21,14 @@ import {
 import type { ExtractedContent, SearchProvider } from "./types.js";
 import { resolveFetchProvider } from "./fetch-provider.js";
 import { truncateContent, uniqueStrings } from "./utils.js";
+import {
+  buildAnyAccessPromptAddendum,
+  buildBackgroundFetchReadyMessage,
+  buildBackgroundFetchStartedNote,
+  buildContentReadyNote,
+  buildSearchNeedsContentNote,
+  buildSearchResultsStoredNote,
+} from "./tool-output.js";
 
 const ACTIVITY_SHORTCUT = "ctrl+shift+w";
 const ACTIVITY_WIDGET_KEY = "any-access-activity";
@@ -99,6 +108,17 @@ function mergeFetchedContent(
   return urls.map((url) => merged.get(url) ?? { url, title: url, content: "", error: "Content not fetched" });
 }
 
+function normalizeIndexList(values: unknown): number[] {
+  if (!Array.isArray(values)) return [];
+  const unique = new Set<number>();
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isInteger(value)) continue;
+    if (value < 0) continue;
+    unique.add(value);
+  }
+  return Array.from(unique).sort((a, b) => a - b);
+}
+
 function buildActivityWidget(ctx: ExtensionContext): string[] {
   const theme = ctx.ui.theme;
   const entries = activityMonitor.getEntries();
@@ -170,6 +190,12 @@ function persistStoredResult(pi: ExtensionAPI, data: StoredSearchData): void {
 }
 
 export default function anyAccessExtension(pi: ExtensionAPI) {
+  pi.on("before_agent_start", async (event) => {
+    return {
+      systemPrompt: event.systemPrompt + "\n\n" + buildAnyAccessPromptAddendum(),
+    };
+  });
+
   function abortPendingFetches(): void {
     for (const controller of pendingFetches.values()) {
       controller.abort();
@@ -207,7 +233,7 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       pi.sendMessage(
         {
           customType: "any-access-content-ready",
-          content: `Content fetched for ${ok}/${merged.length} URLs [${fetchId}]. Full page content now available.`,
+          content: buildBackgroundFetchReadyMessage(fetchId, ok, merged.length),
           display: true,
         },
         { triggerTurn: true },
@@ -272,8 +298,12 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description: "Search the web using Tinyfish or Exa. Tinyfish is preferred when configured; otherwise Exa is used. Returns a synthesized answer with source citations. When includeContent is true, full page content is fetched for the returned sources and stored for get_search_content.",
-    promptSnippet: "Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage.",
+    description: "Search the web using Tinyfish or Exa. Tinyfish is preferred when configured; otherwise Exa is used. Returns a synthesized answer with source citations. When you need page text rather than snippets, set includeContent true and then use get_search_content with the returned responseId/fetchId.",
+    promptSnippet: "Use for web research questions. Prefer {queries:[...]} with 2-4 varied angles over a single query for broader coverage. If you need page text, set includeContent:true and then call get_search_content with the returned responseId.",
+    promptGuidelines: [
+      "Use web_search with includeContent:true when the task needs page text rather than only snippets or a synthesized summary.",
+      "After web_search returns a stored responseId/searchId/fetchId and the task needs source details or full page content, use get_search_content instead of relying only on the initial summary.",
+    ],
     parameters: Type.Object({
       query: Type.Optional(Type.String({ description: "Single search query. For research tasks, prefer 'queries' with multiple varied angles instead." })),
       queries: Type.Optional(Type.Array(Type.String(), { description: "Multiple queries searched in sequence, each returning its own synthesized answer. Prefer this for research — vary phrasing, scope, and angle across 2-4 queries to maximize coverage." })),
@@ -377,10 +407,13 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       const successfulQueries = queryResults.filter((item) => !item.error).length;
       const totalResults = queryResults.reduce((sum, item) => sum + item.results.length, 0);
       let output = formatSearchSummary(queryResults);
+      output += `\n\n---\n${buildSearchResultsStoredNote(searchId)}`;
       if (fetchId && inlineReady) {
-        output += `\n\n---\nFull content for ${allUrls.length} sources available [${fetchId}]. Use get_search_content({ responseId: \"${fetchId}\", urlIndex: 0 }) for full content.`;
+        output += `\n${buildContentReadyNote(fetchId, allUrls.length)}`;
       } else if (fetchId) {
-        output += `\n\n---\nContent fetching in background [${fetchId}]. You will be notified when full content is ready.`;
+        output += `\n${buildBackgroundFetchStartedNote(fetchId)}`;
+      } else if (allUrls.length > 0) {
+        output += `\n${buildSearchNeedsContentNote()}`;
       }
 
       return {
@@ -441,7 +474,12 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       }
 
       let status = theme.fg("success", `${details?.successfulQueries ?? 0}/${details?.queryCount ?? 0} queries, ${details?.totalResults ?? 0} sources`);
-      if (details?.fetchId) status += theme.fg("muted", " (content ready)");
+      if (details?.fetchId) {
+        const textContent = result.content.find((item) => item.type === "text")?.text || "";
+        status += textContent.includes("Content fetching in background")
+          ? theme.fg("muted", " (fetching content)")
+          : theme.fg("muted", " (content ready)");
+      }
       if (!expanded) return new Text(status, 0, 0);
 
       const textContent = result.content.find((item) => item.type === "text")?.text || "";
@@ -489,8 +527,11 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "fetch_content",
     label: "Fetch Content",
-    description: "Fetch HTTP/HTTPS URL(s) and extract readable content as markdown. Supports GitHub repository URLs with clone-aware repo browsing. Content is stored and can be retrieved with get_search_content.",
-    promptSnippet: "Use to extract readable content from HTTP/HTTPS pages or GitHub repos.",
+    description: "Fetch HTTP/HTTPS URL(s) and extract readable content as markdown. Supports GitHub repository URLs with clone-aware repo browsing. Content is stored and can be retrieved with get_search_content using the returned responseId.",
+    promptSnippet: "Use to extract readable content from HTTP/HTTPS pages or GitHub repos. If the result is truncated or you need the stored full text later, call get_search_content with the returned responseId.",
+    promptGuidelines: [
+      "After fetch_content, if the inline result is truncated or the task still needs the stored full text, use get_search_content with the returned responseId.",
+    ],
     parameters: Type.Object({
       url: Type.Optional(Type.String({ description: "Single URL to fetch" })),
       urls: Type.Optional(Type.Array(Type.String(), { description: "Multiple URLs to fetch" })),
@@ -507,15 +548,29 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       }
 
       const requestedProvider = resolveFetchProvider(params.provider);
+      const { cached, missingUrls } = resolveStoredFetchContent(urlList);
 
+      const statusPrefix = cached.length > 0
+        ? `Using stored content for ${cached.length}/${urlList.length} URL(s)`
+        : `Fetching ${urlList.length} URL(s) via ${requestedProvider}...`;
       onUpdate?.({
-        content: [{ type: "text", text: `Fetching ${urlList.length} URL(s) via ${requestedProvider}...` }],
-        details: { phase: "fetch", progress: 0, requestedProvider },
+        content: [{ type: "text", text: missingUrls.length > 0 ? `${statusPrefix}; fetching ${missingUrls.length} missing URL(s) via ${requestedProvider}...` : `${statusPrefix}; no network fetch needed.` }],
+        details: { phase: "fetch", progress: 0, requestedProvider, cachedCount: cached.length, missingCount: missingUrls.length },
       });
 
-      const fetchResults = await fetchAllContent(urlList, signal, {
-        forceClone: params.forceClone,
-        provider: requestedProvider,
+      const fetchedMissing = missingUrls.length > 0
+        ? await fetchAllContent(missingUrls, signal, {
+          forceClone: params.forceClone,
+          provider: requestedProvider,
+        })
+        : [];
+      const fetchedByUrl = new Map(fetchedMissing.map((item) => [item.url, item]));
+      const cachedByUrl = new Map(cached.map((item) => [item.url, item]));
+      const fetchResults = urlList.map((url) => cachedByUrl.get(url) ?? fetchedByUrl.get(url) ?? {
+        url,
+        title: url,
+        content: "",
+        error: "Content not fetched",
       });
       const successful = fetchResults.filter((result) => !result.error).length;
       const totalChars = fetchResults.reduce((sum, result) => sum + result.content.length, 0);
@@ -539,8 +594,12 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
 
         const truncated = truncateContent(result.content, MAX_INLINE_CONTENT);
         let output = truncated.text;
+        output += `\n\n---\nStored content available [${responseId}]. Use get_search_content({ responseId: \"${responseId}\", urlIndex: 0 }) for full content.`;
+        if (cached.length > 0) {
+          output += `\nServed from stored search/fetch cache for ${cached.length}/${urlList.length} URL(s).`;
+        }
         if (truncated.truncated) {
-          output += `\n\n---\nShowing ${MAX_INLINE_CONTENT} of ${result.content.length} chars. Use get_search_content({ responseId: \"${responseId}\", urlIndex: 0 }) for full content.`;
+          output += `\nShowing ${MAX_INLINE_CONTENT} of ${result.content.length} chars inline.`;
         }
 
         return {
@@ -555,6 +614,9 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
             truncated: truncated.truncated,
             links: result.links ?? [],
             requestedProvider,
+            cachedCount: cached.length,
+            missingCount: missingUrls.length,
+            servedFromCache: cached.length > 0,
           },
         };
       }
@@ -567,11 +629,24 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
           output += `- ${result.title || result.url} (${result.content.length} chars)\n`;
         }
       }
-      output += `\n---\nUse get_search_content({ responseId: \"${responseId}\", urlIndex: 0 }) to retrieve full content.`;
+      output += `\n---\nStored content available [${responseId}]. Use get_search_content({ responseId: \"${responseId}\", urlIndex: 0 }) to retrieve full content.`;
+      if (cached.length > 0) {
+        output += `\nServed from stored search/fetch cache for ${cached.length}/${urlList.length} URL(s).`;
+      }
 
       return {
         content: [{ type: "text", text: output }],
-        details: { urls: urlList, urlCount: urlList.length, successful, totalChars, responseId, requestedProvider },
+        details: {
+          urls: urlList,
+          urlCount: urlList.length,
+          successful,
+          totalChars,
+          responseId,
+          requestedProvider,
+          cachedCount: cached.length,
+          missingCount: missingUrls.length,
+          servedFromCache: cached.length > 0,
+        },
       };
     },
     renderCall(args, theme) {
@@ -604,6 +679,9 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
         phase?: string;
         progress?: number;
         requestedProvider?: string;
+        cachedCount?: number;
+        missingCount?: number;
+        servedFromCache?: boolean;
       };
 
       if (isPartial) {
@@ -618,7 +696,8 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
 
       if (details?.urlCount === 1) {
         let status = theme.fg("success", details.title || "Content") + theme.fg("muted", ` (${details.totalChars ?? 0} chars)`);
-        if (details.requestedProvider) status += theme.fg("muted", ` via ${details.requestedProvider}`);
+        if (details.servedFromCache) status += theme.fg("muted", ` [cache ${details.cachedCount ?? 0}]`);
+        if (details.requestedProvider && (details.missingCount ?? 0) > 0) status += theme.fg("muted", ` via ${details.requestedProvider}`);
         if (details.truncated) status += theme.fg("warning", " [truncated]");
         if (!expanded) return new Text(status, 0, 0);
         const textContent = result.content.find((item) => item.type === "text")?.text || "";
@@ -626,7 +705,10 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
         return new Text(status + "\n" + theme.fg("dim", preview), 0, 0);
       }
 
-      const status = theme.fg((details?.successful ?? 0) > 0 ? "success" : "error", `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", ` (content stored${details?.requestedProvider ? ` via ${details.requestedProvider}` : ""})`);
+      let status = theme.fg((details?.successful ?? 0) > 0 ? "success" : "error", `${details?.successful}/${details?.urlCount} URLs`) + theme.fg("muted", " (content stored");
+      if (details?.servedFromCache) status += theme.fg("muted", `; cache ${details.cachedCount ?? 0}`);
+      if (details?.requestedProvider && (details?.missingCount ?? 0) > 0) status += theme.fg("muted", `; fetched via ${details.requestedProvider}`);
+      status += theme.fg("muted", ")");
       if (!expanded) return new Text(status, 0, 0);
       const textContent = result.content.find((item) => item.type === "text")?.text || "";
       const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;
@@ -639,12 +721,17 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
     label: "Get Search Content",
     description: "Retrieve full content from a previous web_search or fetch_content call.",
     promptSnippet: "Use after web_search/fetch_content when full stored content is needed via responseId plus query/url selectors.",
+    promptGuidelines: [
+      "Use get_search_content after web_search or fetch_content whenever the task needs per-query stored results, full page text, or a specific URL's extracted content.",
+    ],
     parameters: Type.Object({
       responseId: Type.String({ description: "The responseId from web_search or fetch_content" }),
       query: Type.Optional(Type.String({ description: "Get content for this query (web_search)" })),
       queryIndex: Type.Optional(Type.Number({ description: "Get content for query at index" })),
+      queryIndices: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }), { description: "Get content for multiple query indexes" })),
       url: Type.Optional(Type.String({ description: "Get content for this URL" })),
       urlIndex: Type.Optional(Type.Number({ description: "Get content for URL at index" })),
+      urlIndices: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }), { description: "Get content for multiple URL indexes" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<{ content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }> {
       const data = getResult(params.responseId);
@@ -656,80 +743,154 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       }
 
       if (data.type === "search" && data.queries) {
-        let queryData: QueryResultData | undefined;
+        const queries = data.queries;
+        const queryIndices = normalizeIndexList(params.queryIndices);
         if (params.query !== undefined) {
-          queryData = data.queries.find((item) => item.query === params.query);
+          const queryData = queries.find((item) => item.query === params.query);
           if (!queryData) {
-            const available = data.queries.map((item) => `\"${item.query}\"`).join(", ");
+            const available = queries.map((item) => `\"${item.query}\"`).join(", ");
             return {
               content: [{ type: "text", text: `Query \"${params.query}\" not found. Available: ${available}` }],
               details: { error: "Query not found" },
             };
           }
-        } else if (params.queryIndex !== undefined) {
-          queryData = data.queries[params.queryIndex];
-          if (!queryData) {
-            return {
-              content: [{ type: "text", text: `Index ${params.queryIndex} out of range (0-${data.queries.length - 1})` }],
-              details: { error: "Index out of range" },
-            };
-          }
-        } else {
-          const available = data.queries.map((item, index) => `${index}: \"${item.query}\"`).join(", ");
+
           return {
-            content: [{ type: "text", text: `Specify query or queryIndex. Available: ${available}` }],
-            details: { error: "No query specified" },
+            content: [{ type: "text", text: formatFullResults(queryData) }],
+            details: { query: queryData.query, resultCount: queryData.results.length },
           };
         }
 
+        if (queryIndices.length > 0) {
+          const invalid = queryIndices.find((index) => !queries[index]);
+          if (invalid !== undefined) {
+            return {
+              content: [{ type: "text", text: `Index ${invalid} out of range (0-${queries.length - 1})` }],
+              details: { error: "Index out of range" },
+            };
+          }
+
+          const selected = queryIndices.map((index) => queries[index]);
+          return {
+            content: [{ type: "text", text: selected.map((item) => formatFullResults(item)).join("\n\n---\n\n") }],
+            details: { queryIndices, queryCount: selected.length, queries: selected.map((item) => item.query) },
+          };
+        }
+
+        if (params.queryIndex !== undefined) {
+          const queryData = queries[params.queryIndex];
+          if (!queryData) {
+            return {
+              content: [{ type: "text", text: `Index ${params.queryIndex} out of range (0-${queries.length - 1})` }],
+              details: { error: "Index out of range" },
+            };
+          }
+
+          return {
+            content: [{ type: "text", text: formatFullResults(queryData) }],
+            details: { query: queryData.query, resultCount: queryData.results.length },
+          };
+        }
+
+        const available = queries.map((item, index) => `${index}: \"${item.query}\"`).join(", ");
         return {
-          content: [{ type: "text", text: formatFullResults(queryData) }],
-          details: { query: queryData.query, resultCount: queryData.results.length },
+          content: [{ type: "text", text: `Specify query, queryIndex, or queryIndices. Available: ${available}` }],
+          details: { error: "No query specified" },
         };
       }
 
       if (data.type === "fetch" && data.urls) {
-        let urlData: ExtractedContent | undefined;
+        const urls = data.urls;
+        const urlIndices = normalizeIndexList(params.urlIndices);
         if (params.url !== undefined) {
-          urlData = data.urls.find((item) => item.url === params.url);
+          const urlData = urls.find((item) => item.url === params.url);
           if (!urlData) {
-            const available = data.urls.map((item) => item.url).join("\n  ");
+            const available = urls.map((item) => item.url).join("\n  ");
             return {
               content: [{ type: "text", text: `URL not found. Available:\n  ${available}` }],
               details: { error: "URL not found" },
             };
           }
-        } else if (params.urlIndex !== undefined) {
-          urlData = data.urls[params.urlIndex];
-          if (!urlData) {
+
+          if (urlData.error) {
             return {
-              content: [{ type: "text", text: `Index ${params.urlIndex} out of range (0-${data.urls.length - 1})` }],
+              content: [{ type: "text", text: `Error for ${urlData.url}: ${urlData.error}` }],
+              details: { error: urlData.error, url: urlData.url, links: urlData.links ?? [] },
+            };
+          }
+
+          return {
+            content: [{ type: "text", text: `# ${urlData.title}\n\n${urlData.content}` }],
+            details: {
+              url: urlData.url,
+              title: urlData.title,
+              contentLength: urlData.content.length,
+              links: urlData.links ?? [],
+            },
+          };
+        }
+
+        if (urlIndices.length > 0) {
+          const invalid = urlIndices.find((index) => !urls[index]);
+          if (invalid !== undefined) {
+            return {
+              content: [{ type: "text", text: `Index ${invalid} out of range (0-${urls.length - 1})` }],
               details: { error: "Index out of range" },
             };
           }
-        } else {
-          const available = data.urls.map((item, index) => `${index}: ${item.url}`).join("\n  ");
+
+          const selected = urlIndices.map((index) => urls[index]);
+          const errored = selected.find((item) => item.error);
+          if (errored) {
+            return {
+              content: [{ type: "text", text: `Error for ${errored.url}: ${errored.error}` }],
+              details: { error: errored.error, url: errored.url, links: errored.links ?? [] },
+            };
+          }
+
           return {
-            content: [{ type: "text", text: `Specify url or urlIndex. Available:\n  ${available}` }],
-            details: { error: "No URL specified" },
+            content: [{ type: "text", text: selected.map((item) => `# ${item.title}\n\n${item.content}`).join("\n\n---\n\n") }],
+            details: {
+              urlIndices,
+              urlCount: selected.length,
+              urls: selected.map((item) => item.url),
+              titles: selected.map((item) => item.title),
+              contentLength: selected.reduce((sum, item) => sum + item.content.length, 0),
+            },
           };
         }
 
-        if (urlData.error) {
+        if (params.urlIndex !== undefined) {
+          const urlData = urls[params.urlIndex];
+          if (!urlData) {
+            return {
+              content: [{ type: "text", text: `Index ${params.urlIndex} out of range (0-${urls.length - 1})` }],
+              details: { error: "Index out of range" },
+            };
+          }
+
+          if (urlData.error) {
+            return {
+              content: [{ type: "text", text: `Error for ${urlData.url}: ${urlData.error}` }],
+              details: { error: urlData.error, url: urlData.url, links: urlData.links ?? [] },
+            };
+          }
+
           return {
-            content: [{ type: "text", text: `Error for ${urlData.url}: ${urlData.error}` }],
-            details: { error: urlData.error, url: urlData.url, links: urlData.links ?? [] },
+            content: [{ type: "text", text: `# ${urlData.title}\n\n${urlData.content}` }],
+            details: {
+              url: urlData.url,
+              title: urlData.title,
+              contentLength: urlData.content.length,
+              links: urlData.links ?? [],
+            },
           };
         }
 
+        const available = urls.map((item, index) => `${index}: ${item.url}`).join("\n  ");
         return {
-          content: [{ type: "text", text: `# ${urlData.title}\n\n${urlData.content}` }],
-          details: {
-            url: urlData.url,
-            title: urlData.title,
-            contentLength: urlData.content.length,
-            links: urlData.links ?? [],
-          },
+          content: [{ type: "text", text: `Specify url, urlIndex, or urlIndices. Available:\n  ${available}` }],
+          details: { error: "No URL specified" },
         };
       }
 
@@ -739,17 +900,21 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       };
     },
     renderCall(args, theme) {
-      const { responseId, query, queryIndex, url, urlIndex } = args as {
+      const { responseId, query, queryIndex, queryIndices, url, urlIndex, urlIndices } = args as {
         responseId: string;
         query?: string;
         queryIndex?: number;
+        queryIndices?: number[];
         url?: string;
         urlIndex?: number;
+        urlIndices?: number[];
       };
       let target = "";
       if (query) target = `query=\"${query}\"`;
+      else if (Array.isArray(queryIndices) && queryIndices.length > 0) target = `queryIndices=${queryIndices.join(",")}`;
       else if (queryIndex !== undefined) target = `queryIndex=${queryIndex}`;
       else if (url) target = url.length > 30 ? url.slice(0, 27) + "..." : url;
+      else if (Array.isArray(urlIndices) && urlIndices.length > 0) target = `urlIndices=${urlIndices.join(",")}`;
       else if (urlIndex !== undefined) target = `urlIndex=${urlIndex}`;
       else target = responseId.slice(0, 8);
       return new Text(theme.fg("toolTitle", theme.bold("get_content ")) + theme.fg("accent", target), 0, 0);
@@ -758,8 +923,12 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
       const details = result.details as {
         error?: string;
         query?: string;
+        queries?: string[];
         title?: string;
+        titles?: string[];
         resultCount?: number;
+        queryCount?: number;
+        urlCount?: number;
         contentLength?: number;
       };
 
@@ -769,7 +938,11 @@ export default function anyAccessExtension(pi: ExtensionAPI) {
 
       const status = details?.query
         ? theme.fg("success", `\"${details.query}\"`) + theme.fg("muted", ` (${details.resultCount} results)`)
-        : theme.fg("success", details?.title || "Content") + theme.fg("muted", ` (${details?.contentLength ?? 0} chars)`);
+        : details?.queries?.length
+          ? theme.fg("success", `${details.queries.length} queries`) + theme.fg("muted", ` (${details?.contentLength ?? 0} chars)`)
+          : details?.titles?.length
+            ? theme.fg("success", `${details.titles.length} URLs`) + theme.fg("muted", ` (${details?.contentLength ?? 0} chars)`)
+            : theme.fg("success", details?.title || "Content") + theme.fg("muted", ` (${details?.contentLength ?? 0} chars)`);
       if (!expanded) return new Text(status, 0, 0);
       const textContent = result.content.find((item) => item.type === "text")?.text || "";
       const preview = textContent.length > 500 ? textContent.slice(0, 500) + "..." : textContent;

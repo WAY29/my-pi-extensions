@@ -38,6 +38,36 @@ export function getAllResults(): StoredSearchData[] {
   return Array.from(storedResults.values());
 }
 
+export function resolveStoredFetchContent(urls: string[]): { cached: ExtractedContent[]; missingUrls: string[] } {
+  const wanted = new Set(urls);
+  const cachedByUrl = new Map<string, ExtractedContent>();
+  const allResults = Array.from(storedResults.values());
+
+  for (let i = allResults.length - 1; i >= 0; i--) {
+    const result = allResults[i];
+    if (result.type !== "fetch" || !result.urls) continue;
+
+    for (const item of result.urls) {
+      if (!wanted.has(item.url)) continue;
+      if (item.error) continue;
+      if (cachedByUrl.has(item.url)) continue;
+      cachedByUrl.set(item.url, item);
+    }
+
+    if (cachedByUrl.size >= wanted.size) break;
+  }
+
+  const cached: ExtractedContent[] = [];
+  const missingUrls: string[] = [];
+  for (const url of urls) {
+    const item = cachedByUrl.get(url);
+    if (item) cached.push(item);
+    else missingUrls.push(url);
+  }
+
+  return { cached, missingUrls };
+}
+
 export function deleteResult(id: string): boolean {
   return storedResults.delete(id);
 }
