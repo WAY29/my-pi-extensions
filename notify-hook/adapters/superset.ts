@@ -1,17 +1,9 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type NotifyHookLifecycleEvent = "UserPromptSubmit" | "Start" | "Stop" | "request_user_input";
-
-export type NotifyHookContext = Pick<ExtensionContext, "sessionManager">;
-
-export interface NotifyHookAdapter {
-	name: string;
-	fire(eventName: NotifyHookLifecycleEvent, ctx?: NotifyHookContext): Promise<void>;
-}
+import type { NotifyHookAdapter, NotifyHookContext, NotifyHookLifecycleSignal } from "./types";
 
 function isSupersetTerminal(): boolean {
 	return Boolean(
@@ -38,9 +30,10 @@ export function createSupersetNotifyHookAdapter(): NotifyHookAdapter | null {
 
 	return {
 		name: "superset",
-		fire(eventName: NotifyHookLifecycleEvent, ctx?: NotifyHookContext): Promise<void> {
+		fire(signal: NotifyHookLifecycleSignal, ctx?: NotifyHookContext): Promise<void> {
 			const payload: Record<string, string> = {
-				hook_event_name: eventName,
+				hook_event_name: signal.eventName,
+				hook_event_source: signal.source,
 			};
 
 			const sessionId = ctx ? getSessionId(ctx) : undefined;
