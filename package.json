@@ -21,6 +21,7 @@
   "pi": {
     "extensions": [
       "./AskUserQuestion.ts",
+      "./agent-browser/index.ts",
       "./bash-grep-output-mode.ts",
       "./bash-tool-coordinator.ts",
       "./code-block-enhancer.ts",
@@ -46,7 +47,10 @@
       "./any-access/index.ts"
     ]
   },
-  "dependencies": {},
+  "dependencies": {
+    "linkedom": "^0.18.12",
+    "ws": "^8.18.3"
+  },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",

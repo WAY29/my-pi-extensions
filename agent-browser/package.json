@@ -1,0 +1,43 @@
+{
+  "name": "pi-agent-browser",
+  "version": "0.1.0",
+  "description": "Pi extension package for controlling the user's real Chrome session through a bundled bridge and skill-guided tools",
+  "type": "module",
+  "private": true,
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "browser",
+    "chrome",
+    "cdp"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "linkedom": "^0.18.12",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "typebox": "*",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  }
+}

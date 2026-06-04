@@ -49,6 +49,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | 扩展 | 类型 | 主要命令 / 工具 / 钩子 | 用途 |
 |---|---|---|---|
 | `AskUserQuestion.ts` | 工具 | `AskUserQuestion` | 为 agent 添加交互式提问工具。支持单问题或多问题流程、选项列表、自定义文本回答和每个选项的备注。 |
+| `agent-browser/` | 真实浏览器桥接 + skill 引导工具 | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | 通过内置 bridge 和已解压 Chrome 扩展，把 pi 连接到用户真实的 Chrome 会话。工具默认不激活，只有显式 arm 后才暴露，以减少普通会话的 token 开销。 |
 | `bash-grep-output-mode.ts` | UI/工具渲染器 | `/bash-grep-output`, `Ctrl+Shift+O`, `Alt+O` | 在 `hidden`、`compact` 和 `full` 之间切换 `bash` 与 `grep` 输出渲染模式，同时不改变模型接收到的内容。bash 部分通过 `bash-tool-coordinator.ts` 协作。 |
 | `bash-tool-coordinator.ts` | 辅助模块 | 自动 | 为需要包装 `bash` 工具的扩展提供共享组合层。它本身刻意不提供可见 UI。 |
 | `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
