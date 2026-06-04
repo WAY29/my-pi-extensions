@@ -28,15 +28,23 @@ pi install https://github.com/WAY29/my-pi-extensions
 pi install git:github.com/WAY29/my-pi-extensions -l
 ```
 
-如果你不想使用 `pi install`，也可以手动复制：
+如果你想先本地 clone，但仍希望由 pi 正确安装运行时依赖，优先使用本地路径安装：
+
+```bash
+git clone https://github.com/WAY29/my-pi-extensions /tmp/pi-extensions
+pi install /tmp/pi-extensions
+```
+
+如果你确实不想使用 `pi install`，也可以手动复制，但现在仅复制文件已经不够，因为部分扩展带有运行时依赖：
 
 ```bash
 mkdir -p ~/.pi/agent/extensions
 git clone https://github.com/WAY29/my-pi-extensions /tmp/pi-extensions
 find /tmp/pi-extensions -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} ~/.pi/agent/extensions/ \;
+cd ~/.pi/agent/extensions && npm install --omit=dev
 ```
 
-这会复制源仓库 `.git/` 目录以外的所有顶层内容。它仍会复制有用的点文件，例如 `.gitignore`。
+这会复制源仓库 `.git/` 目录以外的所有顶层内容，然后安装 package 的运行时依赖。如果你已经用自己的 `package.json` 或自定义方式管理 `~/.pi/agent/extensions`，优先使用 `pi install /path/to/clone`，不要直接裸复制。
 
 如需临时测试单个扩展：
 

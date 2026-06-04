@@ -41,13 +41,14 @@ Pi 扩展骨架：把 `agent-browser-mcp` 迁成 Pi package 风格，并用 skil
 
 ## 安装
 
-在该目录运行：
+开发或重新打包时，在该目录运行：
 
 ```bash
 npm install
+npm run build
 ```
 
-然后在 Pi 中 `/reload`。
+正常使用时，扩展通过已提交的 `dist/` 启动；即使删除开发环境下的 `node_modules/`，只要 `dist/` 还在，Pi 也能加载该扩展。修改源码后记得重新运行 `npm run build`，然后在 Pi 中 `/reload`。
 
 ## Chrome 扩展安装
 

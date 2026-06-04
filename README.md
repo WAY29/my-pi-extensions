@@ -28,15 +28,23 @@ Project-local install is also supported:
 pi install git:github.com/WAY29/my-pi-extensions -l
 ```
 
-Manual copy is still possible if you prefer not to use `pi install`:
+If you want a local clone but still want pi to install runtime dependencies correctly, prefer a local-path install:
+
+```bash
+git clone https://github.com/WAY29/my-pi-extensions /tmp/pi-extensions
+pi install /tmp/pi-extensions
+```
+
+Raw copy is still possible if you really do not want to use `pi install`, but copying files alone is no longer enough when some extensions have runtime dependencies:
 
 ```bash
 mkdir -p ~/.pi/agent/extensions
 git clone https://github.com/WAY29/my-pi-extensions /tmp/pi-extensions
 find /tmp/pi-extensions -mindepth 1 -maxdepth 1 ! -name .git -exec cp -R {} ~/.pi/agent/extensions/ \;
+cd ~/.pi/agent/extensions && npm install --omit=dev
 ```
 
-This copies all top-level repository contents except the source repository's `.git/` directory. It still copies useful dotfiles such as `.gitignore`.
+This copies all top-level repository contents except the source repository's `.git/` directory, then installs the package's runtime dependencies. If you already manage `~/.pi/agent/extensions` with your own `package.json` or custom setup, prefer `pi install /path/to/clone` instead of raw copying.
 
 For one-off testing of a single extension:
 

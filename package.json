@@ -47,10 +47,7 @@
       "./any-access/index.ts"
     ]
   },
-  "dependencies": {
-    "linkedom": "^0.18.12",
-    "ws": "^8.18.3"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",

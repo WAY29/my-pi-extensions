@@ -13,6 +13,13 @@
     "chrome",
     "cdp"
   ],
+  "files": [
+    "index.ts",
+    "dist",
+    "chrome-extension",
+    "skills",
+    "README.md"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"
@@ -24,20 +31,20 @@
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
-  "dependencies": {
-    "linkedom": "^0.18.12",
-    "ws": "^8.18.3"
-  },
   "devDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
+    "linkedom": "^0.18.12",
+    "tsup": "^8.5.1",
     "typebox": "*",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "ws": "^8.18.3"
   },
   "scripts": {
+    "build": "tsup",
     "check": "tsc --noEmit"
   }
 }
