@@ -1,5 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Key } from "@earendil-works/pi-tui";
 import {
   ensureBashToolRegistered,
@@ -10,8 +14,9 @@ import {
 
 type OutputMode = "hidden" | "compact" | "full";
 
-const STATUS_KEY = "bash-grep-output-mode";
-const COMMAND = "bash-grep-output";
+const STATUS_KEY = "tool-output-mode";
+const COMMAND = "tool-output-mode";
+const TOOL_SCOPE = "bash/grep/find/ls";
 const SHORTCUTS = [
   Key.ctrlShift("o"),
   // Fallback: many terminals collapse Ctrl+Shift+O to Ctrl+O, so the shifted
@@ -27,7 +32,7 @@ function nextMode(mode: OutputMode): OutputMode {
 }
 
 function setStatus(ctx: { ui: { setStatus(key: string, text: string | undefined): void } }): void {
-  ctx.ui.setStatus(STATUS_KEY, `bash/grep: ${outputMode}`);
+  ctx.ui.setStatus(STATUS_KEY, `tool output: ${outputMode}`);
 }
 
 function refreshToolRows(ctx: {
@@ -57,7 +62,7 @@ function applyOutputMode(
   outputMode = mode;
   setStatus(ctx);
   refreshToolRows(ctx);
-  ctx.ui.notify(`bash/grep output: ${previousMode} → ${outputMode}`, "info");
+  ctx.ui.notify(`${TOOL_SCOPE} output: ${previousMode} → ${outputMode}`, "info");
 }
 
 function parseMode(value: string): OutputMode | undefined {
@@ -69,10 +74,10 @@ function parseMode(value: string): OutputMode | undefined {
 
 export default function (pi: ExtensionAPI) {
   registerBashToolPlugin(pi, {
-    id: "bash-grep-output-mode",
+    id: "tool-output-mode",
     wrapRenderResult: (next) => (result, options, theme, context) => {
       if (outputMode === "hidden") {
-        return next({ ...result, content: [] }, { ...options, expanded: false }, theme, context);
+        return new Container();
       }
 
       return next(result, { ...options, expanded: outputMode === "full" }, theme, context);
@@ -81,7 +86,7 @@ export default function (pi: ExtensionAPI) {
 
   for (const shortcut of SHORTCUTS) {
     pi.registerShortcut(shortcut, {
-      description: "Cycle bash/grep output: hidden → compact → full",
+      description: `Cycle ${TOOL_SCOPE} output: hidden → compact → full`,
       handler(ctx) {
         applyOutputMode(ctx, nextMode(outputMode));
       },
@@ -89,7 +94,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand(COMMAND, {
-    description: "Cycle or set bash/grep output mode: hidden, compact, full",
+    description: `Cycle or set ${TOOL_SCOPE} output mode: hidden, compact, full`,
     async handler(args, ctx) {
       const requestedMode = args.trim() ? parseMode(args) : nextMode(outputMode);
       if (!requestedMode) {
@@ -106,23 +111,53 @@ export default function (pi: ExtensionAPI) {
     ensureBashToolRegistered(pi, ctx.cwd);
 
     const grep = createGrepToolDefinition(ctx.cwd);
-
     pi.registerTool({
       ...grep,
       renderResult(result, options, theme, context) {
         if (outputMode === "hidden") {
-          return (
-            grep.renderResult?.(
-              { ...result, content: [] },
-              { ...options, expanded: false },
-              theme,
-              context,
-            ) ?? new Container()
-          );
+          return new Container();
         }
 
         return (
           grep.renderResult?.(
+            result,
+            { ...options, expanded: outputMode === "full" },
+            theme,
+            context,
+          ) ?? new Container()
+        );
+      },
+    });
+
+    const find = createFindToolDefinition(ctx.cwd);
+    pi.registerTool({
+      ...find,
+      renderResult(result, options, theme, context) {
+        if (outputMode === "hidden") {
+          return new Container();
+        }
+
+        return (
+          find.renderResult?.(
+            result,
+            { ...options, expanded: outputMode === "full" },
+            theme,
+            context,
+          ) ?? new Container()
+        );
+      },
+    });
+
+    const ls = createLsToolDefinition(ctx.cwd);
+    pi.registerTool({
+      ...ls,
+      renderResult(result, options, theme, context) {
+        if (outputMode === "hidden") {
+          return new Container();
+        }
+
+        return (
+          ls.renderResult?.(
             result,
             { ...options, expanded: outputMode === "full" },
             theme,

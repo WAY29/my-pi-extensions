@@ -22,7 +22,7 @@
     "extensions": [
       "./AskUserQuestion.ts",
       "./agent-browser/index.ts",
-      "./bash-grep-output-mode.ts",
+      "./tool-output-mode.ts",
       "./bash-tool-coordinator.ts",
       "./code-block-enhancer.ts",
       "./effort.ts",
