@@ -51,6 +51,7 @@ function normalizeFinding(value: unknown): ReviewFinding {
 		severity: asSeverity(object?.severity),
 		category: typeof object?.category === "string" ? object.category : undefined,
 		exploitability: typeof object?.exploitability === "string" ? object.exploitability : undefined,
+		impact: typeof object?.impact === "string" ? object.impact : undefined,
 		evidence: typeof object?.evidence === "string" ? object.evidence : undefined,
 		code_location: normalizeCodeLocation(object?.code_location),
 	};
@@ -129,23 +130,28 @@ export function formatLocation(item: ReviewFinding): string {
 	return start === end ? `${path}:${start}` : `${path}:${start}-${end}`;
 }
 
-function formatFindingLead(item: ReviewFinding): string {
-	const tags = [item.severity, item.category].filter(Boolean).join("/");
-	return tags ? `${item.title} [${tags}]` : item.title;
+function escapeTableCell(value: string): string {
+	return value.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
+}
+
+function conciseLocation(item: ReviewFinding): string {
+	return formatLocation(item);
 }
 
 export function formatReviewFindingsBlock(findings: ReviewFinding[], selection?: boolean[]): string {
 	const lines: string[] = ["", findings.length > 1 ? "Full audit findings:" : "Audit finding:"];
+	lines.push("");
+	lines.push("| # | Title | Summary | Preconditions | Impact | Evidence | Location |", "| --- | --- | --- | --- | --- | --- | --- |");
 
 	for (const [index, item] of findings.entries()) {
-		lines.push("");
 		const marker = selection ? (selection[index] ?? true ? "[x] " : "[ ] ") : "";
-		lines.push(`- ${marker}${formatFindingLead(item)} — ${formatLocation(item)}`);
-		if (item.exploitability?.trim()) lines.push(`  Exploitability: ${item.exploitability.trim()}`);
-		if (item.evidence?.trim()) lines.push(`  Evidence: ${item.evidence.trim()}`);
-		for (const bodyLine of item.body.split("\n")) {
-			lines.push(`  ${bodyLine}`);
-		}
+		const title = escapeTableCell(`${marker}${item.title}${item.severity || item.category ? ` [${[item.severity, item.category].filter(Boolean).join("/")}]` : ""}`);
+		const summary = escapeTableCell(item.body || "");
+		const exploitability = escapeTableCell(item.exploitability || "");
+		const impact = escapeTableCell(item.impact || "");
+		const evidence = escapeTableCell(item.evidence || "");
+		const location = escapeTableCell(conciseLocation(item));
+		lines.push(`| ${index + 1} | ${title} | ${summary} | ${exploitability} | ${impact} | ${evidence} | ${location} |`);
 	}
 
 	return lines.join("\n");

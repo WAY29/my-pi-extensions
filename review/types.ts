@@ -33,6 +33,7 @@ export interface ReviewFinding {
 	severity?: ReviewSeverity;
 	category?: string;
 	exploitability?: string;
+	impact?: string;
 	evidence?: string;
 	code_location: ReviewCodeLocation;
 }

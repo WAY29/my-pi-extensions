@@ -14,6 +14,7 @@ const AUDIT_SCHEMA = `{
       "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
       "category": "<short category label such as AUTHZ, SQL_INJECTION, XSS, SSRF, PATH_TRAVERSAL, PROMPT_INJECTION, DATA_LOSS, LOGIC>",
       "exploitability": "<1 sentence attacker/user preconditions>",
+      "impact": "<1 sentence concrete harm or blast radius>",
       "evidence": "<1 sentence concrete evidence from code>",
       "code_location": {
         "absolute_file_path": "<file path>",
@@ -38,7 +39,11 @@ Review principles:
 - Do not speculate. Every finding must be backed by concrete evidence in code, control flow, data flow, or changed behavior.
 - Prefer fewer, higher-signal findings over broad stylistic commentary.
 - Keep each finding discrete and actionable.
-- The body must explain why this is a problem, when it happens, and why the impact is real.
+- Use title as the vulnerability name.
+- Use body as a short vulnerability summary (1-3 concise sentences, suitable for a table cell).
+- Use exploitability for the preconditions needed to trigger or abuse the issue.
+- Use impact for the concrete harm, blast radius, or business/security consequence.
+- Use evidence for the most concrete code-level signal proving the issue.
 - If a risk depends on attacker control, environment, feature flags, or specific inputs, say so explicitly.
 - Ignore low-value style nits, naming debates, or hypothetical cleanups.
 - Treat swallowed exceptions, fallback parsing, silent retries, and log-and-continue behavior as suspicious when they can hide security or correctness failures.
@@ -130,7 +135,7 @@ Language requirements:
 - Keep severity enum values exactly as CRITICAL/HIGH/MEDIUM/LOW.
 - Keep category values as short stable identifiers when appropriate (for example AUTHZ, LOGIC, XSS, SSRF).
 - Keep overall_correctness as the exact required canonical English phrase specified elsewhere in the prompt (for example patch is correct / patch is incorrect / scope appears correct / scope needs attention).
-- The following fields should be written in Simplified Chinese: title, body, exploitability, evidence, overall_explanation, audit_scope, and human_reviewer_callouts.`;
+- The following fields should be written in Simplified Chinese: title, body, exploitability, impact, evidence, overall_explanation, audit_scope, and human_reviewer_callouts.`;
 	}
 
 	return `${basePrompt}

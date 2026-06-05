@@ -38,6 +38,10 @@ function describeFinding(item: ReviewFinding, language: ReviewLanguage): string 
 	return parts ? `${item.title} [${parts}]` : item.title;
 }
 
+function escapeTableCell(value: string): string {
+	return value.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
+}
+
 export function formatReviewFindingsBlockLocalized(
 	findings: ReviewFinding[],
 	language: ReviewLanguage,
@@ -46,19 +50,28 @@ export function formatReviewFindingsBlockLocalized(
 	const header = language === "zh"
 		? findings.length > 1 ? "完整审计发现：" : "审计发现："
 		: findings.length > 1 ? "Full audit findings:" : "Audit finding:";
-	const exploitabilityLabel = language === "zh" ? "可利用前提" : "Exploitability";
-	const evidenceLabel = language === "zh" ? "证据" : "Evidence";
-	const lines: string[] = ["", header];
+	const lines: string[] = ["", header, ""];
+	if (language === "zh") {
+		lines.push(
+			"| # | 漏洞标题 | 漏洞简介 | 利用前提 | 危害 | 证据 | 位置 |",
+			"| --- | --- | --- | --- | --- | --- | --- |",
+		);
+	} else {
+		lines.push(
+			"| # | Title | Summary | Preconditions | Impact | Evidence | Location |",
+			"| --- | --- | --- | --- | --- | --- | --- |",
+		);
+	}
 
 	for (const [index, item] of findings.entries()) {
-		lines.push("");
 		const marker = selection ? (selection[index] ?? true ? "[x] " : "[ ] ") : "";
-		lines.push(`- ${marker}${describeFinding(item, language)} — ${formatLocation(item)}`);
-		if (item.exploitability?.trim()) lines.push(`  ${exploitabilityLabel}：${item.exploitability.trim()}`);
-		if (item.evidence?.trim()) lines.push(`  ${evidenceLabel}：${item.evidence.trim()}`);
-		for (const bodyLine of item.body.split("\n")) {
-			lines.push(`  ${bodyLine}`);
-		}
+		const title = escapeTableCell(`${marker}${describeFinding(item, language)}`);
+		const summary = escapeTableCell(item.body || "");
+		const exploitability = escapeTableCell(item.exploitability || "");
+		const impact = escapeTableCell(item.impact || "");
+		const evidence = escapeTableCell(item.evidence || "");
+		const location = escapeTableCell(formatLocation(item));
+		lines.push(`| ${index + 1} | ${title} | ${summary} | ${exploitability} | ${impact} | ${evidence} | ${location} |`);
 	}
 
 	return lines.join("\n");

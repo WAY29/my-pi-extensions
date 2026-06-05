@@ -32,6 +32,8 @@ type ReadRenderPatchState = {
 
 const PATCH_STATE_KEY = Symbol.for("pi.hide-read-output.toolExecutionRenderPatch");
 const MAX_PATH_DISPLAY_LENGTH = 80;
+const MAX_READABLE_PARENT_SEGMENTS = 2;
+const EXTRA_PARENT_SEGMENT_PENALTY = 4;
 
 class ReadGroupSummary extends Text {
 	private args: ReadToolArgs | undefined;
@@ -75,14 +77,43 @@ function getNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function normalizeDisplayPath(path: string): string {
-	const displayPath = isAbsolute(path) ? relative(process.cwd(), path) || "." : path;
-
-	if (displayPath.startsWith("./") && !displayPath.startsWith("../")) {
-		return displayPath.slice(2);
+function normalizeRelativeDisplayPath(path: string): string {
+	if (path.startsWith("./") && !path.startsWith("../")) {
+		return path.slice(2);
 	}
 
-	return displayPath;
+	return path;
+}
+
+function countLeadingParentSegments(path: string): number {
+	let count = 0;
+	let remainingPath = path;
+
+	while (remainingPath === ".." || remainingPath.startsWith("../")) {
+		count += 1;
+		remainingPath = remainingPath === ".." ? "" : remainingPath.slice(3);
+	}
+
+	return count;
+}
+
+function shouldPreferAbsolutePath(relativePath: string, absolutePath: string): boolean {
+	if (relativePath.length > absolutePath.length) {
+		return true;
+	}
+
+	const extraParentSegments = Math.max(0, countLeadingParentSegments(relativePath) - MAX_READABLE_PARENT_SEGMENTS);
+	const relativeReadabilityCost = relativePath.length + extraParentSegments * EXTRA_PARENT_SEGMENT_PENALTY;
+	return relativeReadabilityCost >= absolutePath.length;
+}
+
+function normalizeDisplayPath(path: string): string {
+	if (!isAbsolute(path)) {
+		return normalizeRelativeDisplayPath(path);
+	}
+
+	const relativePath = normalizeRelativeDisplayPath(relative(process.cwd(), path) || ".");
+	return shouldPreferAbsolutePath(relativePath, path) ? path : relativePath;
 }
 
 function shortenPath(path: string): string {

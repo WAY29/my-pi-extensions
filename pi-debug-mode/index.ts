@@ -5,10 +5,10 @@ import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, wri
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 
-const STATUS_KEY = "00-pi-debug-mode";
+const STATUS_KEY = "pi-debug-mode";
 const ENTRY_TYPE = "pi-debug-mode-state";
 const DEBUG_SKILL_COMMAND_PREFIX = "/skill:debug-mode";
-const DEBUG_TOOL_NAMES = ["debug_mode_state", "debug_mode_session"] as const;
+const DEBUG_TOOL_NAMES = ["debug_mode_state", "debug_mode_session", "debug_mode_pause_for_repro"] as const;
 const DEBUG_ACTIVE_PHASES: DebugPhase[] = [
 	"collecting",
 	"waiting-for-repro",
@@ -611,6 +611,51 @@ export default function piDebugModeExtension(pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Debug mode state updated: ${nextState.phase}` }],
 				details: nextState,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "debug_mode_pause_for_repro",
+		label: "Debug Mode Pause For Repro",
+		description:
+			"Pause the current debug workflow after instrumentation, ask the user to reproduce the bug, and terminate the current tool batch so the agent does not continue speculating without runtime evidence.",
+		promptSnippet: "Pause after instrumentation and wait for the user to reproduce the bug.",
+		promptGuidelines: [
+			"Use debug_mode_pause_for_repro immediately after instrumentation and log clearing; do not continue to diagnosis or fixes in the same turn.",
+			"Use debug_mode_pause_for_repro to force a human-in-the-loop stop before analyzing runtime evidence.",
+		],
+		parameters: Type.Object({
+			title: Type.Optional(Type.String({ description: "Short UI title for the reproduction pause" })),
+			message: Type.String({ description: "Exact reproduction instructions shown to the user" }),
+			phase: Type.Optional(StringEnum(["waiting-for-repro", "verifying"] as const)),
+			bugSummary: Type.Optional(Type.String({ description: "Bug summary for status display" })),
+			sessionId: Type.Optional(Type.String({ description: "Debug collector session id" })),
+			logFile: Type.Optional(Type.String({ description: "Collector log file path" })),
+			collectorPort: Type.Optional(Type.Number({ description: "Collector port" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const nextPhase = params.phase ?? "waiting-for-repro";
+			const nextState: DebugModeState = {
+				phase: nextPhase,
+				updatedAt: Date.now(),
+				bugSummary: params.bugSummary ?? currentState?.bugSummary,
+				sessionId: params.sessionId ?? currentState?.sessionId,
+				logFile: params.logFile ?? currentState?.logFile,
+				collectorPort: params.collectorPort ?? currentState?.collectorPort,
+				note: nextPhase === "verifying" ? "waiting for verification" : "waiting for reproduction",
+			};
+			persist(nextState);
+			applyStatus(ctx, nextState);
+
+			if (ctx.hasUI) {
+				await ctx.ui.confirm(params.title ?? "Reproduce the bug", params.message);
+			}
+
+			return {
+				content: [{ type: "text", text: `Paused debug workflow for user ${nextPhase === "verifying" ? "verification" : "reproduction"}.` }],
+				details: nextState,
+				terminate: true,
 			};
 		},
 	});
