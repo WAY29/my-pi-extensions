@@ -326,9 +326,9 @@ function phaseLabel(phase: DebugPhase): string {
 }
 
 function buildStatusText(ctx: ExtensionContext, state: DebugModeState | null): string | undefined {
-	if (!state || state.phase === "idle") return undefined;
+	if (!state || state.phase === "idle" || state.phase === "done") return undefined;
 	const theme = ctx.ui.theme;
-	const accent = state.phase === "done" ? theme.fg("success", "●") : theme.fg("accent", "●");
+	const accent = theme.fg("accent", "●");
 	const pieces: string[] = [theme.bold(` Debug ${phaseLabel(state.phase)}`)];
 	if (state.bugSummary) pieces.push(theme.fg("dim", state.bugSummary));
 	if (typeof state.logCount === "number") pieces.push(theme.fg("dim", `${state.logCount} logs`));
