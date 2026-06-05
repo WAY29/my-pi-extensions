@@ -7,6 +7,8 @@ import type { GlanceConfig, GlanceState, GoalSnapshot } from "./types.js";
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 const REVIEW_STATUS_KEYS = ["review-live", "review"] as const;
 const DEBUG_STATUS_KEYS = ["pi-debug-mode"] as const;
+const DEBUG_SPINNING_PHASE_PREFIXES = ["Debug Collecting", "Debug Analyzing", "Debug Fixing", "Debug Cleanup"] as const;
+const DEBUG_STATUS_MARKER = /^[●•◦]\s*/;
 
 function formatElapsed(seconds: number): string {
 	const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -67,15 +69,26 @@ function renderReviewFooterLine(footerData: ReadonlyFooterDataProvider, width: n
 	return truncateToWidth(`${marker} ${status}`, width, "…");
 }
 
-function renderDebugFooterLine(footerData: ReadonlyFooterDataProvider, width: number): string | undefined {
+function stripDebugStatusMarker(status: string): string {
+	return status.replace(DEBUG_STATUS_MARKER, "");
+}
+
+function shouldSpinDebugStatus(status: string): boolean {
+	const normalized = stripDebugStatusMarker(status);
+	return DEBUG_SPINNING_PHASE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+export function renderDebugFooterLine(footerData: ReadonlyFooterDataProvider, width: number, now = Date.now()): string | undefined {
 	const status = debugStatusText(footerData);
 	if (!status || width <= 0) return undefined;
-	return truncateToWidth(status, width, "…");
+	if (!shouldSpinDebugStatus(status)) return truncateToWidth(status, width, "…");
+	const marker = SPINNER_FRAMES[Math.floor(now / 250) % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
+	return truncateToWidth(`${marker} ${stripDebugStatusMarker(status)}`, width, "…");
 }
 
 export class GlanceFooterBridge implements Component {
 	private goalTimer: ReturnType<typeof setInterval> | undefined;
-	private reviewTimer: ReturnType<typeof setInterval> | undefined;
+	private statusTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
 		private readonly getState: () => GlanceState,
@@ -88,7 +101,7 @@ export class GlanceFooterBridge implements Component {
 
 	dispose(): void {
 		this.stopGoalTimer();
-		this.stopReviewTimer();
+		this.stopStatusTimer();
 	}
 
 	invalidate(): void {
@@ -98,9 +111,10 @@ export class GlanceFooterBridge implements Component {
 	render(width: number): string[] {
 		this.sync();
 		const lines: string[] = [];
-		const goalLine = renderGoalFooterLine(this.getState(), this.getConfig(), width);
-		const reviewLine = renderReviewFooterLine(this.footerData, width);
-		const debugLine = renderDebugFooterLine(this.footerData, width);
+		const now = Date.now();
+		const goalLine = renderGoalFooterLine(this.getState(), this.getConfig(), width, now);
+		const reviewLine = renderReviewFooterLine(this.footerData, width, now);
+		const debugLine = renderDebugFooterLine(this.footerData, width, now);
 		if (goalLine) lines.push(goalLine);
 		if (reviewLine) lines.push(reviewLine);
 		if (debugLine) lines.push(debugLine);
@@ -118,7 +132,7 @@ export class GlanceFooterBridge implements Component {
 		}
 
 		this.syncGoalTimer(state);
-		this.syncReviewTimer();
+		this.syncStatusTimer();
 		if (changed) state.version++;
 	}
 
@@ -132,14 +146,15 @@ export class GlanceFooterBridge implements Component {
 		this.goalTimer = setInterval(() => this.requestRender?.(), 250);
 	}
 
-	private syncReviewTimer(): void {
-		const shouldSpin = !!reviewStatusText(this.footerData) && !!this.requestRender;
+	private syncStatusTimer(): void {
+		const debugStatus = debugStatusText(this.footerData);
+		const shouldSpin = (!!reviewStatusText(this.footerData) || (!!debugStatus && shouldSpinDebugStatus(debugStatus))) && !!this.requestRender;
 		if (!shouldSpin) {
-			this.stopReviewTimer();
+			this.stopStatusTimer();
 			return;
 		}
-		if (this.reviewTimer) return;
-		this.reviewTimer = setInterval(() => this.requestRender?.(), 250);
+		if (this.statusTimer) return;
+		this.statusTimer = setInterval(() => this.requestRender?.(), 250);
 	}
 
 	private stopGoalTimer(): void {
@@ -148,9 +163,9 @@ export class GlanceFooterBridge implements Component {
 		this.goalTimer = undefined;
 	}
 
-	private stopReviewTimer(): void {
-		if (!this.reviewTimer) return;
-		clearInterval(this.reviewTimer);
-		this.reviewTimer = undefined;
+	private stopStatusTimer(): void {
+		if (!this.statusTimer) return;
+		clearInterval(this.statusTimer);
+		this.statusTimer = undefined;
 	}
 }
