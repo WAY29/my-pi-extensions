@@ -112,6 +112,8 @@ function piDebugLog(hypothesisId, message, data, location) {
 // PI_DEBUG_END session:<id>
 ```
 
+The wrapper comments are required. Do not place the helper or temporary log calls outside the `PI_DEBUG_START` / `PI_DEBUG_END` block.
+
 Usage:
 
 ```ts
@@ -142,6 +144,8 @@ function piDebugLog(hypothesisId, message, data, location) {
 // PI_DEBUG_END session:<id>
 ```
 
+The wrapper comments are required here too. Do not append temporary debug helpers or log writes outside the marker block.
+
 If an HTTP endpoint is easier in the current runtime, using the collector endpoint is also fine.
 
 ## Phase publishing via extension tools
@@ -150,6 +154,7 @@ If the tools are available, use them in this order:
 
 1. `debug_mode_session` to start/reuse, status-check, clear, and stop the collector
 2. `debug_mode_state` to publish phase transitions
+3. `debug_mode_pause_for_repro` to pause after instrumentation or before verification and terminate the current turn so the agent cannot continue speculating without runtime evidence
 
 State transitions look like:
 
@@ -157,6 +162,7 @@ State transitions look like:
 start/collecting
 waiting-for-repro
 analyzing
+awaiting-root-cause-confirmation
 fixing
 verifying
 cleanup
@@ -182,6 +188,17 @@ wc -l "/abs/path/.pi-debug/<session>.ndjson"
 tail -n 80 "/abs/path/.pi-debug/<session>.ndjson"
 rg '"hypothesisId":"H2"' "/abs/path/.pi-debug/<session>.ndjson"
 ```
+
+## Root-cause confirmation
+
+After the reproduction evidence confirms a diagnosis:
+
+1. publish `awaiting-root-cause-confirmation` if the state tool is available
+2. present the per-hypothesis verdicts and the proven root cause
+3. describe the smallest fix you intend to apply
+4. stop and wait for explicit user confirmation before editing code
+
+Do not use `debug_mode_pause_for_repro` for this step; a normal assistant reply is enough.
 
 ## Cleanup
 

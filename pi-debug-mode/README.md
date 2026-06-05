@@ -95,6 +95,7 @@ This MVP intentionally focuses on the core loop:
 - runtime instrumentation
 - reproduction
 - evidence-based diagnosis
+- root-cause confirmation before fixes
 - verification
 - cleanup
 

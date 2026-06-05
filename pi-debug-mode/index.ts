@@ -13,6 +13,7 @@ const DEBUG_ACTIVE_PHASES: DebugPhase[] = [
 	"collecting",
 	"waiting-for-repro",
 	"analyzing",
+	"awaiting-root-cause-confirmation",
 	"fixing",
 	"verifying",
 	"cleanup",
@@ -28,6 +29,7 @@ type DebugPhase =
 	| "collecting"
 	| "waiting-for-repro"
 	| "analyzing"
+	| "awaiting-root-cause-confirmation"
 	| "fixing"
 	| "verifying"
 	| "cleanup"
@@ -60,7 +62,7 @@ interface CollectorReady {
 }
 
 const StateParams = Type.Object({
-	phase: StringEnum(["idle", "collecting", "waiting-for-repro", "analyzing", "fixing", "verifying", "cleanup", "done"] as const),
+	phase: StringEnum(["idle", "collecting", "waiting-for-repro", "analyzing", "awaiting-root-cause-confirmation", "fixing", "verifying", "cleanup", "done"] as const),
 	bugSummary: Type.Optional(Type.String({ description: "Short bug summary" })),
 	sessionId: Type.Optional(Type.String({ description: "Debug collector session id" })),
 	logFile: Type.Optional(Type.String({ description: "Absolute log file path" })),
@@ -310,6 +312,8 @@ function phaseLabel(phase: DebugPhase): string {
 			return "Waiting for repro";
 		case "analyzing":
 			return "Analyzing";
+		case "awaiting-root-cause-confirmation":
+			return "Awaiting root-cause confirmation";
 		case "fixing":
 			return "Fixing";
 		case "verifying":
@@ -592,7 +596,7 @@ export default function piDebugModeExtension(pi: ExtensionAPI) {
 			"Update Pi Debug Mode session state for footer status and session persistence. Use only while following the debug-mode skill.",
 		promptSnippet: "Publish debug-mode phase updates for the current investigation.",
 		promptGuidelines: [
-			"Use debug_mode_state at debug-mode phase boundaries so the footer reflects collecting, waiting-for-repro, analyzing, fixing, verifying, cleanup, and done.",
+			"Use debug_mode_state at debug-mode phase boundaries so the footer reflects collecting, waiting-for-repro, analyzing, awaiting-root-cause-confirmation, fixing, verifying, cleanup, and done.",
 		],
 		parameters: StateParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -648,13 +652,38 @@ export default function piDebugModeExtension(pi: ExtensionAPI) {
 			persist(nextState);
 			applyStatus(ctx, nextState);
 
-			if (ctx.hasUI) {
-				await ctx.ui.confirm(params.title ?? "Reproduce the bug", params.message);
+			const confirmed = ctx.hasUI
+				? await ctx.ui.confirm(params.title ?? "Reproduce the bug", params.message)
+				: false;
+
+			if (confirmed) {
+				const followUpMessage = [
+					nextPhase === "verifying" ? "I finished the verification run." : "I finished reproducing the bug.",
+					nextPhase === "verifying"
+						? "Continue the debug-mode workflow now: inspect the fresh runtime evidence and decide whether the fix is verified."
+						: "Continue the debug-mode workflow now: inspect the fresh runtime evidence and analyze the cause.",
+					nextState.sessionId ? `Collector session: ${nextState.sessionId}.` : null,
+					nextState.logFile ? `Log file: ${nextState.logFile}.` : null,
+				]
+					.filter((part): part is string => Boolean(part))
+					.join(" ");
+				pi.sendUserMessage(followUpMessage, { deliverAs: "followUp" });
 			}
 
 			return {
-				content: [{ type: "text", text: `Paused debug workflow for user ${nextPhase === "verifying" ? "verification" : "reproduction"}.` }],
-				details: nextState,
+				content: [
+					{
+						type: "text",
+						text: confirmed
+							? `Paused debug workflow for user ${nextPhase === "verifying" ? "verification" : "reproduction"} and queued automatic continuation.`
+							: `Paused debug workflow for user ${nextPhase === "verifying" ? "verification" : "reproduction"}.`,
+					},
+				],
+				details: {
+					...nextState,
+					confirmed,
+					autoContinueQueued: confirmed,
+				},
 				terminate: true,
 			};
 		},

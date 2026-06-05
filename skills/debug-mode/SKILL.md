@@ -86,11 +86,13 @@ Rules:
 - For server/runtime code, direct file append is acceptable when simpler than HTTP.
 - Wrap temporary instrumentation in clear markers so cleanup is reliable.
 
-Recommended markers:
+Required markers:
 
 - `// PI_DEBUG_START session:<id>` / `// PI_DEBUG_END session:<id>`
 - `# PI_DEBUG_START session:<id>` / `# PI_DEBUG_END session:<id>`
 
+Every temporary instrumentation edit must live inside one matching `PI_DEBUG_START` / `PI_DEBUG_END` block using comment syntax valid for the file.
+Before calling `debug_mode_pause_for_repro`, verify every instrumentation-touched file still contains both markers and fix any missing marker first.
 Never leave plain `console.log` or ad-hoc debug prints without markers.
 
 ### 5. Clear logs and ask for reproduction
@@ -101,7 +103,12 @@ Before each recording pass:
 - clear the active log file / session (`debug_mode_session` with `action: clear` when available)
 - publish `phase: waiting-for-repro` with `debug_mode_state` if available
 
-Then stop and ask the user to reproduce the bug.
+Then **must pause the workflow** before any diagnosis or fix attempt:
+
+- If `debug_mode_pause_for_repro` is available, call it with exact reproduction instructions and let it terminate the current tool batch.
+- Only if that tool is unavailable, ask the user to reproduce the bug and end your turn immediately.
+
+Do **not** continue to diagnosis or fixes in the same turn after instrumentation.
 
 ### 6. Analyze evidence
 
@@ -119,15 +126,29 @@ If all are rejected or inconclusive, generate a new set and iterate.
 
 If a tool named `debug_mode_state` is available, publish `phase: analyzing` before presenting diagnosis.
 
-### 7. Fix only the proven cause
+### 7. Confirm the root cause before fixing
 
-Apply the smallest fix that addresses the confirmed root cause.
+After analysis identifies a likely root cause:
 
-Do **not** remove instrumentation yet.
+- present the per-hypothesis verdicts and the proven root cause to the user
+- explain the smallest fix you intend to apply
+- ask for confirmation before editing code
+- end the turn after the confirmation request
+
+Do **not** apply the fix in the same turn as the first root-cause diagnosis.
+
+If a tool named `debug_mode_state` is available, publish `phase: awaiting-root-cause-confirmation` before asking for confirmation.
+
+### 8. Fix only the proven cause
+
+Only after the user confirms the diagnosis/fix direction:
+
+- apply the smallest fix that addresses the confirmed root cause
+- keep the temporary instrumentation in place
 
 If a tool named `debug_mode_state` is available, publish `phase: fixing`.
 
-### 8. Verify with fresh evidence
+### 9. Verify with fresh evidence
 
 Before verification:
 
@@ -135,11 +156,14 @@ Before verification:
 - clear old logs (`debug_mode_session` with `action: clear` when available)
 - publish `phase: verifying` if the tool is available
 
-Ask the user to reproduce again with the fix in place.
+Then **must pause the workflow** before claiming success:
 
-Compare before/after evidence.
+- If `debug_mode_pause_for_repro` is available, call it with verification instructions and let it terminate the current tool batch.
+- Only if that tool is unavailable, ask the user to reproduce again with the fix in place and end your turn immediately.
 
-### 9. Clean up
+Compare before/after evidence only after the user comes back from that verification run.
+
+### 10. Clean up
 
 Only after:
 
@@ -157,7 +181,9 @@ Then:
 
 - Never claim the root cause from code inspection alone.
 - Never fix before collecting runtime evidence.
+- Never apply a code fix in the same turn as the first root-cause diagnosis.
 - Never remove instrumentation before post-fix verification succeeds.
+- Never pause or claim success while any instrumentation-touched file is missing `PI_DEBUG_START` or `PI_DEBUG_END`.
 - Never leave temporary debug code behind after success.
 - Never log secrets, tokens, passwords, or PII.
 - Never route browser debug traffic through a project-local proxy unless direct delivery is proven blocked.
@@ -175,11 +201,17 @@ If extension tools exist, use them like this:
   1. after collector startup → `collecting`
   2. before user reproduction → `waiting-for-repro`
   3. during diagnosis → `analyzing`
-  4. before applying the fix → `fixing`
-  5. before verification run → `verifying`
-  6. during teardown / after success → `cleanup` then `done`
+  4. after diagnosis, before asking to fix → `awaiting-root-cause-confirmation`
+  5. before applying the fix → `fixing`
+  6. before verification run → `verifying`
+  7. during teardown / after success → `cleanup` then `done`
+- `debug_mode_pause_for_repro`
+  1. after instrumentation/log clear → pause for reproduction and terminate the current turn
+  2. before verification analysis → pause for verification and terminate the current turn
 
-Do not fail the workflow if either tool is unavailable.
+Do not use `debug_mode_pause_for_repro` for root-cause confirmation. Present the diagnosis, ask for confirmation in a normal assistant message, and end the turn.
+
+Do not fail the workflow if these tools are unavailable, but when they exist you must use them instead of merely saying "please reproduce" and continuing.
 
 ## Response shape
 
@@ -194,13 +226,18 @@ After reproduction:
 
 5. per-hypothesis analysis
 6. proven root cause
-7. minimal fix
-8. verification request
+7. proposed minimal fix
+8. confirmation request
+
+After user confirmation:
+
+9. minimal fix
+10. verification request
 
 After success:
 
-9. short root-cause summary
-10. cleanup summary
-11. remaining caveats, if any
+11. short root-cause summary
+12. cleanup summary
+13. remaining caveats, if any
 
 For exact collector commands, payload shape, and logging templates, read [runtime-debugging.md](references/runtime-debugging.md).
