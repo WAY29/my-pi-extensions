@@ -46,6 +46,8 @@ cd ~/.pi/agent/extensions && npm install --omit=dev
 
 This copies all top-level repository contents except the source repository's `.git/` directory, then installs the package's runtime dependencies. If you already manage `~/.pi/agent/extensions` with your own `package.json` or custom setup, prefer `pi install /path/to/clone` instead of raw copying.
 
+If you copy files manually and want bundled skills too, also copy the repository `skills/` directory into a Pi skill root such as `~/.pi/agent/skills/`. Package installs handle this automatically.
+
 For one-off testing of a single extension:
 
 ```bash
@@ -76,6 +78,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `working-status.ts` | working indicator/UI status | automatic | Replaces pi's streaming `Working...` text with action-aware labels and a live elapsed timer. Keeps showing the most recent tool action while the model continues, and leaves a dim `Finished working in ...` status after `agent_end` until the next run. |
 | `startup-info.ts` | startup info aggregator | automatic | Collects cooperative startup `info` notices from extensions and renders them as one merged startup message so items like `pi-sandbox/` status and `pi-glance/` AutoModel switches do not overwrite each other. |
 | `pi-glance/` | UI/input surface | `/glance` | Replaces the default input area with a rounded multiline editor and inline status glance for model, context, tokens, cost, Git, title, and plan state. Its settings pane can also configure workspace auto-model rules, including `model[:thinking]` AutoModel rules, and toggle `permission-gate.ts` / `pi-sandbox/` when those extensions are installed. |
+| `pi-debug-mode/` | debug workflow + skill bridge | `/debug`, `/debug-status`, `/debug:cleanup`, `debug_mode_state`, `debug_mode_session`, `debug-mode` skill | Adds a minimal Cursor-style debug workflow for Pi. Debug tools are injected only for manual debug-mode turns, provide collector/session management plus footer state, and pair with the bundled `skills/debug-mode/` runtime-evidence skill. |
 | `pi-rewind/` | checkpoint/restore | `/rewind`, `Esc Esc` | Creates checkpoints after mutating turns and lets you rewind files and/or conversation state when an agent change goes wrong. Uses the repo's Git data when available, or pi-rewind-managed external Git storage for non-Git directories. |
 | `pi-sandbox/` | security/sandbox | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` toggle | Adds OS-level bash sandboxing plus filesystem/network permission prompts for direct tools. Consumes read-only locks requested by `plan-mode/`, uses `bash-tool-coordinator.ts` for bash wrapping, and exposes event-bus state/toggle hooks for pi-glance. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
@@ -174,6 +177,7 @@ Use `pretty-image-paste.ts` when pasting multiple screenshots or clipboard image
 - `notify-hook/attention.ts` is also a helper module. It exists so multiple extensions can share the same temporary user-attention signaling without duplicating event-name and start/end bookkeeping logic.
 - `notify-hook/adapters/superset.ts` contains the current Superset-specific adapter. Keep platform-specific notification integrations under `notify-hook/adapters/` so the top-level extension stays backend-agnostic.
 - `pi-glance/` and `pi-sandbox/` have their own `package.json` files and may also be usable as standalone pi packages.
+- `skills/debug-mode/` is bundled with this package because `pi-debug-mode/` relies on it for the debug workflow. Package installs now load skills from the repository `skills/` directory via `pi.skills`.
 - The root `sandbox.json` is a recommended macOS `pi-sandbox/` policy copied from `~/.pi/agent/sandbox.json`; keep it separate from `pi-sandbox/sandbox.json`, which belongs to the standalone package source.
 - `pi-sandbox/dist/` is intentionally kept because `pi-sandbox/index.ts` re-exports `./dist/index.js`.
 - Generated development directories such as `pi-glance/.tmp-git-dev/` are intentionally ignored.

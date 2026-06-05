@@ -36,7 +36,7 @@
       "./stable-scroll.ts",
       "./sudo-auth.ts",
       "./notify-hook.ts",
-      "./working-status.ts", 
+      "./working-status.ts",
       "./startup-info.ts",
       "./notify-hook/attention.ts",
       "./pi-glance/index.ts",
@@ -44,7 +44,12 @@
       "./pi-sandbox/index.ts",
       "./plan-mode/index.ts",
       "./review/index.ts",
-      "./any-access/index.ts"
+      "./any-access/index.ts",
+      "./pi-debug-mode/index.ts"
+    ],
+    "skills": [
+      "./skills",
+      "./agent-browser/skills"
     ]
   },
   "dependencies": {},

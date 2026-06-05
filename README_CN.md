@@ -46,6 +46,8 @@ cd ~/.pi/agent/extensions && npm install --omit=dev
 
 这会复制源仓库 `.git/` 目录以外的所有顶层内容，然后安装 package 的运行时依赖。如果你已经用自己的 `package.json` 或自定义方式管理 `~/.pi/agent/extensions`，优先使用 `pi install /path/to/clone`，不要直接裸复制。
 
+如果你选择手动复制文件并且也想带上配套 skills，请把仓库里的 `skills/` 目录额外复制到 `~/.pi/agent/skills/` 之类的 Pi skill 根目录。使用 package 安装时会自动处理这些 skill。
+
 如需临时测试单个扩展：
 
 ```bash
@@ -76,6 +78,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `startup-info.ts` | 启动信息聚合器 | 自动 | 聚合多个扩展协作发出的启动期 `info` 提示，并合并为一条启动消息，避免 `pi-sandbox/` 状态与 `pi-glance/` AutoModel 切换之类的信息互相覆盖。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，包括 `model[:thinking]` 形式的 AutoModel 规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
+| `pi-debug-mode/` | 调试工作流 + skill 桥接 | `/debug`, `/debug-status`, `/debug:cleanup`, `debug_mode_state`, `debug_mode_session`, `debug-mode` skill | 为 Pi 增加一个最小版 Cursor 风格调试工作流。调试工具只会在手动进入 debug mode 的回合注入，负责 collector/session 管理与 footer 状态，并与仓库内置的 `skills/debug-mode/` 运行时取证 skill 配套工作。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
@@ -174,6 +177,7 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 - `notify-hook/attention.ts` 也是辅助模块。它让多个扩展可以共享同一套临时“等待用户介入”信号，而不用重复实现事件名和 start/end 状态维护逻辑。
 - `notify-hook/adapters/superset.ts` 存放当前的 Superset 适配器。后续新增其它平台时，建议继续放在 `notify-hook/adapters/` 下，保持顶层扩展本身与具体平台解耦。
 - `pi-glance/` 和 `pi-sandbox/` 拥有自己的 `package.json`，也可能可以作为独立 pi 包使用。
+- 仓库里的 `skills/debug-mode/` 会一并打包，因为 `pi-debug-mode/` 的调试工作流依赖它。现在 package 通过 `pi.skills` 加载仓库根目录下的 `skills/`。
 - 根目录 `sandbox.json` 是从 `~/.pi/agent/sandbox.json` 复制来的 macOS 推荐 `pi-sandbox/` 策略；它应与属于独立包源码的 `pi-sandbox/sandbox.json` 分开维护。
 - `pi-sandbox/dist/` 被有意保留，因为 `pi-sandbox/index.ts` 会重新导出 `./dist/index.js`。
 - `pi-glance/.tmp-git-dev/` 等生成的开发目录会被有意忽略。
