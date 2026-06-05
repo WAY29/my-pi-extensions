@@ -6,7 +6,7 @@ import type { GlanceConfig, GlanceState, GoalSnapshot } from "./types.js";
 
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 const REVIEW_STATUS_KEYS = ["review-live", "review"] as const;
-const DEBUG_STATUS_KEYS = ["00-pi-debug-mode"] as const;
+const DEBUG_STATUS_KEYS = ["pi-debug-mode"] as const;
 
 function formatElapsed(seconds: number): string {
 	const safeSeconds = Math.max(0, Math.floor(seconds));
