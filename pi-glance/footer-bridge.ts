@@ -6,6 +6,7 @@ import type { GlanceConfig, GlanceState, GoalSnapshot } from "./types.js";
 
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 const REVIEW_STATUS_KEYS = ["review-live", "review"] as const;
+const DEBUG_STATUS_KEYS = ["00-pi-debug-mode"] as const;
 
 function formatElapsed(seconds: number): string {
 	const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -42,13 +43,21 @@ export function renderGoalFooterLine(state: GlanceState, config: GlanceConfig, w
 	return truncateToWidth(`${prefix}${objective}${suffix}`, width, "…");
 }
 
-function reviewStatusText(footerData: ReadonlyFooterDataProvider): string | undefined {
+function firstStatusText(footerData: ReadonlyFooterDataProvider, keys: readonly string[]): string | undefined {
 	const statuses = footerData.getExtensionStatuses();
-	for (const key of REVIEW_STATUS_KEYS) {
+	for (const key of keys) {
 		const value = statuses.get(key);
 		if (value && stripControls(value).trim()) return stripControls(value).trim();
 	}
 	return undefined;
+}
+
+function reviewStatusText(footerData: ReadonlyFooterDataProvider): string | undefined {
+	return firstStatusText(footerData, REVIEW_STATUS_KEYS);
+}
+
+function debugStatusText(footerData: ReadonlyFooterDataProvider): string | undefined {
+	return firstStatusText(footerData, DEBUG_STATUS_KEYS);
 }
 
 function renderReviewFooterLine(footerData: ReadonlyFooterDataProvider, width: number, now = Date.now()): string | undefined {
@@ -56,6 +65,12 @@ function renderReviewFooterLine(footerData: ReadonlyFooterDataProvider, width: n
 	if (!status || width <= 0) return undefined;
 	const marker = SPINNER_FRAMES[Math.floor(now / 250) % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
 	return truncateToWidth(`${marker} ${status}`, width, "…");
+}
+
+function renderDebugFooterLine(footerData: ReadonlyFooterDataProvider, width: number): string | undefined {
+	const status = debugStatusText(footerData);
+	if (!status || width <= 0) return undefined;
+	return truncateToWidth(status, width, "…");
 }
 
 export class GlanceFooterBridge implements Component {
@@ -85,8 +100,10 @@ export class GlanceFooterBridge implements Component {
 		const lines: string[] = [];
 		const goalLine = renderGoalFooterLine(this.getState(), this.getConfig(), width);
 		const reviewLine = renderReviewFooterLine(this.footerData, width);
+		const debugLine = renderDebugFooterLine(this.footerData, width);
 		if (goalLine) lines.push(goalLine);
 		if (reviewLine) lines.push(reviewLine);
+		if (debugLine) lines.push(debugLine);
 		return lines;
 	}
 
