@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pi Agent Browser Bridge</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 340px;
+        background: #111827;
+        color: #e5e7eb;
+      }
+      .card {
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 10px;
+        padding: 12px;
+        background: rgba(255,255,255,0.04);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        background: #6b7280;
+      }
+      .dot.connected { background: #16a34a; }
+      .dot.connecting { background: #2563eb; }
+      .dot.warning { background: #d97706; }
+      .dot.error { background: #dc2626; }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 4px;
+      }
+      .detail {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #cbd5e1;
+      }
+      .meta {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .label {
+        font-weight: 600;
+        color: #e5e7eb;
+      }
+      .tabs {
+        margin-top: 10px;
+        max-height: 160px;
+        overflow: auto;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        padding-top: 8px;
+      }
+      .tab {
+        margin-bottom: 8px;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .tab-title {
+        color: #f8fafc;
+        font-weight: 500;
+      }
+      .tab-url {
+        color: #94a3b8;
+        word-break: break-all;
+      }
+      .actions {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #cbd5e1;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="row">
+        <div id="dot" class="dot"></div>
+        <div>
+          <h1 id="title">Checking status…</h1>
+          <div id="detail" class="detail">Please wait.</div>
+        </div>
+      </div>
+      <div class="meta">
+        <div><span class="label">Next step:</span> <span id="next-step">—</span></div>
+        <div><span class="label">Bridge:</span> <code id="bridge-url">ws://127.0.0.1:18765</code></div>
+        <div><span class="label">Tabs:</span> <span id="tab-count">0</span></div>
+      </div>
+      <div id="tabs" class="tabs" hidden></div>
+      <div class="actions">
+        In Pi, use <code>/browser-on</code> to arm tools and <code>/browser-doctor</code> to diagnose setup.
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
