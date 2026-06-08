@@ -194,6 +194,20 @@ async function handleExtMessage(msg, sender) {
         await chrome.windows.update(tab.windowId, { focused: true });
         return { ok: true };
       }
+      if (msg.method === 'open_new_tab') {
+        const tab = await chrome.tabs.create({ url: msg.url, active: false });
+        await updateBadge();
+        return {
+          ok: true,
+          tab: {
+            id: tab.id,
+            url: tab.url,
+            title: tab.title,
+            active: tab.active,
+            windowId: tab.windowId,
+          },
+        };
+      }
       return { ok: true, data: await listTabs() };
     } catch (e) {
       return { ok: false, error: e.message };

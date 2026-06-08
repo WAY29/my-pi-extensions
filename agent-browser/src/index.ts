@@ -78,7 +78,11 @@ class BrowserBridge {
   private remoteMode = false;
 
   async ensureStarted() {
-    if (this.wsServer || this.httpServer || this.remoteMode) return;
+    if (this.remoteMode) {
+      if (await this.probeRemoteBridge()) return;
+      this.remoteMode = false;
+    }
+    if (this.wsServer || this.httpServer) return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.ensureStartedInner().finally(() => {
       this.startPromise = undefined;
@@ -118,6 +122,7 @@ class BrowserBridge {
     this.httpServer?.close();
     this.wsServer = undefined;
     this.httpServer = undefined;
+    this.remoteMode = false;
   }
 
   async getStatus() {
@@ -300,11 +305,17 @@ class BrowserBridge {
   }
 
   private async openNewTabLocal(args: { url: string }) {
-    const code = `window.open(${JSON.stringify(args.url)}, '_blank'); true;`;
     const tabId = this.defaultLocalTabId();
     if (!tabId) throw new Error('No connected browser tabs. Load the Chrome extension and open a normal page.');
-    await this.sendRaw(tabId, code, 10_000).catch(() => undefined);
-    return { status: 'ok', url: args.url, tabs: this.getLocalTabs() };
+    const result = await this.sendRaw(tabId, { cmd: 'tabs', method: 'open_new_tab', url: args.url }, 10_000);
+    const created = result && typeof result === 'object' ? (result as any) : {};
+    return {
+      status: created?.ok === false ? 'error' : 'ok',
+      url: args.url,
+      tab: created?.tab,
+      tabs: this.getLocalTabs(),
+      error: created?.ok === false ? created?.error : undefined,
+    };
   }
 
   async openNewTab(args: { url: string }) {
@@ -1158,9 +1169,9 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_open_new_tab',
     label: 'Browser Open New Tab',
-    description: 'Open a new real Chrome tab with the given URL.',
+    description: 'Open a new real Chrome tab with the given URL in the background.',
     parameters: Type.Object({
-      url: Type.String({ description: 'The URL to open in a new tab' }),
+      url: Type.String({ description: 'The URL to open in a new background tab' }),
     }),
     executionMode: 'sequential' as ToolExecutionMode,
     async execute(_id: any, params: any) {
