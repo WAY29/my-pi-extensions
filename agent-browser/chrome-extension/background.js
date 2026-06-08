@@ -20,33 +20,94 @@ chrome.runtime.onInstalled.addListener(() => {
 const isScriptable = (url) => url && /^https?:/i.test(url);
 let ws = null;
 const WS_URL = typeof PI_AGENT_BROWSER_WS_URL === 'string' ? PI_AGENT_BROWSER_WS_URL : 'ws://127.0.0.1:18765';
+let lastProbeOk = false;
+let lastStatus = {
+  code: 'disconnected',
+  shortText: 'x',
+  color: '#b71c1c',
+  title: 'Pi Agent Browser Bridge: bridge not started',
+  detail: 'Bridge not started',
+  nextStep: 'Run /browser-on or /browser-doctor in Pi, then reload a normal http/https page if needed.',
+  tabs: 0,
+};
+
+function setLastStatus(status) {
+  lastStatus = status;
+}
+
+function buildStatus({ probeOk, wsState, tabs }) {
+  const tabCount = Array.isArray(tabs) ? tabs.length : 0;
+  if (probeOk && wsState === WebSocket.OPEN && tabCount > 0) {
+    return {
+      code: 'connected',
+      shortText: '√',
+      color: '#2e7d32',
+      title: `Pi Agent Browser Bridge: connected (${tabCount} tab${tabCount === 1 ? '' : 's'})`,
+      detail: `Connected to Pi bridge with ${tabCount} normal tab${tabCount === 1 ? '' : 's'}.`,
+      nextStep: 'Browser tools should be ready in Pi.',
+      tabs: tabCount,
+    };
+  }
+  if (probeOk && (wsState === WebSocket.CONNECTING)) {
+    return {
+      code: 'connecting',
+      shortText: '…',
+      color: '#1565c0',
+      title: 'Pi Agent Browser Bridge: bridge detected, connecting WebSocket',
+      detail: 'Pi bridge is up; WebSocket is connecting.',
+      nextStep: 'Wait a moment. If this stays stuck, reload the extension or run /browser-doctor in Pi.',
+      tabs: tabCount,
+    };
+  }
+  if (probeOk && wsState === WebSocket.OPEN) {
+    return {
+      code: 'no-tabs',
+      shortText: '!',
+      color: '#f9a825',
+      title: 'Pi Agent Browser Bridge: connected, but no normal http/https page is open',
+      detail: 'Bridge is connected, but no scriptable http/https tab is available.',
+      nextStep: 'Open or refresh a normal http/https page in Chrome.',
+      tabs: tabCount,
+    };
+  }
+  if (probeOk) {
+    return {
+      code: 'bridge-up-ws-down',
+      shortText: '!',
+      color: '#ef6c00',
+      title: 'Pi Agent Browser Bridge: bridge is up, but WebSocket is not connected',
+      detail: 'Pi bridge responded, but the extension is not connected over WebSocket yet.',
+      nextStep: 'Wait for auto-reconnect, or reload the extension and run /browser-doctor in Pi.',
+      tabs: tabCount,
+    };
+  }
+  return {
+    code: 'bridge-offline',
+    shortText: 'x',
+    color: '#b71c1c',
+    title: 'Pi Agent Browser Bridge: bridge not started',
+    detail: 'Pi bridge is not reachable on localhost.',
+    nextStep: 'Run /browser-on or /browser-doctor in Pi to start the local bridge.',
+    tabs: tabCount,
+  };
+}
 
 async function updateBadge() {
   try {
     const tabs = await listTabs();
-    const wsConnected = !!ws && ws.readyState === WebSocket.OPEN;
-    let text = 'x';
-    let color = '#b71c1c';
-    let title = 'Pi Agent Browser Bridge: disconnected';
-
-    if (wsConnected && tabs.length > 0) {
-      text = '√';
-      color = '#2e7d32';
-      title = `Pi Agent Browser Bridge: connected (${tabs.length} tab${tabs.length === 1 ? '' : 's'})`;
-    } else if (wsConnected) {
-      text = '!';
-      color = '#f9a825';
-      title = 'Pi Agent Browser Bridge: bridge connected, but no normal http/https page is open';
-    }
-
-    await chrome.action.setBadgeText({ text });
-    await chrome.action.setBadgeBackgroundColor({ color });
-    await chrome.action.setTitle({ title });
+    const wsState = ws ? ws.readyState : WebSocket.CLOSED;
+    const status = buildStatus({ probeOk: lastProbeOk, wsState, tabs });
+    setLastStatus(status);
+    await chrome.action.setBadgeText({ text: status.shortText });
+    await chrome.action.setBadgeBackgroundColor({ color: status.color });
+    await chrome.action.setTitle({ title: status.title });
   } catch (_) {
+    const status = buildStatus({ probeOk: false, wsState: WebSocket.CLOSED, tabs: [] });
+    setLastStatus(status);
     try {
-      await chrome.action.setBadgeText({ text: 'x' });
-      await chrome.action.setBadgeBackgroundColor({ color: '#b71c1c' });
-      await chrome.action.setTitle({ title: 'Pi Agent Browser Bridge: disconnected' });
+      await chrome.action.setBadgeText({ text: status.shortText });
+      await chrome.action.setBadgeBackgroundColor({ color: status.color });
+      await chrome.action.setTitle({ title: status.title });
     } catch (_) {}
   }
 }
@@ -149,6 +210,26 @@ async function handleExtMessage(msg, sender) {
       return { ok: false, error: e.message };
     }
   }
+  if (msg.cmd === 'bridge' && msg.method === 'status') {
+    try {
+      const tabs = await listTabs();
+      const wsState = ws ? ws.readyState : WebSocket.CLOSED;
+      const status = buildStatus({ probeOk: lastProbeOk, wsState, tabs });
+      setLastStatus(status);
+      return {
+        ok: true,
+        data: {
+          ...status,
+          wsUrl: WS_URL,
+          wsState,
+          probeOk: lastProbeOk,
+          tabs,
+        },
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
   return { ok: false, error: 'unknown cmd: ' + msg.cmd };
 }
 
@@ -171,9 +252,16 @@ async function isServerAlive() {
   try {
     const ctrl = new AbortController();
     setTimeout(() => ctrl.abort(), 2000);
-    await fetch('http://127.0.0.1:18766', { signal: ctrl.signal });
-    return true;
+    const response = await fetch('http://127.0.0.1:18766/status', { signal: ctrl.signal });
+    if (!response.ok) {
+      lastProbeOk = false;
+      return false;
+    }
+    const payload = await response.json();
+    lastProbeOk = payload?.ok === true && payload?.bridge === 'pi-agent-browser';
+    return lastProbeOk;
   } catch (e) {
+    lastProbeOk = false;
     return false;
   }
 }
@@ -303,9 +391,14 @@ function connectWS() {
     return;
   }
   ws.onopen = async () => {
+    lastProbeOk = true;
     scheduleKeepalive();
     await updateBadge();
     ws.send(JSON.stringify({ type: 'ext_ready', tabs: await listTabs() }));
+  };
+  ws.onerror = () => {
+    // Avoid noisy cascading failures in the extension worker. We still rely on
+    // onclose + probe retries for recovery.
   };
   ws.onmessage = async (event) => {
     try {
@@ -329,9 +422,16 @@ function connectWS() {
   };
   ws.onclose = () => {
     ws = null;
-    updateBadge();
+    void updateBadge();
     scheduleProbe();
   };
+}
+
+async function bootstrapConnection() {
+  await updateBadge();
+  if (ws && ws.readyState <= 1) return;
+  if (await isServerAlive()) connectWS();
+  else scheduleProbe();
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -354,9 +454,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-connectWS();
-chrome.runtime.onStartup.addListener(() => { updateBadge(); connectWS(); });
-chrome.runtime.onInstalled.addListener(() => { updateBadge(); connectWS(); });
+void bootstrapConnection();
+chrome.runtime.onStartup.addListener(() => { void bootstrapConnection(); });
+chrome.runtime.onInstalled.addListener(() => { void bootstrapConnection(); });
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => { if (changeInfo.status === 'complete') sendTabsUpdate(); });
 chrome.tabs.onRemoved.addListener(() => sendTabsUpdate());
 chrome.tabs.onCreated.addListener(() => sendTabsUpdate());
