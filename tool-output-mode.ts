@@ -11,28 +11,27 @@ import {
   registerBashToolPlugin,
   releaseBashToolOwner,
 } from "./bash-tool-coordinator";
-
-type OutputMode = "hidden" | "compact" | "full";
+import {
+  activateToolOutputMode,
+  deactivateToolOutputMode,
+  nextToolOutputMode,
+  peekToolOutputMode,
+  setToolOutputMode,
+  type ToolOutputMode,
+} from "./tool-output-mode-state";
 
 const STATUS_KEY = "tool-output-mode";
 const COMMAND = "tool-output-mode";
-const TOOL_SCOPE = "bash/grep/find/ls";
+const TOOL_SCOPE = "bash/grep/find/ls/semble";
 const SHORTCUTS = [
   Key.ctrlShift("o"),
   // Fallback: many terminals collapse Ctrl+Shift+O to Ctrl+O, so the shifted
   // shortcut never reaches pi distinctly unless Kitty/CSI-u keys are enabled.
   Key.alt("o"),
 ] as const;
-let outputMode: OutputMode = "hidden";
-
-function nextMode(mode: OutputMode): OutputMode {
-  if (mode === "hidden") return "compact";
-  if (mode === "compact") return "full";
-  return "hidden";
-}
 
 function setStatus(ctx: { ui: { setStatus(key: string, text: string | undefined): void } }): void {
-  ctx.ui.setStatus(STATUS_KEY, `tool output: ${outputMode}`);
+  ctx.ui.setStatus(STATUS_KEY, `tool output: ${peekToolOutputMode()}`);
 }
 
 function refreshToolRows(ctx: {
@@ -56,16 +55,16 @@ function applyOutputMode(
       setToolsExpanded(expanded: boolean): void;
     };
   },
-  mode: OutputMode,
+  mode: ToolOutputMode,
 ): void {
-  const previousMode = outputMode;
-  outputMode = mode;
+  const previousMode = setToolOutputMode(mode);
+  const nextMode = peekToolOutputMode();
   setStatus(ctx);
   refreshToolRows(ctx);
-  ctx.ui.notify(`${TOOL_SCOPE} output: ${previousMode} → ${outputMode}`, "info");
+  ctx.ui.notify(`${TOOL_SCOPE} output: ${previousMode} → ${nextMode}`, "info");
 }
 
-function parseMode(value: string): OutputMode | undefined {
+function parseMode(value: string): ToolOutputMode | undefined {
   const normalized = value.trim().toLowerCase();
   if (normalized === "hidden" || normalized === "compact" || normalized === "full")
     return normalized;
@@ -76,6 +75,7 @@ export default function (pi: ExtensionAPI) {
   registerBashToolPlugin(pi, {
     id: "tool-output-mode",
     wrapRenderResult: (next) => (result, options, theme, context) => {
+      const outputMode = peekToolOutputMode();
       if (outputMode === "hidden") {
         return new Container();
       }
@@ -88,7 +88,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerShortcut(shortcut, {
       description: `Cycle ${TOOL_SCOPE} output: hidden → compact → full`,
       handler(ctx) {
-        applyOutputMode(ctx, nextMode(outputMode));
+        applyOutputMode(ctx, nextToolOutputMode());
       },
     });
   }
@@ -96,7 +96,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand(COMMAND, {
     description: `Cycle or set ${TOOL_SCOPE} output mode: hidden, compact, full`,
     async handler(args, ctx) {
-      const requestedMode = args.trim() ? parseMode(args) : nextMode(outputMode);
+      const requestedMode = args.trim() ? parseMode(args) : nextToolOutputMode();
       if (!requestedMode) {
         ctx.ui.notify(`Usage: /${COMMAND} [hidden|compact|full]`, "warning");
         return;
@@ -107,6 +107,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    activateToolOutputMode();
     setStatus(ctx);
     ensureBashToolRegistered(pi, ctx.cwd);
 
@@ -114,6 +115,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       ...grep,
       renderResult(result, options, theme, context) {
+        const outputMode = peekToolOutputMode();
         if (outputMode === "hidden") {
           return new Container();
         }
@@ -133,6 +135,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       ...find,
       renderResult(result, options, theme, context) {
+        const outputMode = peekToolOutputMode();
         if (outputMode === "hidden") {
           return new Container();
         }
@@ -152,6 +155,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       ...ls,
       renderResult(result, options, theme, context) {
+        const outputMode = peekToolOutputMode();
         if (outputMode === "hidden") {
           return new Container();
         }
@@ -170,6 +174,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     releaseBashToolOwner(pi);
+    deactivateToolOutputMode();
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 }

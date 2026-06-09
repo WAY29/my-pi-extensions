@@ -23,6 +23,8 @@
       "./AskUserQuestion.ts",
       "./agent-browser/index.ts",
       "./tool-output-mode.ts",
+      "./semble-tools.ts",
+      "./tool-output-mode-state.ts",
       "./bash-tool-coordinator.ts",
       "./code-block-enhancer.ts",
       "./effort.ts",
