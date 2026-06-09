@@ -37,6 +37,15 @@ type CompactResult = {
 	snippet: string;
 };
 
+type SembleRenderDetails = {
+	query?: string;
+	target?: string;
+	results?: CompactResult[];
+	rawCount?: number;
+	content?: string;
+	error?: string;
+};
+
 const DEFAULT_TOP_K = 3;
 const MAX_TOP_K = 10;
 const MAX_SNIPPET_CHARS = 900;
@@ -173,18 +182,43 @@ function countSnippetLines(results: CompactResult[]): number {
 	}, 0);
 }
 
+function shortenInline(text: string, maxChars = 120): string {
+	const inline = text.replace(/\s+/g, " ").trim();
+	if (inline.length <= maxChars) return inline;
+	return `${inline.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function getSembleSubject(kind: "search" | "find_related", details: SembleRenderDetails | undefined): string {
+	return kind === "search" ? (details?.query ?? "") : (details?.target ?? "");
+}
+
+function renderSembleCall(
+	kind: "search" | "find_related",
+	args: Record<string, unknown>,
+	theme: {
+		fg(color: string, text: string): string;
+	},
+): Text {
+	const title = kind === "search" ? "semble_search" : "semble_find_related";
+	const subject = kind === "search"
+		? (typeof args.query === "string" ? args.query : "")
+		: (() => {
+			const filePath = typeof args.file_path === "string" ? args.file_path : "";
+			const line = typeof args.line === "number" && Number.isFinite(args.line) ? Math.trunc(args.line) : undefined;
+			return filePath ? `${filePath}${line ? `:${line}` : ""}` : "";
+		})();
+	let text = theme.fg("toolTitle", title);
+	if (subject) {
+		text += ` ${theme.fg("accent", shortenInline(subject))}`;
+	}
+	return new Text(text, 0, 0);
+}
+
 function renderSembleResult(
 	kind: "search" | "find_related",
 	result: {
 		content?: Array<{ type: string; text?: string }>;
-		details?: {
-			query?: string;
-			target?: string;
-			results?: CompactResult[];
-			rawCount?: number;
-			content?: string;
-			error?: string;
-		};
+		details?: SembleRenderDetails;
 	},
 	options: { expanded?: boolean; isPartial?: boolean },
 	theme: {
@@ -196,13 +230,6 @@ function renderSembleResult(
 		const text = getTextContent(result).trim();
 		return new Text(text ? `\n${theme.fg("toolOutput", text)}` : "", 0, 0);
 	}
-	if (outputMode === "hidden") {
-		return new Container();
-	}
-	if (options.isPartial) {
-		const loadingText = kind === "search" ? "Searching..." : "Finding related code...";
-		return new Text(theme.fg("warning", loadingText), 0, 0);
-	}
 
 	const details = result.details;
 	const text = getTextContent(result).trim();
@@ -211,6 +238,23 @@ function renderSembleResult(
 		: text.startsWith("Error")
 			? text
 			: undefined;
+	if (outputMode === "hidden") {
+		if (options.isPartial) return new Container();
+		if (errorText) return new Text(theme.fg("error", shortenInline(errorText, 160)), 0, 0);
+		const results = Array.isArray(details?.results) ? details.results : [];
+		const rawCount = typeof details?.rawCount === "number" ? details.rawCount : results.length;
+		const summaryLabel = kind === "search" ? "results" : "related results";
+		let summary = theme.fg("success", `${rawCount} ${summaryLabel}`);
+		if (typeof details?.rawCount === "number" && details.rawCount > results.length) {
+			summary += theme.fg("muted", ` (${results.length} shown)`);
+		}
+		return new Text(summary, 0, 0);
+	}
+	if (options.isPartial) {
+		const loadingText = kind === "search" ? "Searching..." : "Finding related code...";
+		return new Text(theme.fg("warning", loadingText), 0, 0);
+	}
+
 	if (errorText) {
 		if (outputMode === "compact" && !options.expanded) {
 			return new Text(theme.fg("error", errorText), 0, 0);
@@ -221,7 +265,7 @@ function renderSembleResult(
 	}
 
 	const results = Array.isArray(details?.results) ? details.results : [];
-	const subject = kind === "search" ? (details?.query ?? "") : (details?.target ?? "");
+	const subject = getSembleSubject(kind, details);
 	const summaryLabel = kind === "search" ? "results" : "related results";
 	const count = results.length;
 	const snippetLines = countSnippetLines(results);
@@ -346,6 +390,9 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 			],
 			parameters: SearchParams,
 			prepareArguments: prepareSearchArguments,
+			renderCall(args, theme) {
+				return renderSembleCall("search", args as Record<string, unknown>, theme);
+			},
 			renderResult(result, options, theme) {
 				return renderSembleResult("search", result as any, options, theme);
 			},
@@ -391,6 +438,9 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 			],
 			parameters: FindRelatedParams,
 			prepareArguments: prepareFindRelatedArguments,
+			renderCall(args, theme) {
+				return renderSembleCall("find_related", args as Record<string, unknown>, theme);
+			},
 			renderResult(result, options, theme) {
 				return renderSembleResult("find_related", result as any, options, theme);
 			},
