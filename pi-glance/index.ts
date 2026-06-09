@@ -65,6 +65,19 @@ type SandboxSetResponse = {
 	reason?: string;
 };
 
+const TITLE_SYSTEM_PROMPT = [
+	"You generate a short session title for the user's first request.",
+	"Return a title phrase, not an answer, summary, explanation, or sentence addressed to the user.",
+	"Use the same language as the user.",
+	"Output exactly one line containing only the title.",
+	"Do not use Markdown, bullets, prefixes like Title:/标题：, quotes, or trailing punctuation.",
+	"Do not include filler such as 可以, 如何, 关于, 帮我, 请帮我, explain, answer, summary, or response unless they are essential inside a compact noun phrase.",
+	"Prefer a compact noun phrase that names the task or problem.",
+	"Maximum length: 64 visible characters.",
+	"Bad outputs: '你可以这样实现扩展标题生成功能', 'Here is a concise title for your request', '如何修改 pi-glance 标题生成逻辑'.",
+	"Good outputs: 'pi-glance 标题生成逻辑调整', '增加 gpt-5.4-mini 模型', 'Permission gate danger regex highlighting'.",
+].join("\n");
+
 export default function piGlance(pi: ExtensionAPI): void {
 	let config: GlanceConfig | undefined;
 	let state: GlanceState | undefined;
@@ -453,27 +466,17 @@ export default function piGlance(pi: ExtensionAPI): void {
 			signal.addEventListener("abort", abort, { once: true });
 			timeout = setTimeout(abort, 8000);
 
+			const trimmedPrompt = prompt.slice(0, 4000);
 			const userMessage: UserMessage = {
 				role: "user",
-				content: [{ type: "text", text: prompt.slice(0, 4000) }],
+				content: [{ type: "text", text: trimmedPrompt }],
 				timestamp: Date.now(),
 			};
 
 			const response = await completeSimple(
 				model,
 				{
-					systemPrompt: [
-						"You generate a short session title for the user's first request.",
-						"Return a title phrase, not an answer, summary, explanation, or sentence addressed to the user.",
-						"Use the same language as the user.",
-						"Output exactly one line containing only the title.",
-						"Do not use Markdown, bullets, prefixes like Title:/标题：, quotes, or trailing punctuation.",
-						"Do not include filler such as 可以, 如何, 关于, 帮我, 请帮我, explain, answer, summary, or response unless they are essential inside a compact noun phrase.",
-						"Prefer a compact noun phrase that names the task or problem.",
-						"Maximum length: 64 visible characters.",
-						"Bad outputs: '你可以这样实现扩展标题生成功能', 'Here is a concise title for your request', '如何修改 pi-glance 标题生成逻辑'.",
-						"Good outputs: 'pi-glance 标题生成逻辑调整', '增加 gpt-5.4-mini 模型', 'Permission gate danger regex highlighting'.",
-					].join("\n"),
+					systemPrompt: TITLE_SYSTEM_PROMPT,
 					messages: [userMessage],
 				},
 				{
@@ -482,6 +485,19 @@ export default function piGlance(pi: ExtensionAPI): void {
 					signal: controller.signal,
 					maxTokens: 64,
 					timeoutMs: 8000,
+					onPayload: (payload) => {
+						if (!payload || typeof payload !== "object") {
+							return undefined;
+						}
+						const record = payload as Record<string, unknown>;
+						if (!("input" in record)) {
+							return undefined;
+						}
+						return {
+							...record,
+							instructions: TITLE_SYSTEM_PROMPT,
+						};
+					},
 					...(model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}),
 				},
 			);
@@ -490,6 +506,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 				.filter((part): part is { type: "text"; text: string } => part.type === "text")
 				.map((part) => part.text)
 				.join("\n");
+
 			if (generationId !== titleGenerationId || signal.aborted) return;
 			persistTitle(ctx, sanitizeGeneratedTitle(text, fallback), "llm", prompt, model);
 		} catch {
