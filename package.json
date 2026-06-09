@@ -28,6 +28,7 @@
       "./bash-tool-coordinator.ts",
       "./code-block-enhancer.ts",
       "./effort.ts",
+      "./builtin-tools.ts",
       "./hide-read-output.ts",
       "./image-gen.ts",
       "./keydump.ts",

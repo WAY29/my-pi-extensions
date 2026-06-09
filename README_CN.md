@@ -66,6 +66,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `semble-tools.ts` | 语义搜索工具 | `/semble`, `semble_search`, `semble_find_related` | 增加基于 Semble 的仓库语义搜索工具。当系统里没有 `semble` CLI 时该扩展完全不生效；默认全局关闭，可通过 `/semble` 开关启用或禁用。 |
 | `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
+| `builtin-tools.ts` | 工具开关命令 | `/builtin-tools` | 全局管理 Pi 是否向模型暴露内置 `grep`、`find`、`ls` 工具。支持整体与单工具开关、参数补全、安静的全局持久化，以及当前激活状态和偏好状态的对照查看。 |
 | `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `image-gen.ts` | 图片工具 | `image_gen` | 为 pi 增加一个 OpenAI 兼容的位图图片生成/编辑工具。支持纯 prompt 生成、工作区路径图片编辑、最近附图回退，以及当当前 relay 无法提供原生透明图时通过本地 chroma-key 抠图得到透明输出。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |

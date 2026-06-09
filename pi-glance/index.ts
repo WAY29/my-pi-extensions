@@ -463,8 +463,16 @@ export default function piGlance(pi: ExtensionAPI): void {
 				model,
 				{
 					systemPrompt: [
-						"Generate a concise title for the user's first request.",
-						"Rules: output only the title; use the same language as the user; one line; no Markdown, quotes, or trailing punctuation; at most 64 visible characters.",
+						"You generate a short session title for the user's first request.",
+						"Return a title phrase, not an answer, summary, explanation, or sentence addressed to the user.",
+						"Use the same language as the user.",
+						"Output exactly one line containing only the title.",
+						"Do not use Markdown, bullets, prefixes like Title:/标题：, quotes, or trailing punctuation.",
+						"Do not include filler such as 可以, 如何, 关于, 帮我, 请帮我, explain, answer, summary, or response unless they are essential inside a compact noun phrase.",
+						"Prefer a compact noun phrase that names the task or problem.",
+						"Maximum length: 64 visible characters.",
+						"Bad outputs: '你可以这样实现扩展标题生成功能', 'Here is a concise title for your request', '如何修改 pi-glance 标题生成逻辑'.",
+						"Good outputs: 'pi-glance 标题生成逻辑调整', '增加 gpt-5.4-mini 模型', 'Permission gate danger regex highlighting'.",
 					].join("\n"),
 					messages: [userMessage],
 				},
