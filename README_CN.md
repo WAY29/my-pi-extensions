@@ -60,14 +60,13 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 |---|---|---|---|
 | `AskUserQuestion.ts` | 工具 | `AskUserQuestion` | 为 agent 添加交互式提问工具。支持单问题或多问题流程、选项列表、自定义文本回答和每个选项的备注。 |
 | `agent-browser/` | 真实浏览器桥接 + skill 引导工具 | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | 通过内置 bridge 和已解压 Chrome 扩展，把 pi 连接到用户真实的 Chrome 会话。工具默认不激活，只有显式 arm 后才暴露，以减少普通会话的 token 开销。 |
-| `tool-output-mode.ts` | UI/工具渲染器 | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | 在 `hidden`、`compact` 和 `full` 之间切换 `bash`、`grep`、`find`、`ls` 与 Semble 工具输出渲染模式，同时不改变模型接收到的内容。bash 部分通过 `bash-tool-coordinator.ts` 协作。 |
-| `tool-output-mode-state.ts` | 辅助模块 | 自动 | 为 `tool-output-mode.ts` 和其它需要读取当前工具输出显示模式的扩展提供共享全局状态 helper。它本身刻意不提供可见 UI。 |
+| `tool-call-summary.ts` | UI/工具渲染器 | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | 合并旧的 `hide-read-output.ts` 和 `tool-output-mode.ts` 行为。把连续的 `read`、`find`、`grep`、`ls` 调用分组成树状摘要，支持 `hidden` / `compact` / `full` 显示模式，并通过共享状态保持 `bash` 与 Semble 输出模式切换一致。 |
+| `tool-output-mode-state.ts` | 辅助模块 | 自动 | 为 `tool-call-summary.ts`、`semble-tools.ts` 和其它需要读取当前工具输出显示模式的扩展提供共享全局状态 helper。它本身刻意不提供可见 UI。 |
 | `bash-tool-coordinator.ts` | 辅助模块 | 自动 | 为需要包装 `bash` 工具的扩展提供共享组合层。它本身刻意不提供可见 UI。 |
 | `semble-tools.ts` | 语义搜索工具 | `/semble`, `semble_search`, `semble_find_related` | 增加基于 Semble 的仓库语义搜索工具。当系统里没有 `semble` CLI 时该扩展完全不生效；默认全局关闭，可通过 `/semble` 开关启用或禁用。 |
 | `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
 | `builtin-tools.ts` | 工具开关命令 | `/builtin-tools` | 全局管理 Pi 是否向模型暴露内置 `grep`、`find`、`ls` 工具。支持整体与单工具开关、参数补全、安静的全局持久化，以及当前激活状态和偏好状态的对照查看。 |
-| `hide-read-output.ts` | UI/工具渲染器 | 自动 | 在 TUI 中隐藏所有内置 `read` 工具的结果输出，同时仍将文件内容返回给模型。连续读取会合并为简洁摘要。 |
 | `image-gen.ts` | 图片工具 | `image_gen` | 为 pi 增加一个 OpenAI 兼容的位图图片生成/编辑工具。支持纯 prompt 生成、工作区路径图片编辑、最近附图回退，以及当当前 relay 无法提供原生透明图时通过本地 chroma-key 抠图得到透明输出。 |
 | `keydump.ts` | 命令/调试 UI | `/keydump` | 显示 pi 收到的原始按键序列，适合调试终端快捷键。 |
 | `permission-gate.ts` | 安全门禁 | 自动、`/glance` 开关 | 对 `rm`、`chmod/chown ... 777` 等潜在危险 bash 命令执行前提示确认。无 UI 可用时默认阻止。可通过扩展事件总线在 pi-glance 中启用或禁用。 |
@@ -96,8 +95,8 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 
 - `pi-sandbox/` 注册一个高优先级的 bash operations 包装器。沙箱启用并初始化后，bash 命令会走沙箱后端；否则回退到下一个 bash 实现。
 - `sudo-auth.ts` 注册一个较低优先级的 bash operations 包装器，在沙箱 bash 未接管时注入 sudo askpass 环境。
-- `tool-output-mode.ts` 注册一个 bash 结果渲染包装器。它可以隐藏、压缩或完整展开 bash 输出，同时保留底层的沙箱行为。
-- `tool-output-mode.ts` 也会直接包装 `grep`、`find`、`ls` 和 Semble 工具的渲染，因为这些都是独立工具，不经过 bash coordinator。
+- `tool-call-summary.ts` 注册一个 bash 结果渲染包装器。它可以隐藏、压缩或完整展开 bash 输出，同时保留底层的沙箱行为。
+- `tool-call-summary.ts` 也会直接处理 `read`、`grep`、`find`、`ls` 以及共享的 Semble 输出状态，并将文件类工具调用分组为树状摘要，因为这些都是独立工具，不经过 bash coordinator。
 - `bash-tool-coordinator.ts` 必须保持在仓库顶层。它不注册面向用户的命令，但仍需要随仓库一起复制。
 
 ### 计划工作流：`plan-mode/` + `pi-sandbox/` + `pi-glance/`
@@ -154,8 +153,7 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 
 搭配使用：
 
-- `hide-read-output.ts`：隐藏所有内置 `read` 结果输出。
-- `tool-output-mode.ts`：控制噪声较多的命令/搜索输出。
+- `tool-call-summary.ts`：把文件类工具调用分组并控制噪声较多的命令/搜索输出。
 - `code-block-enhancer.ts`：让 markdown 代码块更清爽、带编号，并可快速复制生成的代码。
 
 ### 按工作区自动切换模型

@@ -60,14 +60,13 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 |---|---|---|---|
 | `AskUserQuestion.ts` | tool | `AskUserQuestion` | Adds an interactive question tool for the agent. Supports single or multi-question flows, option lists, custom text answers, and per-option notes. |
 | `agent-browser/` | real-browser bridge + skill-guided tools | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | Connects pi to the user's real Chrome session through a bundled bridge and unpacked Chrome extension. Tools stay inactive until explicitly armed so normal sessions do not pay the token cost. |
-| `tool-output-mode.ts` | UI/tool renderer | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | Toggles `bash`, `grep`, `find`, `ls`, and Semble tool output rendering between `hidden`, `compact`, and `full` without changing what the model receives. Uses `bash-tool-coordinator.ts` for the bash side. |
-| `tool-output-mode-state.ts` | helper | automatic | Shared global state helper for `tool-output-mode.ts` and other extensions that need to read the current tool-output display mode. It intentionally has no visible UI by itself. |
+| `tool-call-summary.ts` | UI/tool renderer | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | Merges the old `hide-read-output.ts` and `tool-output-mode.ts` behavior. Groups consecutive `read`, `find`, `grep`, and `ls` calls into tree-style summaries, supports `hidden` / `compact` / `full` display modes, and keeps `bash` plus Semble output mode switching aligned through shared state. |
+| `tool-output-mode-state.ts` | helper | automatic | Shared global state helper for `tool-call-summary.ts`, `semble-tools.ts`, and other extensions that need to read the current tool-output display mode. It intentionally has no visible UI by itself. |
 | `bash-tool-coordinator.ts` | helper | automatic | Shared composition layer for extensions that need to wrap the `bash` tool. It intentionally has no visible UI by itself. |
 | `semble-tools.ts` | semantic search tools | `/semble`, `semble_search`, `semble_find_related` | Adds Semble-powered repository semantic search tools. The extension is inert when the `semble` CLI is missing, starts globally disabled by default, and can be toggled on or off with `/semble`. |
 | `code-block-enhancer.ts` | UI patch + command/shortcut | automatic, `/copy-code`, `Ctrl+Alt+C` | Replaces the old code-fence hiding and copy-code extensions. Renders fenced code blocks as bordered, numbered blocks and copies recent assistant code blocks by number, all blocks, or with markdown fences. |
 | `effort.ts` | command | `/effort` | Quickly switches or cycles pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | `builtin-tools.ts` | tool toggle command | `/builtin-tools` | Globally manages whether Pi exposes the built-in `grep`, `find`, and `ls` tools to the model. Supports group and per-tool toggles, argument completion, quiet global persistence, and current-vs-preference status output. |
-| `hide-read-output.ts` | UI/tool renderer | automatic | Hides all rendered result output from the built-in `read` tool in the TUI while still returning file contents to the model. Consecutive reads are grouped into concise summaries. |
 | `image-gen.ts` | image tool | `image_gen` | Adds an OpenAI-compatible raster image generation/editing tool for pi. Supports prompt-only generation, workspace-path edits, recent attached-image fallback, and transparent-output fallback via local chroma-key removal when the configured relay cannot serve native transparency. |
 | `keydump.ts` | command/debug UI | `/keydump` | Shows raw key sequences received by pi. Useful when debugging terminal keybindings. |
 | `permission-gate.ts` | safety gate | automatic, `/glance` toggle | Prompts before potentially dangerous bash commands such as `rm` or `chmod/chown ... 777`. Blocks by default when no UI is available. Can be enabled or disabled from pi-glance via the extension event bus. |
@@ -96,8 +95,8 @@ Pi has a single active tool named `bash`. If several extensions independently re
 
 - `pi-sandbox/` registers a bash operations wrapper with high priority. When the sandbox is enabled and initialized, bash commands run through the sandboxed backend; otherwise they fall back to the next bash implementation.
 - `sudo-auth.ts` registers a lower-priority bash operations wrapper that injects a sudo askpass environment when sandboxed bash is not taking ownership.
-- `tool-output-mode.ts` registers a bash result-rendering wrapper. It can hide, compact, or fully expand bash output while preserving the sandbox behavior underneath.
-- `tool-output-mode.ts` also wraps `grep`, `find`, `ls`, and Semble tool rendering directly, because those are separate tools and do not go through the bash coordinator.
+- `tool-call-summary.ts` registers a bash result-rendering wrapper. It can hide, compact, or fully expand bash output while preserving the sandbox behavior underneath.
+- `tool-call-summary.ts` also wraps `read`, `grep`, `find`, `ls`, and Semble-adjacent output state directly, grouping file-tool calls into tree-style summaries because those are separate tools and do not go through the bash coordinator.
 - `bash-tool-coordinator.ts` is intentionally top-level. Keep it copied with the repository even though it does not register a user-facing command.
 
 ### Plan workflow: `plan-mode/` + `pi-sandbox/` + `pi-glance/`
@@ -154,8 +153,7 @@ Review the policy before using it on another machine.
 
 Use these together:
 
-- `hide-read-output.ts` to hide all built-in `read` result output.
-- `tool-output-mode.ts` to control noisy command/search output.
+- `tool-call-summary.ts` to group file-tool calls and control noisy command/search output.
 - `code-block-enhancer.ts` for cleaner, numbered markdown code blocks and quick clipboard access to generated code.
 
 ### Workspace-specific models
