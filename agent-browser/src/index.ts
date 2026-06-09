@@ -640,6 +640,78 @@ function isBrowserToolName(name: string | undefined): boolean {
   return typeof name === 'string' && name.startsWith('browser_');
 }
 
+function getAssistantContent(message: unknown): unknown[] | undefined {
+  if (!message || typeof message !== 'object') return undefined;
+  const candidate = message as { role?: unknown; content?: unknown };
+  if (candidate.role !== 'assistant' || !Array.isArray(candidate.content)) return undefined;
+  return candidate.content;
+}
+
+function isToolCallContent(content: unknown): content is { id?: unknown; name?: unknown; arguments?: unknown } {
+  return Boolean(content && typeof content === 'object' && (content as { type?: unknown }).type === 'toolCall');
+}
+
+function isBrowserToolCallContent(content: unknown): content is { id: string } {
+  return isToolCallContent(content) && isBrowserToolName(typeof content.name === 'string' ? content.name : undefined) && typeof content.id === 'string';
+}
+
+function isVisibleAssistantContent(content: unknown): boolean {
+  if (!content || typeof content !== 'object') return false;
+  const candidate = content as { type?: unknown; text?: unknown; thinking?: unknown };
+  return (
+    (candidate.type === 'text' && typeof candidate.text === 'string' && candidate.text.trim() !== '') ||
+    (candidate.type === 'thinking' && typeof candidate.thinking === 'string' && candidate.thinking.trim() !== '')
+  );
+}
+
+function getBrowserToolCallIds(message: unknown): string[] {
+  return getAssistantContent(message)?.filter(isBrowserToolCallContent).map((item) => item.id) ?? [];
+}
+
+function addBrowserRun(ids: string[]) {
+  if (ids.length === 0) return;
+  browserTreeGroupSeq += 1;
+  ids.forEach((id, index) => {
+    browserTreeMeta.set(id, {
+      groupId: browserTreeGroupSeq,
+      isFirst: index === 0,
+      isLast: index === ids.length - 1,
+    });
+  });
+}
+
+function indexAssistantBrowserGroups(message: unknown) {
+  const content = getAssistantContent(message);
+  if (!content) return;
+
+  let run: string[] = [];
+  const flushRun = () => {
+    addBrowserRun(run);
+    run = [];
+  };
+
+  for (const item of content) {
+    if (isBrowserToolCallContent(item)) {
+      run.push(item.id);
+    } else if (isToolCallContent(item) || isVisibleAssistantContent(item)) {
+      flushRun();
+    }
+  }
+
+  flushRun();
+}
+
+function rebuildBrowserGroupsFromSession(ctx: { sessionManager: { getBranch(): unknown[] } }) {
+  resetBrowserTree();
+
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as { type?: unknown; message?: unknown };
+    if (candidate.type !== 'message' || !candidate.message || typeof candidate.message !== 'object') continue;
+    indexAssistantBrowserGroups(candidate.message);
+  }
+}
+
 function resetBrowserTree() {
   browserTreeGroupSeq = 0;
   browserTreeCurrentTail = null;
@@ -717,24 +789,17 @@ function renderBrowserCall(label: string, summary: string, theme: any, toolCallI
   return new Text(text, 0, 0);
 }
 
-function renderBrowserResult(result: any, summary: string, theme: any, isPartial?: boolean, expanded?: boolean, toolCallId?: string, invalidate?: () => void) {
+function renderBrowserResult(result: any, _summary: string, theme: any, isPartial?: boolean, _expanded?: boolean, toolCallId?: string, invalidate?: () => void) {
   if (toolCallId) attachBrowserTreeRow(toolCallId, invalidate);
   const meta = toolCallId ? browserTreeMeta.get(toolCallId) : undefined;
   const indent = browserResultPrefix(meta);
   if (isPartial) return new Text(theme.fg('warning', `${indent}Working...`), 0, 0);
-  const raw = firstTextContent(result);
   const details = result?.details as any;
   if (details?.error) {
-    return new Text(theme.fg('error', raw || `Error: ${details.error}`), 0, 0);
+    const message = summarizeText(String(details.error || 'unknown browser error'), 120);
+    return new Text(theme.fg('dim', indent) + theme.fg('error', `Error: ${message}`), 0, 0);
   }
-  let text = theme.fg('dim', indent) + theme.fg('success', summary || 'ok');
-  if (expanded && raw) {
-    const lines = raw.split('\n');
-    for (const line of lines) {
-      text += `\n${theme.fg('dim', indent + line)}`;
-    }
-  }
-  return new Text(text, 0, 0);
+  return new Text('', 0, 0);
 }
 
 function summarizeBrowserStatus(status: any): string {
@@ -920,13 +985,28 @@ export default function agentBrowser(pi: ExtensionAPI) {
   });
 
   pi.on('session_start', async (_event, ctx) => {
-    resetBrowserTree();
+    rebuildBrowserGroupsFromSession(ctx);
     browserGuard(pi, ctx);
   });
 
   pi.on('session_tree', async (_event, ctx) => {
-    resetBrowserTree();
+    rebuildBrowserGroupsFromSession(ctx);
     browserGuard(pi, ctx);
+  });
+
+  pi.on('session_compact', async (_event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx);
+  });
+
+  pi.on('message_update', (event) => {
+    indexAssistantBrowserGroups(event.message);
+  });
+
+  pi.on('message_end', (event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx);
+    if (getBrowserToolCallIds(event.message).some((id) => !browserTreeMeta.has(id))) {
+      indexAssistantBrowserGroups(event.message);
+    }
   });
 
   pi.on('input', async (event) => {

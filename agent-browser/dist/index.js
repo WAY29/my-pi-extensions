@@ -23097,6 +23097,63 @@ var browserTreeMeta = /* @__PURE__ */ new Map();
 function isBrowserToolName(name) {
   return typeof name === "string" && name.startsWith("browser_");
 }
+function getAssistantContent(message) {
+  if (!message || typeof message !== "object") return void 0;
+  const candidate = message;
+  if (candidate.role !== "assistant" || !Array.isArray(candidate.content)) return void 0;
+  return candidate.content;
+}
+function isToolCallContent(content) {
+  return Boolean(content && typeof content === "object" && content.type === "toolCall");
+}
+function isBrowserToolCallContent(content) {
+  return isToolCallContent(content) && isBrowserToolName(typeof content.name === "string" ? content.name : void 0) && typeof content.id === "string";
+}
+function isVisibleAssistantContent(content) {
+  if (!content || typeof content !== "object") return false;
+  const candidate = content;
+  return candidate.type === "text" && typeof candidate.text === "string" && candidate.text.trim() !== "" || candidate.type === "thinking" && typeof candidate.thinking === "string" && candidate.thinking.trim() !== "";
+}
+function getBrowserToolCallIds(message) {
+  return getAssistantContent(message)?.filter(isBrowserToolCallContent).map((item) => item.id) ?? [];
+}
+function addBrowserRun(ids) {
+  if (ids.length === 0) return;
+  browserTreeGroupSeq += 1;
+  ids.forEach((id, index) => {
+    browserTreeMeta.set(id, {
+      groupId: browserTreeGroupSeq,
+      isFirst: index === 0,
+      isLast: index === ids.length - 1
+    });
+  });
+}
+function indexAssistantBrowserGroups(message) {
+  const content = getAssistantContent(message);
+  if (!content) return;
+  let run = [];
+  const flushRun = () => {
+    addBrowserRun(run);
+    run = [];
+  };
+  for (const item of content) {
+    if (isBrowserToolCallContent(item)) {
+      run.push(item.id);
+    } else if (isToolCallContent(item) || isVisibleAssistantContent(item)) {
+      flushRun();
+    }
+  }
+  flushRun();
+}
+function rebuildBrowserGroupsFromSession(ctx) {
+  resetBrowserTree();
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry;
+    if (candidate.type !== "message" || !candidate.message || typeof candidate.message !== "object") continue;
+    indexAssistantBrowserGroups(candidate.message);
+  }
+}
 function resetBrowserTree() {
   browserTreeGroupSeq = 0;
   browserTreeCurrentTail = null;
@@ -23165,25 +23222,17 @@ function renderBrowserCall(label, summary, theme, toolCallId, invalidate) {
   if (summary) text += theme.fg("dim", ` \xB7 ${summary}`);
   return new Text(text, 0, 0);
 }
-function renderBrowserResult(result, summary, theme, isPartial, expanded, toolCallId, invalidate) {
+function renderBrowserResult(result, _summary, theme, isPartial, _expanded, toolCallId, invalidate) {
   if (toolCallId) attachBrowserTreeRow(toolCallId, invalidate);
   const meta = toolCallId ? browserTreeMeta.get(toolCallId) : void 0;
   const indent = browserResultPrefix(meta);
   if (isPartial) return new Text(theme.fg("warning", `${indent}Working...`), 0, 0);
-  const raw = firstTextContent(result);
   const details = result?.details;
   if (details?.error) {
-    return new Text(theme.fg("error", raw || `Error: ${details.error}`), 0, 0);
+    const message = summarizeText(String(details.error || "unknown browser error"), 120);
+    return new Text(theme.fg("dim", indent) + theme.fg("error", `Error: ${message}`), 0, 0);
   }
-  let text = theme.fg("dim", indent) + theme.fg("success", summary || "ok");
-  if (expanded && raw) {
-    const lines = raw.split("\n");
-    for (const line of lines) {
-      text += `
-${theme.fg("dim", indent + line)}`;
-    }
-  }
-  return new Text(text, 0, 0);
+  return new Text("", 0, 0);
 }
 function summarizeBrowserStatus(status) {
   const count = Number(status?.connected_tabs || 0);
@@ -23334,12 +23383,24 @@ function agentBrowser(pi) {
     finalizeBrowserTreeRun();
   });
   pi.on("session_start", async (_event, ctx) => {
-    resetBrowserTree();
+    rebuildBrowserGroupsFromSession(ctx);
     browserGuard(pi, ctx);
   });
   pi.on("session_tree", async (_event, ctx) => {
-    resetBrowserTree();
+    rebuildBrowserGroupsFromSession(ctx);
     browserGuard(pi, ctx);
+  });
+  pi.on("session_compact", async (_event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx);
+  });
+  pi.on("message_update", (event) => {
+    indexAssistantBrowserGroups(event.message);
+  });
+  pi.on("message_end", (event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx);
+    if (getBrowserToolCallIds(event.message).some((id) => !browserTreeMeta.has(id))) {
+      indexAssistantBrowserGroups(event.message);
+    }
   });
   pi.on("input", async (event) => {
     if (event.text.startsWith("/skill:agent-browser")) {
