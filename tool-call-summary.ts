@@ -614,6 +614,10 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		const branch = isLast ? "└─" : "├─";
 		const target = formatToolTarget(call.toolName, call.args, theme);
 		if (mode === "hidden") {
+			const errorText = getErrorText(result);
+			if (errorText) {
+				return `${branch} ${target}${theme.fg("dim", " · ")}${theme.fg("error", errorText)}`;
+			}
 			return `${branch} ${target}`;
 		}
 		if (mode === "compact") {
