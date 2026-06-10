@@ -22,6 +22,7 @@
     "extensions": [
       "./AskUserQuestion.ts",
       "./agent-browser/index.ts",
+      "./codex-style-apply-patch/index.ts",
       "./tool-call-summary.ts",
       "./semble-tools.ts",
       "./tool-output-mode-state.ts",
