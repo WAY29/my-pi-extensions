@@ -143,30 +143,67 @@ function renderPreviewLines(lines: PreviewLine[]): string[] {
 	}
 }
 
+function sliceLinesAroundChanges(lines: PreviewLine[], maxPreviewLinesPerFile: number): { slicedLines: PreviewLine[]; omittedBefore: boolean; omittedAfter: boolean } {
+	if (lines.length <= maxPreviewLinesPerFile) {
+		return { slicedLines: lines, omittedBefore: false, omittedAfter: false };
+	}
+
+	const firstChangeIndex = lines.findIndex((line) => line.marker === "+" || line.marker === "-");
+	if (firstChangeIndex === -1) {
+		return {
+			slicedLines: lines.slice(0, maxPreviewLinesPerFile),
+			omittedBefore: false,
+			omittedAfter: lines.length > maxPreviewLinesPerFile,
+		};
+	}
+
+	const contextBefore = Math.floor((maxPreviewLinesPerFile - 1) / 2);
+	const contextAfter = maxPreviewLinesPerFile - contextBefore - 1;
+	let start = Math.max(0, firstChangeIndex - contextBefore);
+	let end = Math.min(lines.length, firstChangeIndex + contextAfter + 1);
+
+	if (end - start < maxPreviewLinesPerFile) {
+		if (start === 0) {
+			end = Math.min(lines.length, maxPreviewLinesPerFile);
+		} else if (end === lines.length) {
+			start = Math.max(0, lines.length - maxPreviewLinesPerFile);
+		}
+	}
+
+	return {
+		slicedLines: lines.slice(start, end),
+		omittedBefore: start > 0,
+		omittedAfter: end < lines.length,
+	};
+}
+
 function renderLimitedPreviewLines(lines: PreviewLine[], maxPreviewLinesPerFile: number): string[] {
 	if (lines.length === 0) return [];
-	const slicedLines = lines.slice(0, maxPreviewLinesPerFile);
+	const { slicedLines, omittedBefore, omittedAfter } = sliceLinesAroundChanges(lines, maxPreviewLinesPerFile);
 	const rendered = renderPreviewLines(slicedLines);
-	if (lines.length > slicedLines.length) {
-		rendered.push(`    ... (${lines.length - slicedLines.length} more lines)`);
-	}
-	return rendered;
+	const output: string[] = [];
+	if (omittedBefore) output.push("    ...");
+	output.push(...rendered);
+	if (omittedAfter) output.push("    ...");
+	return output;
 }
 
 function renderLimitedPreviewDiffText(lines: PreviewLine[], maxPreviewLinesPerFile: number): string {
 	if (lines.length === 0) return "";
 	const numberedLines = lines.filter((entry) => entry.lineNumber > 0);
 	const numberWidth = Math.max(1, ...numberedLines.map((entry) => String(entry.lineNumber).length));
-	const slicedLines = lines.slice(0, maxPreviewLinesPerFile);
+	const { slicedLines, omittedBefore, omittedAfter } = sliceLinesAroundChanges(lines, maxPreviewLinesPerFile);
 	const rendered = slicedLines
 		.map((line) => {
 			const lineNumber = line.lineNumber > 0 ? String(line.lineNumber).padStart(numberWidth, " ") : " ".repeat(numberWidth);
 			return `${line.marker}${lineNumber} ${line.text}`;
 		})
 		.join("\n");
-	if (lines.length <= slicedLines.length) return rendered;
 	const ellipsisLine = ` ${" ".repeat(numberWidth)} ...`;
-	return rendered ? `${rendered}\n${ellipsisLine}` : ellipsisLine;
+	let output = rendered;
+	if (omittedBefore) output = output ? `${ellipsisLine}\n${output}` : ellipsisLine;
+	if (omittedAfter) output = output ? `${output}\n${ellipsisLine}` : ellipsisLine;
+	return output;
 }
 
 function buildUpdatePreview(action: ParsedPatchAction, cwd: string): { added: number; removed: number; lines: PreviewLine[] } {
