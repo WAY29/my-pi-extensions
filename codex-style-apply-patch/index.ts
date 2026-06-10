@@ -407,14 +407,9 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			if (callComponent) {
 				callComponent.settledSuccess = !context.isError && !isPartialFailure;
 				callComponent.settledError = context.isError || isPartialFailure;
-				const patchText = getPatchText(context.args as { input?: unknown | undefined });
-				const previewSections = patchText
-					? getApplyPatchPreviewSections(patchText, context.cwd, {
-						allowPartial: false,
-						maxPreviewLinesPerFile: expanded ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES,
-					})
-					: (details?.previewSections ?? []);
-				callComponent.previewSections = previewSections;
+				if ((!callComponent.previewSections || callComponent.previewSections.length === 0) && details?.previewSections) {
+					callComponent.previewSections = details.previewSections;
+				}
 				buildApplyPatchCallComponent(callComponent, callComponent.previewSections ?? [], theme);
 			}
 			const output = formatApplyPatchResult(result, theme, context.isError, isPartialFailure);

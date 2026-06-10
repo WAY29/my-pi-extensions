@@ -398,6 +398,15 @@ function parsePartialFiles(patchText: string): FilePreview[] {
 				marker: "-",
 				text: rawLine.slice(1),
 			});
+			continue;
+		}
+
+		if (rawLine.startsWith(" ")) {
+			currentFile.lines.push({
+				lineNumber: 0,
+				marker: " ",
+				text: rawLine.slice(1),
+			});
 		}
 	}
 
