@@ -9,6 +9,7 @@ type ActionKey =
 	| "grep"
 	| "find"
 	| "ls"
+	| "patch"
 	| "edit"
 	| "write"
 	| "otherTool";
@@ -40,6 +41,7 @@ const ACTION_LABELS: Record<ActionKey, string> = {
 	grep: "Searching Text...",
 	find: "Finding Files...",
 	ls: "Listing Directory...",
+	patch: "Patching...",
 	edit: "Editing File...",
 	write: "Writing File...",
 	otherTool: "Using Tool...",
@@ -75,6 +77,8 @@ function toolToAction(toolName: string): ActionKey {
 			return "find";
 		case "ls":
 			return "ls";
+		case "apply_patch":
+			return "patch";
 		case "edit":
 			return "edit";
 		case "write":
