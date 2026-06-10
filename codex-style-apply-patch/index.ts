@@ -36,6 +36,7 @@ type ApplyPatchDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDeta
 type ApplyPatchCallRenderComponent = Box & {
 	previewSections?: ApplyPatchPreviewSection[] | undefined;
 	previewArgsKey?: string | undefined;
+	settledSuccess?: boolean | undefined;
 	settledError?: boolean | undefined;
 };
 
@@ -159,6 +160,7 @@ function createApplyPatchCallRenderComponent(): ApplyPatchCallRenderComponent {
 	return Object.assign(new Box(1, 1, (text) => text), {
 		previewSections: undefined,
 		previewArgsKey: undefined,
+		settledSuccess: false,
 		settledError: false,
 	});
 }
@@ -216,15 +218,12 @@ function stylePreviewText(text: string, theme: { fg(role: string, text: string):
 }
 
 function getApplyPatchHeaderBg(
-	previewSections: ApplyPatchPreviewSection[] | undefined,
+	settledSuccess: boolean | undefined,
 	settledError: boolean | undefined,
 	theme: { bg(role: string, text: string): string },
 ): (text: string) => string {
-	if (previewSections && previewSections.length > 0) {
-		if (settledError) return (text) => theme.bg("toolErrorBg", text);
-		return (text) => theme.bg("toolSuccessBg", text);
-	}
 	if (settledError) return (text) => theme.bg("toolErrorBg", text);
+	if (settledSuccess) return (text) => theme.bg("toolSuccessBg", text);
 	return (text) => theme.bg("toolPendingBg", text);
 }
 
@@ -233,7 +232,7 @@ function buildApplyPatchCallComponent(
 	previewSections: ApplyPatchPreviewSection[],
 	theme: { fg(role: string, text: string): string; bold(text: string): string; bg(role: string, text: string): string },
 ): ApplyPatchCallRenderComponent {
-	component.setBgFn(getApplyPatchHeaderBg(previewSections, component.settledError, theme));
+	component.setBgFn(getApplyPatchHeaderBg(component.settledSuccess, component.settledError, theme));
 	component.clear();
 	component.addChild(new Text(theme.fg("toolTitle", theme.bold("apply_patch")), 0, 0));
 	for (const section of previewSections) {
@@ -390,6 +389,7 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			const argsKey = patchText;
 			if (component.previewArgsKey !== argsKey) {
 				component.previewArgsKey = argsKey;
+				component.settledSuccess = false;
 				component.settledError = false;
 			}
 			const previewSections = getApplyPatchPreviewSections(patchText, cwd, {
@@ -405,6 +405,7 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			const isPartialFailure = details?.status === "partial_failure";
 			const callComponent = state.callComponent;
 			if (callComponent) {
+				callComponent.settledSuccess = !context.isError && !isPartialFailure;
 				callComponent.settledError = context.isError || isPartialFailure;
 				const patchText = getPatchText(context.args as { input?: unknown | undefined });
 				const previewSections = patchText
