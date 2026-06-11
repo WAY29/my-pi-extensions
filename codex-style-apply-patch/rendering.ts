@@ -1,6 +1,7 @@
 import { isAbsolute, relative } from "node:path";
 import { renderDiff } from "@earendil-works/pi-coding-agent";
 import {
+	lineMatchFuzz,
 	normalizePatchPath,
 	openFileAtPath,
 	parsePatchActions,
@@ -105,6 +106,19 @@ function findMatchingSequence(lines: string[], context: string[], start: number)
 	const trim = findSequence(lines, context, start, (value) => value.trim());
 	if (trim !== -1) return trim;
 	return start;
+}
+
+function findSectionAnchor(lines: string[], target: string, start: number): number {
+	for (const tier of [0, 1, 100] as const) {
+		const alreadySeen = lines.slice(0, start).some((line) => lineMatchFuzz(line, target) === tier);
+		if (alreadySeen) continue;
+
+		for (let index = start; index < lines.length; index += 1) {
+			if (lineMatchFuzz(lines[index]!, target) === tier) return index;
+		}
+	}
+
+	return -1;
 }
 
 function formatPreviewLine(line: PreviewLine, lines: PreviewLine[]): string {
@@ -227,6 +241,8 @@ function buildUpdatePreview(action: ParsedPatchAction, cwd: string): { added: nu
 			continue;
 		}
 
+		const sectionAnchor = line.startsWith("@@ ") ? line.slice(3) : "";
+
 		index += 1;
 		const sectionLines: string[] = [];
 		while (index < action.lines.length && !action.lines[index]!.startsWith("@@") && action.lines[index] !== "*** End of File") {
@@ -240,7 +256,14 @@ function buildUpdatePreview(action: ParsedPatchAction, cwd: string): { added: nu
 			.map(normalizePatchLine)
 			.filter((entry) => entry.marker === " " || entry.marker === "-")
 			.map((entry) => entry.text);
-		const sectionStart = findMatchingSequence(originalLines, oldSequence, searchStart);
+		let sectionSearchStart = searchStart;
+		if (sectionAnchor.trim().length > 0) {
+			const anchorIndex = findSectionAnchor(originalLines, sectionAnchor, searchStart);
+			if (anchorIndex !== -1) {
+				sectionSearchStart = anchorIndex + 1;
+			}
+		}
+		const sectionStart = findMatchingSequence(originalLines, oldSequence, sectionSearchStart);
 		let oldLineNumber = sectionStart + 1;
 		let newLineNumber = sectionStart + 1 + delta;
 
