@@ -44,6 +44,13 @@ export interface ExecutePatchFailure {
 	message: string;
 }
 
+interface UpdateExecutionState {
+	originalLines: string[];
+	hadTrailingNewline: boolean;
+	chunks: Chunk[];
+	currentPath: string;
+}
+
 export class DiffError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -430,6 +437,26 @@ const VALID_HUNK_HEADERS = [
 	"'*** Update File: {path}'",
 ].join(", ");
 
+function registerParsedAction(actions: ParsedPatchAction[], action: ParsedPatchAction, errorPrefix: string, seenActions: Map<string, ActionType[]>): void {
+	const seen = seenActions.get(action.path) ?? [];
+	if (action.type === "update") {
+		if (seen.some((type) => type !== "update")) {
+			throw new DiffError(`${errorPrefix}: Duplicate Path: ${action.path}`);
+		}
+		seen.push("update");
+		seenActions.set(action.path, seen);
+		actions.push(action);
+		return;
+	}
+
+	if (seen.length > 0) {
+		throw new DiffError(`${errorPrefix}: Duplicate Path: ${action.path}`);
+	}
+
+	seenActions.set(action.path, [action.type]);
+	actions.push(action);
+}
+
 export function parsePatchActions({ text }: { text: string }): ParsedPatchAction[] {
 	const lines = text.trim().split("\n");
 	if (lines.length < 2 || !lines[0]!.startsWith("*** Begin Patch") || lines[lines.length - 1] !== "*** End Patch") {
@@ -437,7 +464,7 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 	}
 
 	const actions: ParsedPatchAction[] = [];
-	const seenPaths = new Set<string>();
+	const seenActions = new Map<string, ActionType[]>();
 	let index = 1;
 
 	while (index < lines.length - 1) {
@@ -446,10 +473,6 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 
 		if (line.startsWith("*** Update File: ")) {
 			const updatePath = normalizePatchPath({ path: line.slice("*** Update File: ".length) });
-			if (seenPaths.has(updatePath)) {
-				throw new DiffError(`Update File Error: Duplicate Path: ${updatePath}`);
-			}
-			seenPaths.add(updatePath);
 			index += 1;
 			let movePath: string | undefined;
 			if (index < lines.length - 1 && lines[index]!.startsWith("*** Move to: ")) {
@@ -469,46 +492,38 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 			if (bodyLines.length === 0) {
 				throw new DiffError(`Invalid patch hunk on line ${lineNumber}: Update file hunk for path '${updatePath}' is empty`);
 			}
-			actions.push({
+			registerParsedAction(actions, {
 				type: "update",
 				path: updatePath,
 				movePath,
 				lines: bodyLines,
-			});
+			}, "Update File Error", seenActions);
 			continue;
 		}
 
 		if (line.startsWith("*** Delete File: ")) {
 			const deletePath = normalizePatchPath({ path: line.slice("*** Delete File: ".length) });
-			if (seenPaths.has(deletePath)) {
-				throw new DiffError(`Delete File Error: Duplicate Path: ${deletePath}`);
-			}
-			seenPaths.add(deletePath);
-			actions.push({
+			registerParsedAction(actions, {
 				type: "delete",
 				path: deletePath,
-			});
+			}, "Delete File Error", seenActions);
 			index += 1;
 			continue;
 		}
 
 		if (line.startsWith("*** Add File: ")) {
 			const addPath = normalizePatchPath({ path: line.slice("*** Add File: ".length) });
-			if (seenPaths.has(addPath)) {
-				throw new DiffError(`Add File Error: Duplicate Path: ${addPath}`);
-			}
-			seenPaths.add(addPath);
 			const state: ParserState = {
 				lines,
 				index: index + 1,
 				fuzz: 0,
 			};
 			const action = parseAddFile({ state });
-			actions.push({
+			registerParsedAction(actions, {
 				type: "add",
 				path: addPath,
 				newFile: action.newFile,
-			});
+			}, "Add File Error", seenActions);
 			index = state.index;
 			continue;
 		}
@@ -528,6 +543,13 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 function addUnique(values: string[], value: string | undefined): void {
 	if (!value) return;
 	if (!values.includes(value)) values.push(value);
+}
+
+function sortChunksByOriginalIndex(chunks: Chunk[]): Chunk[] {
+	return chunks
+		.map((chunk, index) => ({ chunk, index }))
+		.sort((left, right) => left.chunk.origIndex - right.chunk.origIndex || left.index - right.index)
+		.map(({ chunk }) => chunk);
 }
 
 function applyChunksToLines(lines: string[], chunks: Chunk[], path: string): string[] {
@@ -556,9 +578,35 @@ function applyChunksToLines(lines: string[], chunks: Chunk[], path: string): str
 	return next;
 }
 
-function applyUpdateAction({ cwd, action, result }: { cwd: string; action: ParsedPatchAction; result: ExecutePatchResult }): void {
+function applyUpdateAction({
+	cwd,
+	action,
+	result,
+	updateStates,
+}: {
+	cwd: string;
+	action: ParsedPatchAction;
+	result: ExecutePatchResult;
+	updateStates: Map<string, UpdateExecutionState>;
+}): void {
 	const sourcePath = action.path;
-	const originalText = openFileAtPath({ cwd, path: sourcePath });
+	let updateState = updateStates.get(sourcePath);
+	if (updateState && updateState.currentPath !== sourcePath) {
+		throw new DiffError(`Update File Error: ${sourcePath} was already moved to ${updateState.currentPath}`);
+	}
+
+	if (!updateState) {
+		const originalText = openFileAtPath({ cwd, path: sourcePath });
+		updateState = {
+			originalLines: splitFileLines(originalText),
+			hadTrailingNewline: originalText.endsWith("\n"),
+			chunks: [],
+			currentPath: sourcePath,
+		};
+		updateStates.set(sourcePath, updateState);
+	}
+
+	const originalText = joinFileLines(updateState.originalLines, updateState.hadTrailingNewline);
 	const state: ParserState = {
 		lines: action.lines ?? [],
 		index: 0,
@@ -566,9 +614,9 @@ function applyUpdateAction({ cwd, action, result }: { cwd: string; action: Parse
 	};
 	const parsed = parseUpdateFile({ state, text: originalText, path: sourcePath });
 	parsed.movePath = action.movePath;
-	const originalLines = splitFileLines(originalText);
-	const nextLines = applyChunksToLines(originalLines, parsed.chunks, sourcePath);
-	const nextText = joinFileLines(nextLines, originalText.endsWith("\n"));
+	const combinedChunks = sortChunksByOriginalIndex([...updateState.chunks, ...parsed.chunks]);
+	const nextLines = applyChunksToLines(updateState.originalLines, combinedChunks, sourcePath);
+	const nextText = joinFileLines(nextLines, updateState.hadTrailingNewline);
 	const targetPath = parsed.movePath ?? sourcePath;
 
 	if (parsed.movePath && parsed.movePath !== sourcePath && pathExists({ cwd, path: parsed.movePath })) {
@@ -576,6 +624,8 @@ function applyUpdateAction({ cwd, action, result }: { cwd: string; action: Parse
 	}
 
 	writeFileAtPath({ cwd, path: targetPath, content: nextText });
+	updateState.chunks = combinedChunks;
+	updateState.currentPath = targetPath;
 	if (parsed.movePath && parsed.movePath !== sourcePath) {
 		removeFileAtPath({ cwd, path: sourcePath });
 		addUnique(result.movedFiles, parsed.movePath);
@@ -609,6 +659,7 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 		movedFiles: [],
 		fuzz: 0,
 	};
+	const updateStates = new Map<string, UpdateExecutionState>();
 
 	for (const action of actions) {
 		try {
@@ -620,7 +671,7 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 				applyDeleteAction({ cwd, action, result });
 				continue;
 			}
-			applyUpdateAction({ cwd, action, result });
+			applyUpdateAction({ cwd, action, result, updateStates });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new ExecutePatchError(message, result, [{ action, message }]);

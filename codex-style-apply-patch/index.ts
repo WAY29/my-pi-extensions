@@ -148,6 +148,7 @@ function buildPromptGuidelines(): string[] {
 	return [
 		"Use apply_patch for text-file changes on GPT/Codex models; prefer it over edit and write.",
 		"Use apply_patch with full patch text wrapped in *** Begin Patch / *** End Patch.",
+		"When apply_patch changes one file in multiple places, prefer a single *** Update File: section for that path with multiple @@ hunks.",
 		"When apply_patch partially fails, read only the reported failed files before retrying.",
 	];
 }
