@@ -6,8 +6,8 @@
  * Tab on an option opens a Codex-style note editor for that option
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Editor, type EditorTheme, Key, Markdown, matchesKey, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { withNotifyHookAttention } from "./notify-hook/attention";
@@ -148,6 +148,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
 			const result = await withNotifyHookAttention(pi, "AskUserQuestion", () =>
 				ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
+				const markdownTheme = getMarkdownTheme();
 				// State
 				let currentTab = 0;
 				let optionIndex = 0;
@@ -366,6 +367,11 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
 					// Helper to wrap long lines instead of truncating them with ellipses.
 					const add = (s: string) => lines.push(...wrapTextWithAnsi(s, renderWidth));
+					const addMarkdown = (markdown: string) => {
+						for (const line of new Markdown(markdown, 1, 0, markdownTheme).render(renderWidth)) {
+							lines.push(line);
+						}
+					};
 
 					add(theme.fg("accent", "─".repeat(renderWidth)));
 
@@ -422,7 +428,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
 					// Content
 					if (inputMode && q) {
-						add(theme.fg("text", ` ${q.prompt}`));
+						addMarkdown(q.prompt);
 						lines.push("");
 						// Show options for reference
 						renderOptions();
@@ -462,7 +468,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 							add(theme.fg("warning", ` Unanswered: ${missing}`));
 						}
 					} else if (q) {
-						add(theme.fg("text", ` ${q.prompt}`));
+						addMarkdown(q.prompt);
 						lines.push("");
 						renderOptions();
 					}
