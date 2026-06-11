@@ -92,7 +92,7 @@ function enableCodexStyleTools(activeTools: string[], previousToolNames: string[
 }
 
 function restoreTools(activeTools: string[], previousToolNames: string[] | undefined): string[] {
-	const next = [...activeTools];
+	const next = activeTools.filter((toolName) => toolName !== TOOL_NAME);
 	for (const toolName of DISABLED_TOOLS) {
 		if (previousToolNames?.includes(toolName) && !next.includes(toolName)) next.push(toolName);
 	}
@@ -300,8 +300,6 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			}
 			return;
 		}
-
-		if (!codexStyleActive) return;
 
 		const nextTools = restoreTools(activeTools, previousToolNames);
 		codexStyleActive = false;

@@ -5,6 +5,7 @@ import {
 	normalizePatchPath,
 	openFileAtPath,
 	parsePatchActions,
+	type Chunk,
 	type ParsedPatchAction,
 } from "./patch.ts";
 
@@ -33,11 +34,22 @@ interface FilePreview {
 	lines: PreviewLine[];
 }
 
+interface PreviewFileState {
+	lines: string[];
+	hadTrailingNewline: boolean;
+}
+
 function splitFileLines(text: string): string[] {
 	if (text.length === 0) return [];
 	const lines = text.split("\n");
 	if (lines.at(-1) === "") lines.pop();
 	return lines;
+}
+
+function joinFileLines(lines: string[], hadTrailingNewline: boolean): string {
+	if (lines.length === 0) return "";
+	const joined = lines.join("\n");
+	return hadTrailingNewline ? `${joined}\n` : joined;
 }
 
 function displayPath(path: string, cwd: string): string {
@@ -60,6 +72,21 @@ function readFileLines(path: string, cwd: string): string[] {
 		return splitFileLines(openFileAtPath({ cwd, path }));
 	} catch {
 		return [];
+	}
+}
+
+function readPreviewFileState(path: string, cwd: string): PreviewFileState {
+	try {
+		const text = openFileAtPath({ cwd, path });
+		return {
+			lines: splitFileLines(text),
+			hadTrailingNewline: text.endsWith("\n"),
+		};
+	} catch {
+		return {
+			lines: [],
+			hadTrailingNewline: true,
+		};
 	}
 }
 
@@ -119,6 +146,108 @@ function findSectionAnchor(lines: string[], target: string, start: number): numb
 	}
 
 	return -1;
+}
+
+function lineMatchFuzzOrThrow(left: string, right: string): void {
+	if (left === right || left.trimEnd() === right.trimEnd()) return;
+	throw new Error(`preview mismatch: expected '${right}'`);
+}
+
+function buildChunksForPreview(action: ParsedPatchAction, lines: string[]): Chunk[] {
+	if (!action.lines) return [];
+
+	const chunks: Chunk[] = [];
+	let searchStart = 0;
+	let index = 0;
+
+	while (index < action.lines.length) {
+		const line = action.lines[index]!;
+		if (line === "*** End of File") break;
+		if (!line.startsWith("@@")) {
+			index += 1;
+			continue;
+		}
+
+		const sectionAnchor = line.startsWith("@@ ") ? line.slice(3) : "";
+		index += 1;
+
+		const sectionLines: string[] = [];
+		while (index < action.lines.length && !action.lines[index]!.startsWith("@@") && action.lines[index] !== "*** End of File") {
+			sectionLines.push(action.lines[index]!);
+			index += 1;
+		}
+
+		if (sectionLines.length === 0) continue;
+
+		const normalized = sectionLines.map(normalizePatchLine);
+		const context = normalized.filter((entry) => entry.marker === " " || entry.marker === "-").map((entry) => entry.text);
+		let sectionSearchStart = searchStart;
+		if (sectionAnchor.trim().length > 0) {
+			const anchorIndex = findSectionAnchor(lines, sectionAnchor, searchStart);
+			if (anchorIndex !== -1) sectionSearchStart = anchorIndex + 1;
+		}
+		const sectionStart = findMatchingSequence(lines, context, sectionSearchStart);
+
+		const delLines: string[] = [];
+		const insLines: string[] = [];
+		let origOffset = 0;
+		let inChange = false;
+		let currentChunk: Chunk | undefined;
+
+		for (const entry of normalized) {
+			if (entry.marker === " ") {
+				if (currentChunk && inChange) {
+					chunks.push(currentChunk);
+					currentChunk = undefined;
+				}
+				inChange = false;
+				origOffset += 1;
+				continue;
+			}
+
+			if (!currentChunk || !inChange) {
+				currentChunk = { origIndex: sectionStart + origOffset, delLines: [], insLines: [] };
+				inChange = true;
+			}
+
+			if (entry.marker === "-") {
+				currentChunk.delLines.push(entry.text);
+				origOffset += 1;
+			} else {
+				currentChunk.insLines.push(entry.text);
+			}
+		}
+
+		if (currentChunk && inChange) chunks.push(currentChunk);
+		searchStart = sectionStart + context.length;
+	}
+
+	return chunks;
+}
+
+function sortChunksByOriginalIndex(chunks: Chunk[]): Chunk[] {
+	return chunks
+		.map((chunk, index) => ({ chunk, index }))
+		.sort((left, right) => left.chunk.origIndex - right.chunk.origIndex || left.index - right.index)
+		.map(({ chunk }) => chunk);
+}
+
+function applyPreviewChunks(lines: string[], chunks: Chunk[]): string[] {
+	const next: string[] = [];
+	let cursor = 0;
+
+	for (const chunk of sortChunksByOriginalIndex(chunks)) {
+		next.push(...lines.slice(cursor, chunk.origIndex));
+		const actual = lines.slice(chunk.origIndex, chunk.origIndex + chunk.delLines.length);
+		for (let index = 0; index < chunk.delLines.length; index += 1) {
+			lineMatchFuzzOrThrow(actual[index] ?? "", chunk.delLines[index]!);
+		}
+		next.push(...chunk.insLines);
+		cursor = chunk.origIndex + chunk.delLines.length;
+	}
+
+	next.push(...lines.slice(cursor));
+	return next;
 }
 
 function formatPreviewLine(line: PreviewLine, lines: PreviewLine[]): string {
@@ -220,12 +349,11 @@ function renderLimitedPreviewDiffText(lines: PreviewLine[], maxPreviewLinesPerFi
 	return output;
 }
 
-function buildUpdatePreview(action: ParsedPatchAction, cwd: string): { added: number; removed: number; lines: PreviewLine[] } {
+function buildUpdatePreview(action: ParsedPatchAction, originalLines: string[]): { added: number; removed: number; lines: PreviewLine[] } {
 	if (!action.lines) {
 		return { added: 0, removed: 0, lines: [] };
 	}
 
-	const originalLines = readFileLines(action.path, cwd);
 	const renderedLines: PreviewLine[] = [];
 	let added = 0;
 	let removed = 0;
@@ -300,43 +428,71 @@ function buildUpdatePreview(action: ParsedPatchAction, cwd: string): { added: nu
 	return { added, removed, lines: renderedLines };
 }
 
-function buildFilePreview(action: ParsedPatchAction, cwd: string): FilePreview {
+function buildFilePreview(action: ParsedPatchAction, cwd: string, state: PreviewFileState): { preview: FilePreview; nextState?: PreviewFileState | undefined } {
 	if (action.type === "add") {
 		const lines = splitFileLines(action.newFile ?? "");
 		return {
+			preview: {
 			verb: "Added",
 			path: action.path,
 			added: lines.length,
 			removed: 0,
 			lines: lines.map((text, index) => ({ lineNumber: index + 1, marker: "+", text })),
+			},
+			nextState: {
+				lines,
+				hadTrailingNewline: true,
+			},
 		};
 	}
 
 	if (action.type === "delete") {
-		const deletedLines = readFileLines(action.path, cwd);
 		return {
+			preview: {
 			verb: "Deleted",
 			path: action.path,
 			added: 0,
 			removed: deletedLines.length,
-			lines: deletedLines.map((text, index) => ({ lineNumber: index + 1, marker: "-", text })),
+			lines: state.lines.map((text, index) => ({ lineNumber: index + 1, marker: "-", text })),
+			},
+			nextState: {
+				lines: [],
+				hadTrailingNewline: state.hadTrailingNewline,
+			},
 		};
 	}
 
-	const preview = buildUpdatePreview(action, cwd);
+	const preview = buildUpdatePreview(action, state.lines);
+	const updatedLines = applyPreviewChunks(state.lines, buildChunksForPreview(action, state.lines));
 	return {
-		verb: "Edited",
-		path: action.path,
-		movePath: action.movePath,
-		added: preview.added,
-		removed: preview.removed,
-		lines: preview.lines,
+		preview: {
+			verb: "Edited",
+			path: action.path,
+			movePath: action.movePath,
+			added: preview.added,
+			removed: preview.removed,
+			lines: preview.lines,
+		},
+		nextState: {
+			lines: updatedLines,
+			hadTrailingNewline: state.hadTrailingNewline,
+		},
 	};
 }
 
 function parseFiles(patchText: string, cwd: string): FilePreview[] {
 	const actions = parsePatchActions({ text: patchText });
-	return actions.map((action) => buildFilePreview(action, cwd));
+	const fileStates = new Map<string, PreviewFileState>();
+	const previews: FilePreview[] = [];
+
+	for (const action of actions) {
+		const state = fileStates.get(action.path) ?? readPreviewFileState(action.path, cwd);
+		const { preview, nextState } = buildFilePreview(action, cwd, state);
+		previews.push(preview);
+		if (nextState) fileStates.set(action.path, nextState);
+	}
+
+	return previews;
 }
 
 function parsePartialFiles(patchText: string): FilePreview[] {

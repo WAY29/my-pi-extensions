@@ -45,7 +45,7 @@ export interface ExecutePatchFailure {
 }
 
 interface UpdateExecutionState {
-	originalLines: string[];
+	baseLines: string[];
 	hadTrailingNewline: boolean;
 	chunks: Chunk[];
 	currentPath: string;
@@ -437,23 +437,7 @@ const VALID_HUNK_HEADERS = [
 	"'*** Update File: {path}'",
 ].join(", ");
 
-function registerParsedAction(actions: ParsedPatchAction[], action: ParsedPatchAction, errorPrefix: string, seenActions: Map<string, ActionType[]>): void {
-	const seen = seenActions.get(action.path) ?? [];
-	if (action.type === "update") {
-		if (seen.some((type) => type !== "update")) {
-			throw new DiffError(`${errorPrefix}: Duplicate Path: ${action.path}`);
-		}
-		seen.push("update");
-		seenActions.set(action.path, seen);
-		actions.push(action);
-		return;
-	}
-
-	if (seen.length > 0) {
-		throw new DiffError(`${errorPrefix}: Duplicate Path: ${action.path}`);
-	}
-
-	seenActions.set(action.path, [action.type]);
+function registerParsedAction(actions: ParsedPatchAction[], action: ParsedPatchAction, _errorPrefix: string): void {
 	actions.push(action);
 }
 
@@ -464,7 +448,6 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 	}
 
 	const actions: ParsedPatchAction[] = [];
-	const seenActions = new Map<string, ActionType[]>();
 	let index = 1;
 
 	while (index < lines.length - 1) {
@@ -497,7 +480,7 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 				path: updatePath,
 				movePath,
 				lines: bodyLines,
-			}, "Update File Error", seenActions);
+			}, "Update File Error");
 			continue;
 		}
 
@@ -506,7 +489,7 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 			registerParsedAction(actions, {
 				type: "delete",
 				path: deletePath,
-			}, "Delete File Error", seenActions);
+			}, "Delete File Error");
 			index += 1;
 			continue;
 		}
@@ -523,7 +506,7 @@ export function parsePatchActions({ text }: { text: string }): ParsedPatchAction
 				type: "add",
 				path: addPath,
 				newFile: action.newFile,
-			}, "Add File Error", seenActions);
+			}, "Add File Error");
 			index = state.index;
 			continue;
 		}
@@ -598,7 +581,7 @@ function applyUpdateAction({
 	if (!updateState) {
 		const originalText = openFileAtPath({ cwd, path: sourcePath });
 		updateState = {
-			originalLines: splitFileLines(originalText),
+			baseLines: splitFileLines(originalText),
 			hadTrailingNewline: originalText.endsWith("\n"),
 			chunks: [],
 			currentPath: sourcePath,
@@ -606,7 +589,7 @@ function applyUpdateAction({
 		updateStates.set(sourcePath, updateState);
 	}
 
-	const originalText = joinFileLines(updateState.originalLines, updateState.hadTrailingNewline);
+	const originalText = joinFileLines(updateState.baseLines, updateState.hadTrailingNewline);
 	const state: ParserState = {
 		lines: action.lines ?? [],
 		index: 0,
@@ -615,7 +598,7 @@ function applyUpdateAction({
 	const parsed = parseUpdateFile({ state, text: originalText, path: sourcePath });
 	parsed.movePath = action.movePath;
 	const combinedChunks = sortChunksByOriginalIndex([...updateState.chunks, ...parsed.chunks]);
-	const nextLines = applyChunksToLines(updateState.originalLines, combinedChunks, sourcePath);
+	const nextLines = applyChunksToLines(updateState.baseLines, combinedChunks, sourcePath);
 	const nextText = joinFileLines(nextLines, updateState.hadTrailingNewline);
 	const targetPath = parsed.movePath ?? sourcePath;
 
@@ -644,8 +627,19 @@ function applyAddAction({ cwd, action, result }: { cwd: string; action: ParsedPa
 	addUnique(result.createdFiles, action.path);
 }
 
-function applyDeleteAction({ cwd, action, result }: { cwd: string; action: ParsedPatchAction; result: ExecutePatchResult }): void {
+function applyDeleteAction({
+	cwd,
+	action,
+	result,
+	updateStates,
+}: {
+	cwd: string;
+	action: ParsedPatchAction;
+	result: ExecutePatchResult;
+	updateStates: Map<string, UpdateExecutionState>;
+}): void {
 	removeFileAtPath({ cwd, path: action.path });
+	updateStates.delete(action.path);
 	addUnique(result.changedFiles, action.path);
 	addUnique(result.deletedFiles, action.path);
 }
@@ -665,10 +659,11 @@ export function executePatch({ cwd, patchText }: { cwd: string; patchText: strin
 		try {
 			if (action.type === "add") {
 				applyAddAction({ cwd, action, result });
+				updateStates.delete(action.path);
 				continue;
 			}
 			if (action.type === "delete") {
-				applyDeleteAction({ cwd, action, result });
+				applyDeleteAction({ cwd, action, result, updateStates });
 				continue;
 			}
 			applyUpdateAction({ cwd, action, result, updateStates });
