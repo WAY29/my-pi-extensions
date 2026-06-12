@@ -35,6 +35,7 @@ type ApplyPatchDetails = ApplyPatchSuccessDetails | ApplyPatchPartialFailureDeta
 
 type ApplyPatchCallRenderComponent = Box & {
 	previewSections?: ApplyPatchPreviewSection[] | undefined;
+	lastPreviewSections?: ApplyPatchPreviewSection[] | undefined;
 	previewArgsKey?: string | undefined;
 	settledSuccess?: boolean | undefined;
 	settledError?: boolean | undefined;
@@ -160,6 +161,7 @@ function getPatchText(args: { input?: unknown | undefined }): string {
 function createApplyPatchCallRenderComponent(): ApplyPatchCallRenderComponent {
 	return Object.assign(new Box(1, 1, (text) => text), {
 		previewSections: undefined,
+		lastPreviewSections: undefined,
 		previewArgsKey: undefined,
 		settledSuccess: false,
 		settledError: false,
@@ -388,6 +390,7 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			const argsKey = patchText;
 			if (component.previewArgsKey !== argsKey) {
 				component.previewArgsKey = argsKey;
+				component.lastPreviewSections = undefined;
 				component.settledSuccess = false;
 				component.settledError = false;
 			}
@@ -396,6 +399,7 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 				maxPreviewLinesPerFile: context.expanded ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES,
 			});
 			component.previewSections = previewSections;
+			if (previewSections.length > 0) component.lastPreviewSections = previewSections;
 			return buildApplyPatchCallComponent(component, previewSections, theme);
 		},
 		renderResult(result, { expanded }, theme, context) {
@@ -408,8 +412,12 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 				callComponent.settledError = context.isError || isPartialFailure;
 				if ((!callComponent.previewSections || callComponent.previewSections.length === 0) && details?.previewSections) {
 					callComponent.previewSections = details.previewSections;
+					if (details.previewSections.length > 0) callComponent.lastPreviewSections = details.previewSections;
 				}
-				buildApplyPatchCallComponent(callComponent, callComponent.previewSections ?? [], theme);
+				const previewSections = callComponent.previewSections?.length
+					? callComponent.previewSections
+					: callComponent.lastPreviewSections ?? [];
+				buildApplyPatchCallComponent(callComponent, previewSections, theme);
 			}
 			const output = formatApplyPatchResult(result, theme, context.isError, isPartialFailure);
 			const component = context.lastComponent instanceof Container ? context.lastComponent : new Container();
