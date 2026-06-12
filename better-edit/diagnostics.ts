@@ -16,12 +16,34 @@ export interface ValidatedEditInput {
 	edits: ValidatedEdit[];
 }
 
+export interface PreparedArgumentsWithWarnings {
+	prepared: unknown;
+	warnings: string[];
+}
+
 interface EditAnalysis {
 	exactLines: number[];
 	fuzzyLines: number[];
 	aggressiveLines: number[];
 	lineSpan: number;
 }
+
+const TOP_LEVEL_CANONICAL_KEYS = new Set(["path", "edits"]);
+const TOP_LEVEL_COMPATIBILITY_KEYS = new Set([
+	"file_path",
+	"oldText",
+	"newText",
+	"old_text",
+	"new_text",
+	"search",
+	"findText",
+	"match",
+	"replace",
+	"replaceText",
+	"replacement",
+]);
+const EDIT_CANONICAL_KEYS = new Set(["oldText", "newText"]);
+const EDIT_COMPATIBILITY_KEYS = new Set(["old_text", "new_text", "search", "findText", "match", "replace", "replaceText", "replacement"]);
 
 function firstDefinedString(...values: unknown[]): string | undefined {
 	for (const value of values) {
@@ -37,6 +59,43 @@ function normalizeEditRecord(input: unknown): PreparedEditRecord {
 		oldText: firstDefinedString(record.oldText, record.old_text, record.search, record.findText, record.match),
 		newText: firstDefinedString(record.newText, record.new_text, record.replace, record.replaceText, record.replacement),
 	};
+}
+
+function sanitizeEditRecords(edits: unknown[] | undefined): PreparedEditRecord[] | undefined {
+	if (!edits) return undefined;
+	return edits.map((edit) => normalizeEditRecord(edit));
+}
+
+function listUnexpectedKeys(record: Record<string, unknown>, canonicalKeys: Set<string>, compatibilityKeys: Set<string>): string[] {
+	return Object.keys(record).filter((key) => !canonicalKeys.has(key) && !compatibilityKeys.has(key));
+}
+
+function collectPreparationWarnings(record: Record<string, unknown>, parsedEdits: unknown[] | undefined): string[] {
+	const warnings: string[] = [];
+	const compatibilityKeys = Object.keys(record).filter((key) => TOP_LEVEL_COMPATIBILITY_KEYS.has(key));
+	if (compatibilityKeys.length > 0) {
+		warnings.push(`Use only the canonical top-level shape next time: { path, edits }. Avoid compatibility keys like ${compatibilityKeys.join(", ")}.`);
+	}
+
+	const topLevelUnexpected = listUnexpectedKeys(record, TOP_LEVEL_CANONICAL_KEYS, TOP_LEVEL_COMPATIBILITY_KEYS);
+	if (topLevelUnexpected.length > 0) {
+		warnings.push(`Ignored extra top-level keys: ${topLevelUnexpected.join(", ")}.`);
+	}
+
+	for (const [index, edit] of (parsedEdits ?? []).entries()) {
+		if (!edit || typeof edit !== "object") continue;
+		const editRecord = edit as Record<string, unknown>;
+		const editCompatibilityKeys = Object.keys(editRecord).filter((key) => EDIT_COMPATIBILITY_KEYS.has(key));
+		if (editCompatibilityKeys.length > 0) {
+			warnings.push(`Use only edits[${index}].oldText and edits[${index}].newText next time. Avoid compatibility keys like ${editCompatibilityKeys.join(", ")}.`);
+		}
+		const unexpectedKeys = listUnexpectedKeys(editRecord, EDIT_CANONICAL_KEYS, EDIT_COMPATIBILITY_KEYS);
+		if (unexpectedKeys.length > 0) {
+			warnings.push(`Ignored extra keys in edits[${index}]: ${unexpectedKeys.join(", ")}.`);
+		}
+	}
+
+	return warnings;
 }
 
 function parseEditsInput(edits: unknown): unknown[] | undefined {
@@ -55,13 +114,14 @@ function parseEditsInput(edits: unknown): unknown[] | undefined {
 	return undefined;
 }
 
-export function prepareAdvisedEditArguments(input: unknown): unknown {
-	if (!input || typeof input !== "object") return input;
+export function prepareAdvisedEditArgumentsWithWarnings(input: unknown): PreparedArgumentsWithWarnings {
+	if (!input || typeof input !== "object") return { prepared: input, warnings: [] };
 
 	const record = input as Record<string, unknown>;
 	const path = firstDefinedString(record.path, record.file_path);
 	const parsedEdits = parseEditsInput(record.edits);
-	const edits = parsedEdits?.map((edit) => normalizeEditRecord(edit)) ?? [];
+	const edits = sanitizeEditRecords(parsedEdits) ?? [];
+	const warnings = collectPreparationWarnings(record, parsedEdits);
 
 	const legacyEdit = normalizeEditRecord(record);
 	if (legacyEdit.oldText !== undefined || legacyEdit.newText !== undefined) {
@@ -69,9 +129,16 @@ export function prepareAdvisedEditArguments(input: unknown): unknown {
 	}
 
 	return {
-		...(path !== undefined ? { path } : {}),
-		...(parsedEdits !== undefined || edits.length > 0 ? { edits } : {}),
+		prepared: {
+			...(path !== undefined ? { path } : {}),
+			...(parsedEdits !== undefined || edits.length > 0 ? { edits } : {}),
+		},
+		warnings,
 	};
+}
+
+export function prepareAdvisedEditArguments(input: unknown): unknown {
+	return prepareAdvisedEditArgumentsWithWarnings(input).prepared;
 }
 
 function formatCanonicalShape(): string {

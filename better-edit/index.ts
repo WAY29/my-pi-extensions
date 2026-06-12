@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	createEditToolDefinition,
 	getAgentDir,
+	withFileMutationQueue,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -10,12 +11,14 @@ import { Type } from "typebox";
 import {
 	buildAdvisedEditErrorMessage,
 	prepareAdvisedEditArguments,
+	prepareAdvisedEditArgumentsWithWarnings,
 	validateAdvisedEditInput,
 	type ValidatedEditInput,
 } from "./diagnostics.ts";
 
 const COMMAND = "better-edit";
 const CONFIG_PATH = join(getAgentDir(), "better-edit.json");
+const ERROR_LOG_PATH = join(getAgentDir(), "logs", "better-edit-errors.ndjson");
 
 interface BetterEditConfig {
 	enabled: boolean;
@@ -59,6 +62,109 @@ function buildStatus(config: BetterEditConfig): string {
 	return `${COMMAND} ${config.enabled ? "on" : "off"}`;
 }
 
+function serializeLogError(error: unknown): { name?: string; message: string; stack?: string } {
+	if (error instanceof Error) {
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+		};
+	}
+	return { message: String(error) };
+}
+
+async function logExecutionError({
+	toolCallId,
+	ctx,
+	validated,
+	rawInput,
+	hiddenWarnings,
+	error,
+}: {
+	toolCallId: string;
+	ctx: ExtensionContext;
+	validated: ValidatedEditInput;
+	rawInput: unknown;
+	hiddenWarnings: string[];
+	error: unknown;
+}): Promise<void> {
+	const entry = {
+		timestamp: new Date().toISOString(),
+		toolCallId,
+		cwd: ctx.cwd,
+		modelId: typeof ctx.model?.id === "string" ? ctx.model.id : undefined,
+		path: validated.path,
+		edits: validated.edits,
+		rawInput,
+		hiddenWarnings,
+		error: serializeLogError(error),
+	};
+
+	try {
+		await mkdir(dirname(ERROR_LOG_PATH), { recursive: true });
+		await withFileMutationQueue(ERROR_LOG_PATH, async () => {
+			await appendFile(ERROR_LOG_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+		});
+	} catch {
+		// Ignore logging failures; they should not mask the edit error.
+	}
+}
+
+function buildWarningKey(input: unknown): string | undefined {
+	try {
+		return JSON.stringify(input);
+	} catch {
+		return undefined;
+	}
+}
+
+function appendHiddenWarningsToContent(
+	result: { content?: Array<{ type: string; text?: string | undefined }>; details?: unknown },
+	warnings: string[],
+) {
+	if (warnings.length === 0 || !Array.isArray(result.content)) return result;
+	const firstTextIndex = result.content.findIndex((item) => item?.type === "text");
+	if (firstTextIndex === -1) return result;
+	const nextContent = [...result.content];
+	const current = nextContent[firstTextIndex]!;
+	const baseText = typeof current.text === "string" ? current.text : "";
+	nextContent[firstTextIndex] = {
+		...current,
+		text: [
+			baseText,
+			"",
+			"Input advisory for future edit calls:",
+			...warnings.map((warning) => `- ${warning}`),
+		].join("\n"),
+	};
+	return {
+		...result,
+		content: nextContent,
+	};
+}
+
+function stripHiddenWarningsFromResult(
+	result: { content?: Array<{ type: string; text?: string | undefined }>; details?: unknown },
+) {
+	if (!Array.isArray(result.content)) return result;
+	const firstTextIndex = result.content.findIndex((item) => item?.type === "text" && typeof item.text === "string");
+	if (firstTextIndex === -1) return result;
+	const current = result.content[firstTextIndex]!;
+	const text = current.text ?? "";
+	const marker = "\n\nInput advisory for future edit calls:\n";
+	const markerIndex = text.indexOf(marker);
+	if (markerIndex === -1) return result;
+	const nextContent = [...result.content];
+	nextContent[firstTextIndex] = {
+		...current,
+		text: text.slice(0, markerIndex),
+	};
+	return {
+		...result,
+		content: nextContent,
+	};
+}
+
 const replaceEditSchema = Type.Object({
 	oldText: Type.Optional(
 		Type.String({
@@ -94,6 +200,7 @@ function getBaseEditDefinition(cwd: string) {
 
 export function createBetterEditToolDefinition(cwd: string) {
 	const base = getBaseEditDefinition(cwd);
+	const preparationWarnings = new Map<string, string[]>();
 	return {
 		name: "edit",
 		label: base.label,
@@ -106,13 +213,33 @@ export function createBetterEditToolDefinition(cwd: string) {
 		],
 		parameters: advisedEditSchema,
 		renderShell: base.renderShell,
-		prepareArguments: prepareAdvisedEditArguments,
+		prepareArguments(rawInput: unknown) {
+			const prepared = prepareAdvisedEditArgumentsWithWarnings(rawInput);
+			const key = buildWarningKey(prepared.prepared);
+			if (key) {
+				if (prepared.warnings.length > 0) preparationWarnings.set(key, prepared.warnings);
+				else preparationWarnings.delete(key);
+			}
+			return prepared.prepared;
+		},
 		async execute(toolCallId: string, input: unknown, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
 			const validated = validateAdvisedEditInput(input) as ValidatedEditInput;
+			const warningKey = buildWarningKey(validated);
+			const hiddenWarnings = warningKey ? (preparationWarnings.get(warningKey) ?? []) : [];
+			if (warningKey) preparationWarnings.delete(warningKey);
 			const currentBase = getBaseEditDefinition(ctx.cwd);
 			try {
-				return await currentBase.execute(toolCallId, validated, signal, onUpdate as never, ctx);
+				const result = await currentBase.execute(toolCallId, validated, signal, onUpdate as never, ctx);
+				return appendHiddenWarningsToContent(result, hiddenWarnings);
 			} catch (error) {
+				await logExecutionError({
+					toolCallId,
+					ctx,
+					validated,
+					rawInput: input,
+					hiddenWarnings,
+					error,
+				});
 				throw new Error(await buildAdvisedEditErrorMessage({ cwd: ctx.cwd, input: validated, error }));
 			}
 		},
@@ -122,7 +249,7 @@ export function createBetterEditToolDefinition(cwd: string) {
 		},
 		renderResult(result: unknown, options: unknown, theme: unknown, context: unknown) {
 			const currentCwd = typeof (context as { cwd?: unknown } | undefined)?.cwd === "string" ? ((context as { cwd: string }).cwd) : cwd;
-			return getBaseEditDefinition(currentCwd).renderResult?.(result as never, options as never, theme as never, context as never);
+			return getBaseEditDefinition(currentCwd).renderResult?.(stripHiddenWarningsFromResult(result as never) as never, options as never, theme as never, context as never);
 		},
 	};
 }
