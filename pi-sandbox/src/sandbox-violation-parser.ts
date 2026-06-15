@@ -5,20 +5,25 @@ export interface SandboxFilesystemViolation {
   access: FilesystemAccessKind;
 }
 
+function stripSandboxPathQuotes(pathText: string): string {
+  const trimmed = pathText.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseSingleSandboxPath(pathText: string): string | undefined {
+  const path = stripSandboxPathQuotes(pathText);
+  return path.startsWith("/") ? path : undefined;
+}
+
 function parseSandboxPaths(pathText: string): string[] {
   const matches = pathText.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\/\S+/g) ?? [];
-  return matches
-    .map((match) => {
-      const trimmed = match.trim();
-      if (
-        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-        (trimmed.startsWith("'") && trimmed.endsWith("'"))
-      ) {
-        return trimmed.slice(1, -1);
-      }
-      return trimmed;
-    })
-    .filter((match) => match.startsWith("/"));
+  return matches.map(stripSandboxPathQuotes).filter((match) => match.startsWith("/"));
 }
 
 export function parseSandboxFilesystemViolationLine(
@@ -26,7 +31,7 @@ export function parseSandboxFilesystemViolationLine(
 ): SandboxFilesystemViolation | null {
   const directMatch = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
   if (directMatch) {
-    const [path] = parseSandboxPaths(directMatch[3]);
+    const path = parseSingleSandboxPath(directMatch[3]);
     if (!path) return null;
     return { path, access: directMatch[2] as FilesystemAccessKind };
   }

@@ -39,3 +39,15 @@ test("keeps parsing ordinary write-create violations for ln destinations", () =>
     },
   );
 });
+
+test("preserves spaces in ordinary violation paths", () => {
+  assert.deepEqual(
+    parseSandboxFilesystemViolationLine(
+      "go(12345) deny(1) file-write-create /Users/lang/Library/Application Support/Google/Chrome/Crashpad",
+    ),
+    {
+      access: "write",
+      path: "/Users/lang/Library/Application Support/Google/Chrome/Crashpad",
+    },
+  );
+});

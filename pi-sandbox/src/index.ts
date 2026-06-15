@@ -113,6 +113,7 @@ import {
   type FilesystemAccessKind,
   type SandboxFilesystemViolation,
 } from "./sandbox-violation-parser";
+import { getSandboxTmpdir } from "./proxy-env.ts";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -143,12 +144,14 @@ const DEFAULT_CONFIG: SandboxConfig = {
   },
 };
 
+const LEGACY_SANDBOX_RUNTIME_TMPDIRS = ["/tmp/claude", "/private/tmp/claude"];
+
 // @carderne/sandbox-runtime always allows a few diagnostic/temp write paths
 // in addition to configured allowWrite entries. In global read-only lock mode,
 // deny the filesystem-backed ones too so bash cannot use those escape hatches.
 const READ_ONLY_LOCK_DENY_WRITE_PATHS = [
-  "/tmp/claude",
-  "/private/tmp/claude",
+  getSandboxTmpdir(),
+  ...LEGACY_SANDBOX_RUNTIME_TMPDIRS,
   join(homedir(), ".npm", "_logs"),
   join(homedir(), ".claude", "debug"),
 ];
@@ -451,7 +454,11 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
 
 // ── Domain helpers ────────────────────────────────────────────────────────────
 
-export function shouldPromptForWrite(
+export function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function shouldPromptForWrite(
   path: string,
   allowWrite: string[],
   matchesPattern: (path: string, patterns: string[]) => boolean,
@@ -750,6 +757,26 @@ function matchesPattern(filePath: string, patterns: string[]): boolean {
   });
 }
 
+function getCanonicalSandboxTmpdir(): string {
+  return canonicalizePath(getSandboxTmpdir());
+}
+
+function withoutLegacySandboxTmpdirs(paths: string[]): string[] {
+  return paths.filter((path) => !matchesPattern(path, LEGACY_SANDBOX_RUNTIME_TMPDIRS));
+}
+
+function withSandboxTmpdirAllowWrite(paths: string[]): string[] {
+  return uniqueStrings([...withoutLegacySandboxTmpdirs(paths), getCanonicalSandboxTmpdir()]);
+}
+
+function getDirectSandboxWriteConfig(): ReturnType<typeof SandboxManager.getFsWriteConfig> {
+  const writeConfig = SandboxManager.getFsWriteConfig();
+  return {
+    ...writeConfig,
+    allowOnly: withSandboxTmpdirAllowWrite(writeConfig.allowOnly ?? []),
+  };
+}
+
 // ── Config file updaters (Node.js process — not OS-sandboxed) ─────────────────
 
 function getConfigPaths(cwd: string): {
@@ -943,7 +970,7 @@ function createSandboxedBashOps(
           allowLocalBinding: runtimeConfig?.network?.allowLocalBinding,
           allowMachLookup: runtimeConfig?.network?.allowMachLookup,
           readConfig: SandboxManager.getFsReadConfig(),
-          writeConfig: SandboxManager.getFsWriteConfig(),
+          writeConfig: getDirectSandboxWriteConfig(),
           allowPty: runtimeConfig?.allowPty,
           allowBrowserProcess: runtimeConfig?.allowBrowserProcess,
           allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
@@ -973,7 +1000,7 @@ function createSandboxedBashOps(
           httpProxyPort: needsNetworkRestriction ? SandboxManager.getProxyPort() : undefined,
           socksProxyPort: needsNetworkRestriction ? SandboxManager.getSocksProxyPort() : undefined,
           readConfig: SandboxManager.getFsReadConfig(),
-          writeConfig: SandboxManager.getFsWriteConfig(),
+          writeConfig: getDirectSandboxWriteConfig(),
           enableWeakerNestedSandbox: runtimeConfig?.enableWeakerNestedSandbox,
           allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
           ripgrepConfig: runtimeConfig?.ripgrep,
@@ -1037,10 +1064,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Effective config helpers ────────────────────────────────────────────────
-
-  function uniqueStrings(values: string[]): string[] {
-    return [...new Set(values)];
-  }
 
   function isReadOnlyWriteLocked(): boolean {
     return readOnlyWriteLocks.size > 0;
@@ -1176,11 +1199,18 @@ export default function (pi: ExtensionAPI) {
       allowBrowserProcess?: boolean;
     };
 
+    const sandboxTmpdir = getCanonicalSandboxTmpdir();
+    const filesystem = {
+      ...config.filesystem,
+      allowWrite: withSandboxTmpdirAllowWrite(config.filesystem?.allowWrite ?? []),
+    };
+
     await runWithWriteLockBypass(async () => {
+      mkdirSync(sandboxTmpdir, { recursive: true, mode: 0o700 });
       await SandboxManager.initialize(
         {
           network: config.network,
-          filesystem: config.filesystem,
+          filesystem,
           ignoreViolations: configExt.ignoreViolations,
           enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
           allowBrowserProcess: configExt.allowBrowserProcess,
@@ -1437,7 +1467,13 @@ export default function (pi: ExtensionAPI) {
         allowedDomains: [...(config.network?.allowedDomains ?? []), ...sessionAllowedDomains],
         deniedDomains: config.network?.deniedDomains ?? [],
       };
+      const sandboxTmpdir = getCanonicalSandboxTmpdir();
+      const allowWrite = withSandboxTmpdirAllowWrite([
+        ...(config.filesystem?.allowWrite ?? []),
+        ...(isReadOnlyWriteLocked() ? [] : sessionAllowedWritePaths),
+      ]);
       await runWithWriteLockBypass(async () => {
+        mkdirSync(sandboxTmpdir, { recursive: true, mode: 0o700 });
         await SandboxManager.reset();
         await SandboxManager.initialize(
           {
@@ -1446,10 +1482,7 @@ export default function (pi: ExtensionAPI) {
               ...config.filesystem,
               denyRead: config.filesystem?.denyRead ?? [],
               allowRead: [...(config.filesystem?.allowRead ?? []), ...sessionAllowedReadPaths],
-              allowWrite: [
-                ...(config.filesystem?.allowWrite ?? []),
-                ...(isReadOnlyWriteLocked() ? [] : sessionAllowedWritePaths),
-              ],
+              allowWrite: uniqueStrings(allowWrite),
               denyWrite: config.filesystem?.denyWrite ?? [],
             },
             allowBrowserProcess: configExt.allowBrowserProcess,

@@ -604,7 +604,7 @@ var require_shell_quote = __commonJS({
 // src/index.ts
 import { spawn as spawn5 } from "node:child_process";
 import fs7 from "node:fs";
-import { existsSync as existsSync5, mkdirSync, readFileSync as readFileSync2, realpathSync as realpathSync5, writeFileSync } from "node:fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync5, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { BlockList as BlockList2, isIP as isIP3 } from "node:net";
 import { homedir as homedir4 } from "node:os";
@@ -7634,14 +7634,36 @@ import * as fs6 from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import path4 from "node:path";
 
+// src/proxy-env.ts
+import { mkdirSync } from "node:fs";
+
 // src/proxy-env-filter.ts
 function omitNoProxyEnvVars(envVars) {
   return envVars.filter((envVar) => !envVar.toLowerCase().startsWith("no_proxy="));
 }
 
 // src/proxy-env.ts
+var DEFAULT_PI_SANDBOX_TMPDIR = "/tmp/pi-sandbox";
+function getSandboxTmpdir() {
+  return process.env.PI_SANDBOX_TMPDIR || DEFAULT_PI_SANDBOX_TMPDIR;
+}
+function ensureSandboxTmpdir() {
+  const tmpdir3 = getSandboxTmpdir();
+  mkdirSync(tmpdir3, { recursive: true, mode: 448 });
+  return tmpdir3;
+}
 function generateSandboxProxyEnvVars(httpProxyPort, socksProxyPort) {
-  return omitNoProxyEnvVars(generateProxyEnvVars(httpProxyPort, socksProxyPort));
+  const tmpdir3 = ensureSandboxTmpdir();
+  let sawTmpdir = false;
+  const envVars = omitNoProxyEnvVars(generateProxyEnvVars(httpProxyPort, socksProxyPort)).map(
+    (envVar) => {
+      if (!envVar.startsWith("TMPDIR=")) return envVar;
+      sawTmpdir = true;
+      return `TMPDIR=${tmpdir3}`;
+    }
+  );
+  if (!sawTmpdir) envVars.splice(1, 0, `TMPDIR=${tmpdir3}`);
+  return envVars;
 }
 
 // src/direct-linux-sandbox.ts
@@ -8713,20 +8735,25 @@ function startDirectMacSandboxLogMonitor(callback, ignoreViolations) {
 }
 
 // src/sandbox-violation-parser.ts
+function stripSandboxPathQuotes(pathText) {
+  const trimmed = pathText.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+function parseSingleSandboxPath(pathText) {
+  const path6 = stripSandboxPathQuotes(pathText);
+  return path6.startsWith("/") ? path6 : void 0;
+}
 function parseSandboxPaths(pathText) {
   const matches = pathText.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\/\S+/g) ?? [];
-  return matches.map((match) => {
-    const trimmed = match.trim();
-    if (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'")) {
-      return trimmed.slice(1, -1);
-    }
-    return trimmed;
-  }).filter((match) => match.startsWith("/"));
+  return matches.map(stripSandboxPathQuotes).filter((match) => match.startsWith("/"));
 }
 function parseSandboxFilesystemViolationLine(line) {
   const directMatch = line.match(/\bdeny(?:\(\d+\))?\s+(file-(read|write)[^\s]*)\s+(.+)$/);
   if (directMatch) {
-    const [path6] = parseSandboxPaths(directMatch[3]);
+    const path6 = parseSingleSandboxPath(directMatch[3]);
     if (!path6) return null;
     return { path: path6, access: directMatch[2] };
   }
@@ -8767,9 +8794,10 @@ var DEFAULT_CONFIG = {
     denyWrite: [".env", ".env.*", "*.pem", "*.key"]
   }
 };
+var LEGACY_SANDBOX_RUNTIME_TMPDIRS = ["/tmp/claude", "/private/tmp/claude"];
 var READ_ONLY_LOCK_DENY_WRITE_PATHS = [
-  "/tmp/claude",
-  "/private/tmp/claude",
+  getSandboxTmpdir(),
+  ...LEGACY_SANDBOX_RUNTIME_TMPDIRS,
   join4(homedir4(), ".npm", "_logs"),
   join4(homedir4(), ".claude", "debug")
 ];
@@ -8953,6 +8981,9 @@ function deepMerge(base, overrides) {
     extResult.allowBrowserProcess = extOverrides.allowBrowserProcess;
   }
   return result;
+}
+function uniqueStrings(values) {
+  return [...new Set(values)];
 }
 function shouldPromptForWrite(path6, allowWrite, matchesPattern2) {
   return allowWrite.length === 0 || !matchesPattern2(path6, allowWrite);
@@ -9151,6 +9182,22 @@ function matchesPattern(filePath, patterns) {
     return abs === absP || abs.startsWith(absP + sep);
   });
 }
+function getCanonicalSandboxTmpdir() {
+  return canonicalizePath(getSandboxTmpdir());
+}
+function withoutLegacySandboxTmpdirs(paths) {
+  return paths.filter((path6) => !matchesPattern(path6, LEGACY_SANDBOX_RUNTIME_TMPDIRS));
+}
+function withSandboxTmpdirAllowWrite(paths) {
+  return uniqueStrings([...withoutLegacySandboxTmpdirs(paths), getCanonicalSandboxTmpdir()]);
+}
+function getDirectSandboxWriteConfig() {
+  const writeConfig = SandboxManager.getFsWriteConfig();
+  return {
+    ...writeConfig,
+    allowOnly: withSandboxTmpdirAllowWrite(writeConfig.allowOnly ?? [])
+  };
+}
 function getConfigPaths(cwd) {
   return {
     globalPath: join4(homedir4(), ".pi", "agent", "sandbox.json"),
@@ -9167,7 +9214,7 @@ function readOrEmptyConfig(configPath) {
 }
 function writeConfigFile(configPath, config2) {
   runWithWriteLockBypass(() => {
-    mkdirSync(dirname5(configPath), { recursive: true });
+    mkdirSync2(dirname5(configPath), { recursive: true });
     writeFileSync(configPath, JSON.stringify(config2, null, 2) + "\n", "utf-8");
   });
 }
@@ -9300,7 +9347,7 @@ function createSandboxedBashOps(shellPath, fallback, isEnabled = () => SandboxMa
           allowLocalBinding: runtimeConfig?.network?.allowLocalBinding,
           allowMachLookup: runtimeConfig?.network?.allowMachLookup,
           readConfig: SandboxManager.getFsReadConfig(),
-          writeConfig: SandboxManager.getFsWriteConfig(),
+          writeConfig: getDirectSandboxWriteConfig(),
           allowPty: runtimeConfig?.allowPty,
           allowBrowserProcess: runtimeConfig?.allowBrowserProcess,
           allowGitConfig: runtimeConfig?.filesystem?.allowGitConfig,
@@ -9321,7 +9368,7 @@ function createSandboxedBashOps(shellPath, fallback, isEnabled = () => SandboxMa
           httpProxyPort: needsNetworkRestriction ? SandboxManager.getProxyPort() : void 0,
           socksProxyPort: needsNetworkRestriction ? SandboxManager.getSocksProxyPort() : void 0,
           readConfig: SandboxManager.getFsReadConfig(),
-          writeConfig: SandboxManager.getFsWriteConfig(),
+          writeConfig: getDirectSandboxWriteConfig(),
           enableWeakerNestedSandbox: runtimeConfig?.enableWeakerNestedSandbox,
           allowAllUnixSockets: runtimeConfig?.network?.allowAllUnixSockets,
           ripgrepConfig: runtimeConfig?.ripgrep,
@@ -9365,9 +9412,6 @@ function index_default(pi) {
     priority: -100,
     wrapOperations: (next) => createSandboxedBashOps(userShellPath, next, () => sandboxEnabled && sandboxInitialized)
   });
-  function uniqueStrings(values) {
-    return [...new Set(values)];
-  }
   function isReadOnlyWriteLocked() {
     return readOnlyWriteLocks.size > 0;
   }
@@ -9463,11 +9507,17 @@ function index_default(pi) {
   }
   async function initializeSandboxFromConfig(config2) {
     const configExt = config2;
+    const sandboxTmpdir = getCanonicalSandboxTmpdir();
+    const filesystem = {
+      ...config2.filesystem,
+      allowWrite: withSandboxTmpdirAllowWrite(config2.filesystem?.allowWrite ?? [])
+    };
     await runWithWriteLockBypass(async () => {
+      mkdirSync2(sandboxTmpdir, { recursive: true, mode: 448 });
       await SandboxManager.initialize(
         {
           network: config2.network,
-          filesystem: config2.filesystem,
+          filesystem,
           ignoreViolations: configExt.ignoreViolations,
           enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
           allowBrowserProcess: configExt.allowBrowserProcess,
@@ -9668,7 +9718,13 @@ function index_default(pi) {
         allowedDomains: [...config2.network?.allowedDomains ?? [], ...sessionAllowedDomains],
         deniedDomains: config2.network?.deniedDomains ?? []
       };
+      const sandboxTmpdir = getCanonicalSandboxTmpdir();
+      const allowWrite = withSandboxTmpdirAllowWrite([
+        ...config2.filesystem?.allowWrite ?? [],
+        ...isReadOnlyWriteLocked() ? [] : sessionAllowedWritePaths
+      ]);
       await runWithWriteLockBypass(async () => {
+        mkdirSync2(sandboxTmpdir, { recursive: true, mode: 448 });
         await SandboxManager.reset();
         await SandboxManager.initialize(
           {
@@ -9677,10 +9733,7 @@ function index_default(pi) {
               ...config2.filesystem,
               denyRead: config2.filesystem?.denyRead ?? [],
               allowRead: [...config2.filesystem?.allowRead ?? [], ...sessionAllowedReadPaths],
-              allowWrite: [
-                ...config2.filesystem?.allowWrite ?? [],
-                ...isReadOnlyWriteLocked() ? [] : sessionAllowedWritePaths
-              ],
+              allowWrite: uniqueStrings(allowWrite),
               denyWrite: config2.filesystem?.denyWrite ?? []
             },
             allowBrowserProcess: configExt.allowBrowserProcess,
@@ -10259,5 +10312,5 @@ Check denyWrite in:
 export {
   index_default as default,
   getReadBlockReason,
-  shouldPromptForWrite
+  uniqueStrings
 };
