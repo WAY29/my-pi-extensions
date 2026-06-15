@@ -25,12 +25,11 @@
  *   - domains: prompted if not whitelisted nor explicitly denied
  *   - direct write/edit tools: prompted if not whitelisted nor explicitly denied
  *   - bash writes: blocked by the OS sandbox, then prompted and retried when the blocked path can be detected
- *   - read: if allowRead is empty, only denyRead paths prompt; if allowRead has entries, reads outside allowRead prompt
+ *   - read: denyRead paths prompt unless allowRead explicitly re-allows a matching child path
  *
- * IMPORTANT — read policy:
- *   Read:  with denyRead only, denyRead is a blacklist and all other paths are allowed
- *   Read:  with both denyRead and allowRead, allowRead keeps the existing whitelist-style prompt behavior
- *   Write: denyWrite OVERRIDES allowWrite (most-specific deny wins)
+ * IMPORTANT — read/write policy:
+ *   Read:  allowRead OVERRIDES denyRead (specific allow exceptions inside denied read roots)
+ *   Write: denyWrite OVERRIDES allowWrite (specific deny exceptions inside allowed write roots)
  *
  * Config files (merged, project takes precedence):
  * - ~/.pi/agent/sandbox.json (global)
@@ -114,6 +113,7 @@ import {
   type SandboxFilesystemViolation,
 } from "./sandbox-violation-parser";
 import { getSandboxTmpdir } from "./proxy-env.ts";
+import { getReadBlockReason, type ReadBlockReason } from "./read-policy.ts";
 
 interface SandboxConfig extends SandboxRuntimeConfig {
   enabled?: boolean;
@@ -465,24 +465,6 @@ function shouldPromptForWrite(
 ): boolean {
   // Secure default: empty allowWrite means deny-all writes (prompt every path).
   return allowWrite.length === 0 || !matchesPattern(path, allowWrite);
-}
-
-type ReadBlockReason = "allowRead" | "denyRead";
-
-export function getReadBlockReason(
-  path: string,
-  denyRead: string[],
-  allowRead: string[],
-  sessionAllowRead: string[],
-  matchesPattern: (path: string, patterns: string[]) => boolean,
-): ReadBlockReason | null {
-  if (matchesPattern(path, sessionAllowRead)) return null;
-
-  if (allowRead.length > 0) {
-    return matchesPattern(path, allowRead) ? null : "allowRead";
-  }
-
-  return matchesPattern(path, denyRead) ? "denyRead" : null;
 }
 
 function normalizeNetworkHost(host: string): string {
@@ -1675,9 +1657,9 @@ export default function (pi: ExtensionAPI) {
   async function promptReadBlock(
     ctx: ExtensionContext,
     filePath: string,
-    reason: ReadBlockReason,
+    _reason: ReadBlockReason,
   ): Promise<FilesystemPermissionAction> {
-    const reasonText = reason === "denyRead" ? "is in denyRead" : "is not in allowRead";
+    const reasonText = "is in denyRead";
     return showPermissionPrompt(
       ctx,
       `📖 Read blocked: "${filePath}" ${reasonText}`,
@@ -1846,9 +1828,8 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Path policy: read tool.
-    //   - With configured allowRead entries, keep the existing whitelist-style prompt behavior.
-    //   - With denyRead only, treat denyRead as a blacklist and allow other paths silently.
-    //   - Session grants override either mode without changing the configured mode.
+    //   - denyRead is a blacklist and all other paths are allowed.
+    //   - allowRead and session grants re-allow specific children under denied roots.
     if (isToolCallEventType("read", event)) {
       const filePath = canonicalizePath(event.input.path);
       const readBlockReason = getReadBlockReason(

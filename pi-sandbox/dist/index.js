@@ -8769,6 +8769,13 @@ function parseSandboxFilesystemViolationLine(line) {
   };
 }
 
+// src/read-policy.ts
+function getReadBlockReason(path6, denyRead, allowRead, sessionAllowRead, matchesPattern2) {
+  if (matchesPattern2(path6, sessionAllowRead)) return null;
+  if (matchesPattern2(path6, allowRead)) return null;
+  return matchesPattern2(path6, denyRead) ? "denyRead" : null;
+}
+
 // src/index.ts
 var DEFAULT_CONFIG = {
   enabled: true,
@@ -8987,13 +8994,6 @@ function uniqueStrings(values) {
 }
 function shouldPromptForWrite(path6, allowWrite, matchesPattern2) {
   return allowWrite.length === 0 || !matchesPattern2(path6, allowWrite);
-}
-function getReadBlockReason(path6, denyRead, allowRead, sessionAllowRead, matchesPattern2) {
-  if (matchesPattern2(path6, sessionAllowRead)) return null;
-  if (allowRead.length > 0) {
-    return matchesPattern2(path6, allowRead) ? null : "allowRead";
-  }
-  return matchesPattern2(path6, denyRead) ? "denyRead" : null;
 }
 function normalizeNetworkHost(host) {
   const trimmed = host.trim().toLowerCase().replace(/\.$/, "");
@@ -9877,8 +9877,8 @@ function index_default(pi) {
       DOMAIN_PERMISSION_OPTIONS
     );
   }
-  async function promptReadBlock(ctx, filePath, reason) {
-    const reasonText = reason === "denyRead" ? "is in denyRead" : "is not in allowRead";
+  async function promptReadBlock(ctx, filePath, _reason) {
+    const reasonText = "is in denyRead";
     return showPermissionPrompt(
       ctx,
       `\u{1F4D6} Read blocked: "${filePath}" ${reasonText}`,
@@ -10311,6 +10311,5 @@ Check denyWrite in:
 }
 export {
   index_default as default,
-  getReadBlockReason,
   uniqueStrings
 };

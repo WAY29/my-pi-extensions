@@ -33,6 +33,9 @@ Copy it to `~/.pi/agent/sandbox.json`, then remove paths you do not use:
       "~/.aws",
       "~/.gnupg"
     ],
+    "allowRead": [
+      "~/.ssh/known_hosts"
+    ],
     "allowWrite": [
       ".",
       "/tmp",
@@ -70,32 +73,27 @@ Copy it to `~/.pi/agent/sandbox.json`, then remove paths you do not use:
 - `~/.pi/agent/pi-rewind` lets `pi-rewind` create recovery checkpoints.
 - `~/.local/pipx` and `~/Library/Logs/pipx` support `pipx` installs and logs.
 - `~/Library/Application Support` is broad but convenient for browser/app automation; prefer a narrower app-specific path when possible, such as `~/Library/Application Support/Google/Chrome`.
+- `~/.ssh/known_hosts` lets SSH-based Git verify hosts without allowing reads of private keys under `~/.ssh`.
 
 ## Read Policy Notes
 
-With only `denyRead`, reads are blacklist-based: everything is readable except the denied paths.
+Reads are blacklist-based by default: everything is readable except paths matching `denyRead`.
 
-If you add `allowRead`, reads become whitelist-like. In that mode, remember to include common read-only config/cache locations needed by your tools, for example:
+`allowRead` is an exception list inside denied read roots. Use it to re-allow specific safe files or subdirectories without opening the rest of a sensitive directory. For example, SSH-based Git can read host keys without exposing private keys:
 
 ```json
 {
   "filesystem": {
-    "denyRead": ["/Users"],
-    "allowRead": [
-      ".",
-      "~/.config",
-      "~/.cargo",
-      "~/.local",
-      "~/Library",
-      "~/.cache",
-      "/Applications/Google Chrome.app",
-      "/System/Volumes/Data/Applications/Google Chrome.app"
-    ]
+    "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
+    "allowRead": ["~/.ssh/known_hosts"]
   }
 }
 ```
 
-Use this stricter mode only when you are ready to grant read access for each toolchain or app that needs it.
+The read/write precedence is intentionally asymmetric:
+
+- Read: `allowRead` overrides `denyRead` for matching child paths.
+- Write: `denyWrite` overrides `allowWrite` for matching sensitive files.
 
 ## Safer Tuning Tips
 
