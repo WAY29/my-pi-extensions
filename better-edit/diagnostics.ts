@@ -14,6 +14,7 @@ export interface ValidatedEdit {
 export interface ValidatedEditInput {
 	path: string;
 	edits: ValidatedEdit[];
+	replaceAll?: boolean;
 }
 
 export interface PreparedArgumentsWithWarnings {
@@ -28,7 +29,7 @@ interface EditAnalysis {
 	lineSpan: number;
 }
 
-const TOP_LEVEL_CANONICAL_KEYS = new Set(["path", "edits"]);
+const TOP_LEVEL_CANONICAL_KEYS = new Set(["path", "edits", "replaceAll"]);
 const TOP_LEVEL_COMPATIBILITY_KEYS = new Set([
 	"file_path",
 	"oldText",
@@ -41,6 +42,9 @@ const TOP_LEVEL_COMPATIBILITY_KEYS = new Set([
 	"replace",
 	"replaceText",
 	"replacement",
+	"replace_all",
+	"allOccurrences",
+	"all_occurrences",
 ]);
 const EDIT_CANONICAL_KEYS = new Set(["oldText", "newText"]);
 const EDIT_COMPATIBILITY_KEYS = new Set(["old_text", "new_text", "search", "findText", "match", "replace", "replaceText", "replacement"]);
@@ -48,6 +52,13 @@ const EDIT_COMPATIBILITY_KEYS = new Set(["old_text", "new_text", "search", "find
 function firstDefinedString(...values: unknown[]): string | undefined {
 	for (const value of values) {
 		if (typeof value === "string") return value;
+	}
+	return undefined;
+}
+
+function firstDefinedBoolean(...values: unknown[]): boolean | undefined {
+	for (const value of values) {
+		if (typeof value === "boolean") return value;
 	}
 	return undefined;
 }
@@ -74,7 +85,7 @@ function collectPreparationWarnings(record: Record<string, unknown>, parsedEdits
 	const warnings: string[] = [];
 	const compatibilityKeys = Object.keys(record).filter((key) => TOP_LEVEL_COMPATIBILITY_KEYS.has(key));
 	if (compatibilityKeys.length > 0) {
-		warnings.push(`Use only the canonical top-level shape next time: { path, edits }. Avoid compatibility keys like ${compatibilityKeys.join(", ")}.`);
+		warnings.push(`Use only the canonical top-level shape next time: { path, edits, replaceAll? }. Avoid compatibility keys like ${compatibilityKeys.join(", ")}.`);
 	}
 
 	const topLevelUnexpected = listUnexpectedKeys(record, TOP_LEVEL_CANONICAL_KEYS, TOP_LEVEL_COMPATIBILITY_KEYS);
@@ -119,6 +130,7 @@ export function prepareAdvisedEditArgumentsWithWarnings(input: unknown): Prepare
 
 	const record = input as Record<string, unknown>;
 	const path = firstDefinedString(record.path, record.file_path);
+	const replaceAll = firstDefinedBoolean(record.replaceAll, record.replace_all, record.allOccurrences, record.all_occurrences);
 	const parsedEdits = parseEditsInput(record.edits);
 	const edits = sanitizeEditRecords(parsedEdits) ?? [];
 	const warnings = collectPreparationWarnings(record, parsedEdits);
@@ -131,6 +143,7 @@ export function prepareAdvisedEditArgumentsWithWarnings(input: unknown): Prepare
 	return {
 		prepared: {
 			...(path !== undefined ? { path } : {}),
+			...(replaceAll ? { replaceAll } : {}),
 			...(parsedEdits !== undefined || edits.length > 0 ? { edits } : {}),
 		},
 		warnings,
@@ -162,6 +175,7 @@ export function buildValidationAdvice(path: string | undefined, issues: string[]
 export function validateAdvisedEditInput(input: unknown): ValidatedEditInput {
 	const record = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
 	const path = typeof record.path === "string" ? record.path : undefined;
+	const replaceAll = record.replaceAll === true;
 	const edits = Array.isArray(record.edits) ? record.edits : undefined;
 	const issues: string[] = [];
 
@@ -200,7 +214,7 @@ export function validateAdvisedEditInput(input: unknown): ValidatedEditInput {
 		throw new Error(buildValidationAdvice(path, issues));
 	}
 
-	return { path, edits: validatedEdits };
+	return { path, ...(replaceAll ? { replaceAll } : {}), edits: validatedEdits };
 }
 
 function normalizeToLF(text: string): string {
@@ -322,6 +336,7 @@ function buildDuplicateAdvice(path: string, editIndex: number, analysis: EditAna
 	const lines = analysis.exactLines.length > 0 ? analysis.exactLines : analysis.fuzzyLines.length > 0 ? analysis.fuzzyLines : analysis.aggressiveLines;
 	const bullets = [
 		`${path} contains multiple matches for edits[${editIndex}].oldText around lines ${formatLineRanges(lines, analysis.lineSpan)}.`,
+		`If every match should change, retry with top-level replaceAll: true to replace all occurrences in this file.`,
 		`Expand edits[${editIndex}].oldText with one or two unique surrounding lines so it matches exactly one region.`,
 	];
 	const readAdvice = buildReadAdvice(path, lines, analysis.lineSpan);

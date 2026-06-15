@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	createEditToolDefinition,
 	getAgentDir,
@@ -10,7 +11,6 @@ import {
 import { Type } from "typebox";
 import {
 	buildAdvisedEditErrorMessage,
-	prepareAdvisedEditArguments,
 	prepareAdvisedEditArgumentsWithWarnings,
 	validateAdvisedEditInput,
 	type ValidatedEditInput,
@@ -165,6 +165,194 @@ function stripHiddenWarningsFromResult(
 	};
 }
 
+function normalizeToLF(text: string): string {
+	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function detectLineEnding(content: string): "\r\n" | "\n" {
+	const crlfIndex = content.indexOf("\r\n");
+	const lfIndex = content.indexOf("\n");
+	if (lfIndex === -1 || crlfIndex === -1) return "\n";
+	return crlfIndex < lfIndex ? "\r\n" : "\n";
+}
+
+function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
+	return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
+}
+
+function stripBom(content: string): { bom: string; text: string } {
+	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
+}
+
+function resolveToCwd(filePath: string, cwd: string): string {
+	const withoutAtPrefix = filePath.startsWith("@") ? filePath.slice(1) : filePath;
+	const expandedPath = withoutAtPrefix === "~" ? homedir() : withoutAtPrefix.startsWith("~/") ? join(homedir(), withoutAtPrefix.slice(2)) : withoutAtPrefix;
+	return isAbsolute(expandedPath) ? expandedPath : resolve(cwd, expandedPath);
+}
+
+function findAllOccurrenceIndexes(haystack: string, needle: string): number[] {
+	if (!needle) return [];
+	const indexes: number[] = [];
+	let start = 0;
+	while (start <= haystack.length - needle.length) {
+		const index = haystack.indexOf(needle, start);
+		if (index === -1) break;
+		indexes.push(index);
+		start = index + Math.max(1, needle.length);
+	}
+	return indexes;
+}
+
+function getNotFoundError(input: ValidatedEditInput, editIndex: number): Error {
+	if (input.edits.length === 1) {
+		return new Error(`Could not find the exact text in ${input.path}. The old text must match exactly including all whitespace and newlines.`);
+	}
+	return new Error(`Could not find edits[${editIndex}] in ${input.path}. The oldText must match exactly including all whitespace and newlines.`);
+}
+
+interface ReplaceAllMutationResult {
+	rawContent: string;
+	content: string;
+	newContent: string;
+	occurrences: number;
+	originalEnding: "\r\n" | "\n";
+}
+
+function applyReplaceAllToNormalizedContent(normalizedContent: string, input: ValidatedEditInput): { newContent: string; occurrences: number } {
+	const normalizedEdits = input.edits.map((edit) => ({
+		oldText: normalizeToLF(edit.oldText),
+		newText: normalizeToLF(edit.newText),
+	}));
+	const matchedEdits: Array<{ editIndex: number; matchIndex: number; matchLength: number; newText: string }> = [];
+
+	for (let editIndex = 0; editIndex < normalizedEdits.length; editIndex += 1) {
+		const edit = normalizedEdits[editIndex]!;
+		if (edit.oldText.length === 0) {
+			throw new Error(
+				input.edits.length === 1
+					? `oldText must not be empty in ${input.path}.`
+					: `edits[${editIndex}].oldText must not be empty in ${input.path}.`,
+			);
+		}
+
+		const indexes = findAllOccurrenceIndexes(normalizedContent, edit.oldText);
+		if (indexes.length === 0) throw getNotFoundError(input, editIndex);
+		for (const matchIndex of indexes) {
+			matchedEdits.push({ editIndex, matchIndex, matchLength: edit.oldText.length, newText: edit.newText });
+		}
+	}
+
+	matchedEdits.sort((left, right) => left.matchIndex - right.matchIndex || left.editIndex - right.editIndex);
+	for (let index = 1; index < matchedEdits.length; index += 1) {
+		const previous = matchedEdits[index - 1]!;
+		const current = matchedEdits[index]!;
+		if (previous.matchIndex + previous.matchLength > current.matchIndex) {
+			throw new Error(`edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${input.path}. Merge them into one edit or target disjoint regions.`);
+		}
+	}
+
+	let newContent = normalizedContent;
+	for (let index = matchedEdits.length - 1; index >= 0; index -= 1) {
+		const edit = matchedEdits[index]!;
+		newContent = newContent.slice(0, edit.matchIndex) + edit.newText + newContent.slice(edit.matchIndex + edit.matchLength);
+	}
+	if (newContent === normalizedContent) {
+		throw new Error(
+			input.edits.length === 1
+				? `No changes made to ${input.path}. The replacement produced identical content.`
+				: `No changes made to ${input.path}. The replacements produced identical content.`,
+		);
+	}
+
+	return { newContent, occurrences: matchedEdits.length };
+}
+
+function formatFileError(path: string, error: unknown): Error {
+	const errorMessage = error instanceof Error && "code" in error ? `Error code: ${(error as Error & { code: unknown }).code}` : String(error);
+	return new Error(`Could not edit file: ${path}. ${errorMessage}.`);
+}
+
+async function mutateReplaceAll(input: ValidatedEditInput, signal: AbortSignal | undefined, ctx: ExtensionContext): Promise<ReplaceAllMutationResult> {
+	const absolutePath = resolveToCwd(input.path, ctx.cwd);
+	return withFileMutationQueue(absolutePath, async () => {
+		const throwIfAborted = () => {
+			if (signal?.aborted) throw new Error("Operation aborted");
+		};
+
+		throwIfAborted();
+		let rawContent: string;
+		try {
+			rawContent = await readFile(absolutePath, "utf8");
+		} catch (error) {
+			throw formatFileError(input.path, error);
+		}
+		throwIfAborted();
+
+		const { bom, text: content } = stripBom(rawContent);
+		const originalEnding = detectLineEnding(content);
+		const baseContent = normalizeToLF(content);
+		const { newContent, occurrences } = applyReplaceAllToNormalizedContent(baseContent, input);
+		await writeFile(absolutePath, bom + restoreLineEndings(newContent, originalEnding), "utf8");
+		throwIfAborted();
+		return { rawContent, content, newContent, occurrences, originalEnding };
+	});
+}
+
+async function buildBuiltinReplaceAllResult(
+	toolCallId: string,
+	input: ValidatedEditInput,
+	mutation: ReplaceAllMutationResult,
+	signal: AbortSignal | undefined,
+	onUpdate: unknown,
+	ctx: ExtensionContext,
+) {
+	const inMemoryBase = createEditToolDefinition(ctx.cwd, {
+		operations: {
+			access: async () => undefined,
+			readFile: async () => Buffer.from(mutation.rawContent, "utf8"),
+			writeFile: async () => undefined,
+		},
+	});
+	const result = await inMemoryBase.execute(
+		toolCallId,
+		{
+			path: input.path,
+			edits: [{ oldText: mutation.content, newText: restoreLineEndings(mutation.newContent, mutation.originalEnding) }],
+		},
+		signal,
+		onUpdate as never,
+		ctx,
+	);
+	const firstTextIndex = result.content.findIndex((item) => item.type === "text");
+	if (firstTextIndex === -1) return result;
+	const nextContent = [...result.content];
+	nextContent[firstTextIndex] = {
+		...nextContent[firstTextIndex]!,
+		text: `Successfully replaced ${mutation.occurrences} occurrence(s) across ${input.edits.length} edit(s) in ${input.path}.`,
+	};
+	return { ...result, content: nextContent };
+}
+
+async function executeReplaceAll(
+	toolCallId: string,
+	input: ValidatedEditInput,
+	signal: AbortSignal | undefined,
+	onUpdate: unknown,
+	ctx: ExtensionContext,
+) {
+	const mutation = await mutateReplaceAll(input, signal, ctx);
+	return buildBuiltinReplaceAllResult(toolCallId, input, mutation, signal, onUpdate, ctx);
+}
+
+function buildRenderCallArgs(args: unknown): unknown {
+	try {
+		const input = validateAdvisedEditInput(args);
+		return input.replaceAll ? { path: input.path } : args;
+	} catch {
+		return args;
+	}
+}
+
 const replaceEditSchema = Type.Object({
 	oldText: Type.Optional(
 		Type.String({
@@ -177,6 +365,11 @@ const replaceEditSchema = Type.Object({
 const advisedEditSchema = Type.Object(
 	{
 		path: Type.Optional(Type.String({ description: "Path to the file to edit (required; relative or absolute)." })),
+		replaceAll: Type.Optional(
+			Type.Boolean({
+				description: "When true, each oldText is replaced at every exact occurrence in the file. Default false keeps oldText uniqueness checks.",
+			}),
+		),
 		edits: Type.Optional(
 			Type.Array(replaceEditSchema, {
 				description:
@@ -210,6 +403,7 @@ export function createBetterEditToolDefinition(cwd: string) {
 		promptGuidelines: [
 			...(base.promptGuidelines ?? []),
 			"When edit fails, follow the advised read/retry steps and refine oldText instead of falling back to write.",
+			"Use edit replaceAll: true only when every exact occurrence of oldText in that file should be replaced.",
 		],
 		parameters: advisedEditSchema,
 		renderShell: base.renderShell,
@@ -229,7 +423,9 @@ export function createBetterEditToolDefinition(cwd: string) {
 			if (warningKey) preparationWarnings.delete(warningKey);
 			const currentBase = getBaseEditDefinition(ctx.cwd);
 			try {
-				const result = await currentBase.execute(toolCallId, validated, signal, onUpdate as never, ctx);
+				const result = validated.replaceAll
+					? await executeReplaceAll(toolCallId, validated, signal, onUpdate, ctx)
+					: await currentBase.execute(toolCallId, validated, signal, onUpdate as never, ctx);
 				return appendHiddenWarningsToContent(result, hiddenWarnings);
 			} catch (error) {
 				await logExecutionError({
@@ -245,7 +441,7 @@ export function createBetterEditToolDefinition(cwd: string) {
 		},
 		renderCall(args: unknown, theme: unknown, context: unknown) {
 			const currentCwd = typeof (context as { cwd?: unknown } | undefined)?.cwd === "string" ? ((context as { cwd: string }).cwd) : cwd;
-			return getBaseEditDefinition(currentCwd).renderCall?.(args as never, theme as never, context as never);
+			return getBaseEditDefinition(currentCwd).renderCall?.(buildRenderCallArgs(args) as never, theme as never, context as never);
 		},
 		renderResult(result: unknown, options: unknown, theme: unknown, context: unknown) {
 			const currentCwd = typeof (context as { cwd?: unknown } | undefined)?.cwd === "string" ? ((context as { cwd: string }).cwd) : cwd;

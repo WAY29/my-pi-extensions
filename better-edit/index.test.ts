@@ -8,7 +8,7 @@ import {
 	validateAdvisedEditInput,
 } from "./diagnostics.ts";
 
-function createBaseEditDefinitionMock() {
+function createBaseEditDefinitionMock(cwd = process.cwd(), options?: { operations?: { readFile: (path: string) => Promise<Buffer>; writeFile: (path: string, content: string) => Promise<void>; access: (path: string) => Promise<void> } }) {
 	return {
 		label: "edit",
 		description: "mock edit",
@@ -17,7 +17,9 @@ function createBaseEditDefinitionMock() {
 		renderShell: "self" as const,
 		async execute(_toolCallId: string, input: { path: string; edits: Array<{ oldText: string; newText: string }> }) {
 			const { path, edits } = input;
-			const content = await Bun.file(path).text().catch(async () => Bun.file(join(process.cwd(), path)).text());
+			const targetPath = existsSync(path) ? path : join(cwd, path);
+			await options?.operations?.access(targetPath);
+			const content = options?.operations ? (await options.operations.readFile(targetPath)).toString("utf8") : await Bun.file(targetPath).text();
 			const target = edits[0];
 			if (!target) throw new Error(`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`);
 			const occurrences = content.split(target.oldText).length - 1;
@@ -27,13 +29,15 @@ function createBaseEditDefinitionMock() {
 			if (occurrences === 0) {
 				throw new Error(`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`);
 			}
+			if (options?.operations) await options.operations.writeFile(targetPath, content.replace(target.oldText, target.newText));
+			else writeFileSync(targetPath, content.replace(target.oldText, target.newText), "utf8");
 			return {
 				content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${path}.` }],
 				details: { diff: "", patch: "" },
 			};
 		},
-		renderCall() {
-			return undefined;
+		renderCall(args: unknown) {
+			return args;
 		},
 		renderResult(result: { content?: Array<{ type: string; text?: string }> }) {
 			return result;
@@ -43,7 +47,7 @@ function createBaseEditDefinitionMock() {
 
 async function loadBetterEditModule(options?: { failMutationQueue?: boolean }) {
 	mock.module("@earendil-works/pi-coding-agent", () => ({
-		createEditToolDefinition: () => createBaseEditDefinitionMock(),
+		createEditToolDefinition: (cwd?: string, editOptions?: { operations?: { readFile: (path: string) => Promise<Buffer>; writeFile: (path: string, content: string) => Promise<void>; access: (path: string) => Promise<void> } }) => createBaseEditDefinitionMock(cwd, editOptions),
 		getAgentDir: () => "/tmp/pi-agent",
 		withFileMutationQueue: async (_path: string, fn: () => Promise<unknown>) => {
 			if (options?.failMutationQueue) throw new Error("queue failed");
@@ -55,6 +59,7 @@ async function loadBetterEditModule(options?: { failMutationQueue?: boolean }) {
 			Object: (value: unknown) => value,
 			Optional: (value: unknown) => value,
 			String: (value: unknown) => value,
+			Boolean: (value: unknown) => value,
 			Array: (value: unknown) => value,
 		},
 	}));
@@ -84,6 +89,20 @@ describe("prepareAdvisedEditArguments", () => {
 				{ oldText: "before", newText: "after" },
 				{ oldText: "legacy old", newText: "legacy new" },
 			],
+		});
+	});
+
+	test("preserves explicit replaceAll for bulk replacements", () => {
+		const prepared = prepareAdvisedEditArguments({
+			path: "sample.ts",
+			replace_all: true,
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+
+		expect(prepared).toEqual({
+			path: "sample.ts",
+			replaceAll: true,
+			edits: [{ oldText: "before", newText: "after" }],
 		});
 	});
 
@@ -124,6 +143,21 @@ describe("prepareAdvisedEditArguments", () => {
 			expect.stringContaining("Ignored extra keys in edits[0]: foo"),
 		]);
 	});
+
+	test("warns when using replaceAll compatibility aliases", () => {
+		const prepared = prepareAdvisedEditArgumentsWithWarnings({
+			path: "sample.ts",
+			allOccurrences: true,
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+
+		expect(prepared.prepared).toEqual({
+			path: "sample.ts",
+			replaceAll: true,
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+		expect(prepared.warnings).toContainEqual(expect.stringContaining("replaceAll"));
+	});
 });
 
 describe("validateAdvisedEditInput", () => {
@@ -150,6 +184,20 @@ describe("validateAdvisedEditInput", () => {
 
 		expect(validateAdvisedEditInput(prepared)).toEqual({
 			path: "sample.ts",
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+	});
+
+	test("accepts explicit replaceAll", () => {
+		expect(
+			validateAdvisedEditInput({
+				path: "sample.ts",
+				replaceAll: true,
+				edits: [{ oldText: "before", newText: "after" }],
+			}),
+		).toEqual({
+			path: "sample.ts",
+			replaceAll: true,
 			edits: [{ oldText: "before", newText: "after" }],
 		});
 	});
@@ -199,6 +247,32 @@ describe("createBetterEditToolDefinition", () => {
 		}
 	});
 
+	test("replaces every exact match when replaceAll is explicit", async () => {
+		const { createBetterEditToolDefinition } = await loadBetterEditModule();
+		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(workspace);
+			const path = join(workspace, "sample.ts");
+			writeFileSync(path, ["const a = callOld();", "const b = callOld();", ""].join("\n"), "utf8");
+			const tool = createBetterEditToolDefinition(workspace);
+
+			const result = await tool.execute(
+				"call-all",
+				{ path: "sample.ts", replaceAll: true, edits: [{ oldText: "callOld()", newText: "callNew()" }] },
+				undefined,
+				undefined,
+				{ cwd: workspace } as never,
+			);
+
+			expect(readFileSync(path, "utf8")).toBe(["const a = callNew();", "const b = callNew();", ""].join("\n"));
+			expect(result.content.find((item) => item.type === "text")?.text).toContain("Successfully replaced 2 occurrence(s)");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(workspace, { recursive: true, force: true });
+		}
+	});
+
 	test("reports likely indentation mismatches with candidate lines", async () => {
 			const { createBetterEditToolDefinition } = await loadBetterEditModule();
 		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
@@ -225,6 +299,25 @@ describe("createBetterEditToolDefinition", () => {
 					{ cwd: workspace } as never,
 				),
 			).rejects.toThrow(/lines 1-3/);
+		} finally {
+			rmSync(workspace, { recursive: true, force: true });
+		}
+	});
+
+	test("does not pass full-file preview args for replaceAll render calls", async () => {
+		const { createBetterEditToolDefinition } = await loadBetterEditModule();
+		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
+		try {
+			writeFileSync(join(workspace, "sample.ts"), ["callOld();", "callOld();", ""].join("\n"), "utf8");
+			const tool = createBetterEditToolDefinition(workspace);
+
+			const rendered = tool.renderCall?.(
+				{ path: "sample.ts", replaceAll: true, edits: [{ oldText: "callOld()", newText: "callNew()" }] },
+				{} as never,
+				{ cwd: workspace } as never,
+			) as { path?: string; edits?: unknown[] } | undefined;
+
+			expect(rendered).toEqual({ path: "sample.ts" });
 		} finally {
 			rmSync(workspace, { recursive: true, force: true });
 		}
