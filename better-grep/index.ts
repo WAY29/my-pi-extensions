@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+
+import { ensureGrepToolRegistered, registerGrepToolPlugin, releaseGrepToolOwner, type GrepToolDefinition } from "../grep-tool-coordinator";
 
 interface GrepInput {
 	pattern: string;
@@ -93,9 +94,7 @@ export function appendLiteralRetryNotice(result: ToolResultLike, pattern: string
 	};
 }
 
-export function createBetterGrepToolDefinition(cwd: string) {
-	const baseDefinition = createGrepToolDefinition(cwd);
-
+export function createBetterGrepToolDefinition(baseDefinition: GrepToolDefinition): GrepToolDefinition {
 	return {
 		...baseDefinition,
 		label: "grep",
@@ -105,12 +104,11 @@ export function createBetterGrepToolDefinition(cwd: string) {
 		parameters: grepSchema,
 
 		async execute(toolCallId, params: GrepInput, signal, onUpdate, ctx) {
-			const activeDefinition = createGrepToolDefinition(ctx.cwd);
 			try {
-				return await activeDefinition.execute(toolCallId, params, signal, onUpdate, ctx);
+				return await baseDefinition.execute(toolCallId, params, signal, onUpdate, ctx);
 			} catch (error) {
 				if (!shouldRetryAsLiteral(params, error)) throw error;
-				const retryResult = await activeDefinition.execute(toolCallId, { ...params, literal: true }, signal, onUpdate, ctx);
+				const retryResult = await baseDefinition.execute(toolCallId, { ...params, literal: true }, signal, onUpdate, ctx);
 				return appendLiteralRetryNotice(retryResult as ToolResultLike, params.pattern, error);
 			}
 		},
@@ -118,5 +116,17 @@ export function createBetterGrepToolDefinition(cwd: string) {
 }
 
 export default function betterGrep(pi: ExtensionAPI) {
-	pi.registerTool(createBetterGrepToolDefinition(process.cwd()));
+	registerGrepToolPlugin(pi, {
+		id: "better-grep",
+		priority: -10,
+		wrapDefinition: createBetterGrepToolDefinition,
+	});
+
+	pi.on("session_start", (_event, ctx) => {
+		ensureGrepToolRegistered(pi, ctx.cwd);
+	});
+
+	pi.on("session_shutdown", () => {
+		releaseGrepToolOwner(pi);
+	});
 }

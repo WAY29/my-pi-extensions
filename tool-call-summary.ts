@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	ToolExecutionComponent,
 	createFindToolDefinition,
-	createGrepToolDefinition,
 	createLsToolDefinition,
 	createReadToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -15,6 +14,13 @@ import {
 	registerBashToolPlugin,
 	releaseBashToolOwner,
 } from "./bash-tool-coordinator";
+import {
+	ensureGrepToolRegistered,
+	refreshGrepTool,
+	registerGrepToolPlugin,
+	releaseGrepToolOwner,
+	type GrepToolDefinition,
+} from "./grep-tool-coordinator";
 import {
 	activateToolOutputMode,
 	deactivateToolOutputMode,
@@ -122,7 +128,7 @@ type RenderPatchState = {
 type GroupedToolDefinition =
 	| ReturnType<typeof createReadToolDefinition>
 	| ReturnType<typeof createFindToolDefinition>
-	| ReturnType<typeof createGrepToolDefinition>
+	| GrepToolDefinition
 	| ReturnType<typeof createLsToolDefinition>;
 
 function isTargetToolName(value: unknown): value is TargetToolName {
@@ -360,6 +366,7 @@ function refreshToolRows(ctx: {
 	};
 }): void {
 	refreshBashTool();
+	refreshGrepTool();
 	ctx.ui.setToolsExpanded(ctx.ui.getToolsExpanded());
 }
 
@@ -686,8 +693,8 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		return Boolean(call && call.leaderId !== candidate.toolCallId);
 	}
 
-	function registerGroupedTool(toolName: TargetToolName, definition: GroupedToolDefinition) {
-		pi.registerTool({
+	function wrapGroupedTool(toolName: TargetToolName, definition: GroupedToolDefinition): GroupedToolDefinition {
+		return {
 			...definition,
 			renderShell: "self",
 			renderCall(args: unknown, theme: SummaryTheme, context: { lastComponent?: unknown; toolCallId: string }) {
@@ -706,7 +713,11 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			renderResult() {
 				return new Container();
 			},
-		});
+		};
+	}
+
+	function registerGroupedTool(toolName: Exclude<TargetToolName, "grep">, definition: GroupedToolDefinition) {
+		pi.registerTool(wrapGroupedTool(toolName, definition));
 	}
 
 	const patchState = installGroupedRenderPatch(isHiddenGroupedComponent);
@@ -718,6 +729,11 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			if (outputMode === "hidden") return new Container();
 			return next(result, { ...options, expanded: outputMode === "full" }, theme, context);
 		},
+	});
+
+	registerGrepToolPlugin(pi, {
+		id: "tool-call-summary",
+		wrapDefinition: (definition) => wrapGroupedTool("grep", definition) as GrepToolDefinition,
 	});
 
 	for (const shortcut of SHORTCUTS) {
@@ -745,9 +761,9 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		activateToolOutputMode();
 		setStatus(ctx);
 		ensureBashToolRegistered(pi, ctx.cwd);
+		ensureGrepToolRegistered(pi, ctx.cwd);
 		registerGroupedTool("read", createReadToolDefinition(ctx.cwd));
 		registerGroupedTool("find", createFindToolDefinition(ctx.cwd));
-		registerGroupedTool("grep", createGrepToolDefinition(ctx.cwd));
 		registerGroupedTool("ls", createLsToolDefinition(ctx.cwd));
 		rebuildStateFromSession(ctx);
 	});
@@ -796,6 +812,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			patchState.shouldHide = undefined;
 		}
 		releaseBashToolOwner(pi);
+		releaseGrepToolOwner(pi);
 		deactivateToolOutputMode();
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});

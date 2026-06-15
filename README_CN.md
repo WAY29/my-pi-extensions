@@ -66,6 +66,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `tool-call-summary.ts` | UI/工具渲染器 | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | 合并旧的 `hide-read-output.ts` 和 `tool-output-mode.ts` 行为。把连续的 `read`、`find`、`grep`、`ls` 调用分组成树状摘要，支持 `hidden` / `compact` / `full` 显示模式，并通过共享状态保持 `bash` 与 Semble 输出模式切换一致。 |
 | `tool-output-mode-state.ts` | 辅助模块 | 自动 | 为 `tool-call-summary.ts`、`semble-tools.ts` 和其它需要读取当前工具输出显示模式的扩展提供共享全局状态 helper。它本身刻意不提供可见 UI。 |
 | `bash-tool-coordinator.ts` | 辅助模块 | 自动 | 为需要包装 `bash` 工具的扩展提供共享组合层。它本身刻意不提供可见 UI。 |
+| `grep-tool-coordinator.ts` | 辅助模块 | 自动 | 为需要包装 `grep` 工具的扩展提供共享组合层，让 `better-grep/` 和 `tool-call-summary.ts` 可以协作而不是互相覆盖。 |
 | `semble-tools.ts` | 语义搜索工具 | `/semble`, `semble_search`, `semble_find_related` | 增加基于 Semble 的仓库语义搜索工具。当系统里没有 `semble` CLI 时该扩展完全不生效；默认全局关闭，可通过 `/semble` 开关启用或禁用。 |
 | `code-block-enhancer.ts` | UI patch + 命令/快捷键 | 自动、`/copy-code`, `Ctrl+Alt+C` | 合并原代码 fence 隐藏和复制代码扩展。将 fenced code block 渲染为带边框和编号的区块，并支持按编号、全部复制或保留 markdown fence 复制最近的 assistant 代码块。 |
 | `effort.ts` | 命令 | `/effort` | 快速切换或循环 pi 的思考级别：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`。 |
@@ -99,8 +100,8 @@ pi 只有一个名为 `bash` 的活动工具。如果多个扩展各自独立替
 - `pi-sandbox/` 注册一个高优先级的 bash operations 包装器。沙箱启用并初始化后，bash 命令会走沙箱后端；否则回退到下一个 bash 实现。
 - `sudo-auth.ts` 注册一个较低优先级的 bash operations 包装器，在沙箱 bash 未接管时注入 sudo askpass 环境。
 - `tool-call-summary.ts` 注册一个 bash 结果渲染包装器。它可以隐藏、压缩或完整展开 bash 输出，同时保留底层的沙箱行为。
-- `tool-call-summary.ts` 也会直接处理 `read`、`grep`、`find`、`ls` 以及共享的 Semble 输出状态，并将文件类工具调用分组为树状摘要，因为这些都是独立工具，不经过 bash coordinator。
-- `bash-tool-coordinator.ts` 必须保持在仓库顶层。它不注册面向用户的命令，但仍需要随仓库一起复制。
+- `tool-call-summary.ts` 也会直接处理 `read`、`find`、`ls` 以及共享的 Semble 输出状态，并通过 `grep-tool-coordinator.ts` 处理 `grep`，从而和 `better-grep/` 共享同一个工具。
+- `bash-tool-coordinator.ts` 和 `grep-tool-coordinator.ts` 必须保持在仓库顶层。它们不注册面向用户的命令，但仍需要随仓库一起复制。
 
 ### 计划工作流：`plan-mode/` + `pi-sandbox/` + `pi-glance/`
 
@@ -177,7 +178,7 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 ## 备注
 
 - 根目录 `package.json` 通过 `pi.extensions` 声明 package 的扩展入口。新增或删除顶层扩展时需要同步更新。
-- `bash-tool-coordinator.ts` 是辅助模块，但仍列在 package manifest 中，以便 package 安装方式尽量贴近本地自动发现的扩展目录。
+- `bash-tool-coordinator.ts` 和 `grep-tool-coordinator.ts` 是辅助模块，但仍列在 package manifest 中，以便 package 安装方式尽量贴近本地自动发现的扩展目录。
 - `notify-hook/attention.ts` 也是辅助模块。它让多个扩展可以共享同一套临时“等待用户介入”信号，而不用重复实现事件名和 start/end 状态维护逻辑。
 - `notify-hook/adapters/superset.ts` 存放当前的 Superset 适配器。后续新增其它平台时，建议继续放在 `notify-hook/adapters/` 下，保持顶层扩展本身与具体平台解耦。
 - `pi-glance/` 和 `pi-sandbox/` 拥有自己的 `package.json`，也可能可以作为独立 pi 包使用。

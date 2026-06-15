@@ -66,6 +66,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `tool-call-summary.ts` | UI/tool renderer | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | Merges the old `hide-read-output.ts` and `tool-output-mode.ts` behavior. Groups consecutive `read`, `find`, `grep`, and `ls` calls into tree-style summaries, supports `hidden` / `compact` / `full` display modes, and keeps `bash` plus Semble output mode switching aligned through shared state. |
 | `tool-output-mode-state.ts` | helper | automatic | Shared global state helper for `tool-call-summary.ts`, `semble-tools.ts`, and other extensions that need to read the current tool-output display mode. It intentionally has no visible UI by itself. |
 | `bash-tool-coordinator.ts` | helper | automatic | Shared composition layer for extensions that need to wrap the `bash` tool. It intentionally has no visible UI by itself. |
+| `grep-tool-coordinator.ts` | helper | automatic | Shared composition layer for extensions that need to wrap the `grep` tool. It lets `better-grep/` and `tool-call-summary.ts` cooperate without clobbering each other. |
 | `semble-tools.ts` | semantic search tools | `/semble`, `semble_search`, `semble_find_related` | Adds Semble-powered repository semantic search tools. The extension is inert when the `semble` CLI is missing, starts globally disabled by default, and can be toggled on or off with `/semble`. |
 | `code-block-enhancer.ts` | UI patch + command/shortcut | automatic, `/copy-code`, `Ctrl+Alt+C` | Replaces the old code-fence hiding and copy-code extensions. Renders fenced code blocks as bordered, numbered blocks and copies recent assistant code blocks by number, all blocks, or with markdown fences. |
 | `effort.ts` | command | `/effort` | Quickly switches or cycles pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
@@ -99,8 +100,8 @@ Pi has a single active tool named `bash`. If several extensions independently re
 - `pi-sandbox/` registers a bash operations wrapper with high priority. When the sandbox is enabled and initialized, bash commands run through the sandboxed backend; otherwise they fall back to the next bash implementation.
 - `sudo-auth.ts` registers a lower-priority bash operations wrapper that injects a sudo askpass environment when sandboxed bash is not taking ownership.
 - `tool-call-summary.ts` registers a bash result-rendering wrapper. It can hide, compact, or fully expand bash output while preserving the sandbox behavior underneath.
-- `tool-call-summary.ts` also wraps `read`, `grep`, `find`, `ls`, and Semble-adjacent output state directly, grouping file-tool calls into tree-style summaries because those are separate tools and do not go through the bash coordinator.
-- `bash-tool-coordinator.ts` is intentionally top-level. Keep it copied with the repository even though it does not register a user-facing command.
+- `tool-call-summary.ts` also wraps `read`, `find`, `ls`, and Semble-adjacent output state directly, and uses `grep-tool-coordinator.ts` for `grep` so it can share the tool with `better-grep/`.
+- `bash-tool-coordinator.ts` and `grep-tool-coordinator.ts` are intentionally top-level. Keep them copied with the repository even though they do not register user-facing commands.
 
 ### Plan workflow: `plan-mode/` + `pi-sandbox/` + `pi-glance/`
 
@@ -177,7 +178,7 @@ Use `pretty-image-paste.ts` when pasting multiple screenshots or clipboard image
 ## Notes
 
 - The root `package.json` declares the package extension entries under `pi.extensions`. Keep it in sync when adding or removing top-level extensions.
-- `bash-tool-coordinator.ts` is a helper module, but it is still listed in the package manifest so package installs mirror the local auto-discovered extension directory.
+- `bash-tool-coordinator.ts` and `grep-tool-coordinator.ts` are helper modules, but they are still listed in the package manifest so package installs mirror the local auto-discovered extension directory.
 - `notify-hook/attention.ts` is also a helper module. It exists so multiple extensions can share the same temporary user-attention signaling without duplicating event-name and start/end bookkeeping logic.
 - `notify-hook/adapters/superset.ts` contains the current Superset-specific adapter. Keep platform-specific notification integrations under `notify-hook/adapters/` so the top-level extension stays backend-agnostic.
 - `pi-glance/` and `pi-sandbox/` have their own `package.json` files and may also be usable as standalone pi packages.

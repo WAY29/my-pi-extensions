@@ -29,6 +29,7 @@
       "./semble-tools.ts",
       "./tool-output-mode-state.ts",
       "./bash-tool-coordinator.ts",
+      "./grep-tool-coordinator.ts",
       "./code-block-enhancer.ts",
       "./effort.ts",
       "./builtin-tools.ts",
