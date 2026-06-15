@@ -24,6 +24,7 @@
       "./agent-browser/index.ts",
       "./codex-style-apply-patch/index.ts",
       "./better-edit/index.ts",
+      "./better-grep/index.ts",
       "./tool-call-summary.ts",
       "./semble-tools.ts",
       "./tool-output-mode-state.ts",
