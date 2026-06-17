@@ -66,16 +66,31 @@ type SandboxSetResponse = {
 };
 
 const TITLE_SYSTEM_PROMPT = [
-	"You generate a short session title for the user's first request.",
-	"Return a title phrase, not an answer, summary, explanation, or sentence addressed to the user.",
+	"Task: convert the user's first request into a session title.",
+	"This is a labeling task, not a chat task.",
+	"Return exactly one line containing only the final title.",
 	"Use the same language as the user.",
-	"Output exactly one line containing only the title.",
-	"Do not use Markdown, bullets, prefixes like Title:/标题：, quotes, or trailing punctuation.",
-	"Do not include filler such as 可以, 如何, 关于, 帮我, 请帮我, explain, answer, summary, or response unless they are essential inside a compact noun phrase.",
-	"Prefer a compact noun phrase that names the task or problem.",
+	"Write a compact title phrase, usually a noun phrase or topic phrase, not a sentence.",
+	"Never answer the request.",
+	"Never explain.",
+	"Never summarize in sentence form.",
+	"Never apologize, hedge, or talk about what you can or cannot see, know, access, verify, or find.",
+	"Never address the user.",
+	"Never give advice, instructions, or next steps.",
+	"For question-like requests, title the subject being asked about, not the answer.",
+	"Drop helper wording such as 帮我, 请帮我, 帮我看看, 看看, 想知道, 如何, 关于, explain, answer, summary, response, please, can you.",
+	"Do not use Markdown, bullets, numbering, prefixes like Title:/标题：, quotes, or trailing punctuation.",
+	"If unsure, output the shortest accurate topic phrase.",
 	"Maximum length: 64 visible characters.",
-	"Bad outputs: '你可以这样实现扩展标题生成功能', 'Here is a concise title for your request', '如何修改 pi-glance 标题生成逻辑'.",
-	"Good outputs: 'pi-glance 标题生成逻辑调整', '增加 gpt-5.4-mini 模型', 'Permission gate danger regex highlighting'.",
+	"Examples:",
+	"Request: 帮我看看现在连接用户数据库的IP端口和数据库名是多少",
+	"Title: 用户数据库连接信息",
+	"Request: 请帮我修改 pi-glance 标题生成逻辑",
+	"Title: pi-glance 标题生成逻辑调整",
+	"Request: 你可以这样实现扩展标题生成功能",
+	"Title: 扩展标题生成功能",
+	"Request: 连接用户数据库的 IP、端口和数据库名我这边看不到",
+	"Title: 用户数据库连接信息",
 ].join("\n");
 
 export default function piGlance(pi: ExtensionAPI): void {
@@ -466,10 +481,21 @@ export default function piGlance(pi: ExtensionAPI): void {
 			signal.addEventListener("abort", abort, { once: true });
 			timeout = setTimeout(abort, 8000);
 
-			const trimmedPrompt = prompt.slice(0, 4000);
+			const trimmedPrompt = prompt.slice(0, 4000).trim();
+			const titleRequest = [
+				"Convert the request inside <request> into a session title.",
+				"Return only the final title for the request inside <request>.",
+				"Example:",
+				"Request: 帮我看看现在连接用户数据库的IP端口和数据库名是多少",
+				"Title: 用户数据库连接信息",
+				"Now convert this request:",
+				"<request>",
+				trimmedPrompt,
+				"</request>",
+			].join("\n");
 			const userMessage: UserMessage = {
 				role: "user",
-				content: [{ type: "text", text: trimmedPrompt }],
+				content: [{ type: "text", text: titleRequest }],
 				timestamp: Date.now(),
 			};
 

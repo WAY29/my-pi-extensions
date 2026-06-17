@@ -30,6 +30,7 @@ assert.equal(sanitizeGeneratedTitle('"Fix login flow."', "fallback"), "Fix login
 assert.equal(sanitizeGeneratedTitle("\n# Update glance title rendering\n\nextra", "fallback"), "Update glance title rendering", "generated title should keep the first clean line");
 assert.equal(sanitizeGeneratedTitle("标题：修改 glance 标题显示", "fallback"), "修改 glance 标题显示", "generated title should drop common title prefixes");
 assert.equal(sanitizeGeneratedTitle("\x1b[31mColored generated title\x1b[0m", "fallback"), "Colored generated title", "title text should drop ANSI controls");
+assert.equal(sanitizeGeneratedTitle("升级 llama3.1 标题模型", "fallback"), "升级 llama3.1 标题模型", "title validation should allow dotted model ids");
 
 const fallback = fallbackTitleFromPrompt("请帮我修改 glance 扩展，第一次用户提问之后生成一个很长很长的标题用于测试截断");
 assert.equal(TITLE_MAX_WIDTH, 64, "title budget should allow longer generated titles");
