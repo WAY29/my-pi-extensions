@@ -290,8 +290,10 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 	let config = await loadConfig();
 	let codexStyleActive = false;
 	let previousToolNames: string[] | undefined;
+	let toolRegistered = false;
 
 	function syncTools(ctx: ExtensionContext): void {
+		if (config.enabled) ensureApplyPatchToolRegistered();
 		const activeTools = pi.getActiveTools();
 		if (shouldUseCodexStyle(ctx, config)) {
 			const next = enableCodexStyleTools(activeTools, previousToolNames);
@@ -311,122 +313,136 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 		}
 	}
 
-	pi.registerTool({
-		name: TOOL_NAME,
-		label: TOOL_NAME,
-		description: "Apply Codex-style patches using *** Begin Patch / *** End Patch with Add/Update/Delete File sections.",
-		promptSnippet: "Apply file edits with a Codex-style patch envelope.",
-		promptGuidelines: buildPromptGuidelines(),
-		executionMode: "sequential",
-		parameters: Type.Object({
-			input: Type.String({
-				description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections.",
-			}),
-		}),
-		prepareArguments(args) {
-			if (args && typeof args === "object") {
-				if ("input" in args && typeof (args as { input?: unknown }).input === "string") return { input: (args as { input: string }).input };
-				if ("patchText" in args && typeof (args as { patchText?: unknown }).patchText === "string") return { input: (args as { patchText: string }).patchText };
-				if ("patch" in args && typeof (args as { patch?: unknown }).patch === "string") return { input: (args as { patch: string }).patch };
-			}
-			return args as { input: string };
-		},
-		renderShell: "self",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (typeof params.input !== "string") {
-				throw new Error("apply_patch requires a string 'input' parameter");
-			}
+	function ensureApplyPatchToolRegistered(): void {
+		if (toolRegistered) return;
 
-			const previewSections = getApplyPatchPreviewSections(params.input, ctx.cwd, {
-				allowPartial: false,
-				maxPreviewLinesPerFile: Number.MAX_SAFE_INTEGER,
-			});
-			try {
-				const result = executePatch({ cwd: ctx.cwd, patchText: params.input });
-				const summary = [
-					"Applied patch successfully.",
-					`Changed files: ${result.changedFiles.length}`,
-					`Created files: ${result.createdFiles.length}`,
-					`Deleted files: ${result.deletedFiles.length}`,
-					`Moved files: ${result.movedFiles.length}`,
-					`Fuzz: ${result.fuzz}`,
-				].join("\n");
-				return {
-					content: [{ type: "text", text: summary }],
-					details: { status: "success", result, previewSections } satisfies ApplyPatchSuccessDetails,
-				};
-			} catch (error) {
-				if (error instanceof ExecutePatchError) {
-					const partial = error.hasPartialSuccess();
-					const prefix = partial ? `apply_patch partially failed after ${summarizePatchCounts(error.result)}` : "apply_patch failed";
-					const failurePaths = getFailedPaths(error);
-					const pathSummary = failurePaths.join(", ");
-					const message = pathSummary ? `${prefix} while patching ${pathSummary}: ${error.message}` : `${prefix}: ${error.message}`;
-					if (partial) {
-						const appliedFiles = getAppliedPaths(error.result, failurePaths);
-						const recoveryMessage = buildPartialFailureMessage(message, failurePaths, appliedFiles);
-						return {
-							content: [{ type: "text", text: recoveryMessage }],
-							details: {
-								status: "partial_failure",
-								result: error.result,
-								error: recoveryMessage,
-								failedFiles: failurePaths,
-								appliedFiles,
-								previewSections,
-							} satisfies ApplyPatchPartialFailureDetails,
-						};
+		pi.registerTool({
+			name: TOOL_NAME,
+			label: TOOL_NAME,
+			description: "Apply Codex-style patches using *** Begin Patch / *** End Patch with Add/Update/Delete File sections.",
+			promptSnippet: "Apply file edits with a Codex-style patch envelope.",
+			promptGuidelines: buildPromptGuidelines(),
+			executionMode: "sequential",
+			parameters: Type.Object({
+				input: Type.String({
+					description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections.",
+				}),
+			}),
+			prepareArguments(args) {
+				if (args && typeof args === "object") {
+					if ("input" in args && typeof (args as { input?: unknown }).input === "string") return { input: (args as { input: string }).input };
+					if ("patchText" in args && typeof (args as { patchText?: unknown }).patchText === "string") return { input: (args as { patchText: string }).patchText };
+					if ("patch" in args && typeof (args as { patch?: unknown }).patch === "string") return { input: (args as { patch: string }).patch };
+				}
+				return args as { input: string };
+			},
+			renderShell: "self",
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				if (typeof params.input !== "string") {
+					throw new Error("apply_patch requires a string 'input' parameter");
+				}
+
+				const previewSections = getApplyPatchPreviewSections(params.input, ctx.cwd, {
+					allowPartial: false,
+					maxPreviewLinesPerFile: Number.MAX_SAFE_INTEGER,
+				});
+				try {
+					const result = executePatch({ cwd: ctx.cwd, patchText: params.input });
+					const summary = [
+						"Applied patch successfully.",
+						`Changed files: ${result.changedFiles.length}`,
+						`Created files: ${result.createdFiles.length}`,
+						`Deleted files: ${result.deletedFiles.length}`,
+						`Moved files: ${result.movedFiles.length}`,
+						`Fuzz: ${result.fuzz}`,
+					].join("\n");
+					return {
+						content: [{ type: "text", text: summary }],
+						details: { status: "success", result, previewSections } satisfies ApplyPatchSuccessDetails,
+					};
+				} catch (error) {
+					if (error instanceof ExecutePatchError) {
+						const partial = error.hasPartialSuccess();
+						const prefix = partial ? `apply_patch partially failed after ${summarizePatchCounts(error.result)}` : "apply_patch failed";
+						const failurePaths = getFailedPaths(error);
+						const pathSummary = failurePaths.join(", ");
+						const message = pathSummary ? `${prefix} while patching ${pathSummary}: ${error.message}` : `${prefix}: ${error.message}`;
+						if (partial) {
+							const appliedFiles = getAppliedPaths(error.result, failurePaths);
+							const recoveryMessage = buildPartialFailureMessage(message, failurePaths, appliedFiles);
+							return {
+								content: [{ type: "text", text: recoveryMessage }],
+								details: {
+									status: "partial_failure",
+									result: error.result,
+									error: recoveryMessage,
+									failedFiles: failurePaths,
+									appliedFiles,
+									previewSections,
+								} satisfies ApplyPatchPartialFailureDetails,
+							};
+						}
+						throw new Error(buildFailureMessage(message, failurePaths));
 					}
-					throw new Error(buildFailureMessage(message, failurePaths));
+					throw error;
 				}
-				throw error;
-			}
-		},
-		renderCall(args, theme, context) {
-			const patchText = getPatchText(args as { input?: unknown | undefined });
-			const cwd = context.cwd ?? process.cwd();
-			const state = context.state as ApplyPatchRenderState;
-			const component = getApplyPatchCallRenderComponent(state, context.lastComponent);
-			const argsKey = patchText;
-			if (component.previewArgsKey !== argsKey) {
-				component.previewArgsKey = argsKey;
-				component.lastPreviewSections = undefined;
-				component.settledSuccess = false;
-				component.settledError = false;
-			}
-			const previewSections = getApplyPatchPreviewSections(patchText, cwd, {
-				allowPartial: context.argsComplete === false,
-				maxPreviewLinesPerFile: context.expanded ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES,
-			});
-			component.previewSections = previewSections;
-			if (previewSections.length > 0) component.lastPreviewSections = previewSections;
-			return buildApplyPatchCallComponent(component, previewSections, theme);
-		},
-		renderResult(result, { expanded }, theme, context) {
-			const state = context.state as ApplyPatchRenderState;
-			const details = result.details as ApplyPatchDetails | undefined;
-			const isPartialFailure = details?.status === "partial_failure";
-			const callComponent = state.callComponent;
-			if (callComponent) {
-				callComponent.settledSuccess = !context.isError && !isPartialFailure;
-				callComponent.settledError = context.isError || isPartialFailure;
-				if ((!callComponent.previewSections || callComponent.previewSections.length === 0) && details?.previewSections) {
-					callComponent.previewSections = details.previewSections;
-					if (details.previewSections.length > 0) callComponent.lastPreviewSections = details.previewSections;
+			},
+			renderCall(args, theme, context) {
+				const patchText = getPatchText(args as { input?: unknown | undefined });
+				const cwd = context.cwd ?? process.cwd();
+				const state = context.state as ApplyPatchRenderState;
+				const component = getApplyPatchCallRenderComponent(state, context.lastComponent);
+				const argsKey = patchText;
+				if (component.previewArgsKey !== argsKey) {
+					component.previewArgsKey = argsKey;
+					component.lastPreviewSections = undefined;
+					component.settledSuccess = false;
+					component.settledError = false;
 				}
-				const previewSections = callComponent.previewSections?.length
-					? callComponent.previewSections
-					: callComponent.lastPreviewSections ?? [];
-				buildApplyPatchCallComponent(callComponent, previewSections, theme);
-			}
-			const output = formatApplyPatchResult(result, theme, context.isError, isPartialFailure);
-			const component = context.lastComponent instanceof Container ? context.lastComponent : new Container();
-			component.clear();
-			if (!output) return component;
-			component.addChild(new Spacer(1));
-			component.addChild(new Text(output, 1, 0));
-			return component;
-		},
+				const previewSections = getApplyPatchPreviewSections(patchText, cwd, {
+					allowPartial: context.argsComplete === false,
+					maxPreviewLinesPerFile: context.expanded ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES,
+				});
+				component.previewSections = previewSections;
+				if (previewSections.length > 0) component.lastPreviewSections = previewSections;
+				return buildApplyPatchCallComponent(component, previewSections, theme);
+			},
+			renderResult(result, { expanded }, theme, context) {
+				const state = context.state as ApplyPatchRenderState;
+				const details = result.details as ApplyPatchDetails | undefined;
+				const isPartialFailure = details?.status === "partial_failure";
+				const callComponent = state.callComponent;
+				if (callComponent) {
+					callComponent.settledSuccess = !context.isError && !isPartialFailure;
+					callComponent.settledError = context.isError || isPartialFailure;
+					if ((!callComponent.previewSections || callComponent.previewSections.length === 0) && details?.previewSections) {
+						callComponent.previewSections = details.previewSections;
+						if (details.previewSections.length > 0) callComponent.lastPreviewSections = details.previewSections;
+					}
+					const previewSections = callComponent.previewSections?.length
+						? callComponent.previewSections
+						: callComponent.lastPreviewSections ?? [];
+					buildApplyPatchCallComponent(callComponent, previewSections, theme);
+				}
+				const output = formatApplyPatchResult(result, theme, context.isError, isPartialFailure);
+				const component = context.lastComponent instanceof Container ? context.lastComponent : new Container();
+				component.clear();
+				if (!output) return component;
+				component.addChild(new Spacer(1));
+				component.addChild(new Text(output, 1, 0));
+				return component;
+			},
+		});
+
+		toolRegistered = true;
+	}
+
+	pi.on("session_start", async (_event, ctx) => {
+		syncTools(ctx);
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		syncTools(ctx);
 	});
 
 	pi.on("model_select", async (event, ctx) => {
@@ -434,8 +450,25 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 		syncTools(ctx);
 	});
 
+	pi.on("input", async (_event, ctx) => {
+		syncTools(ctx);
+	});
+
 	pi.on("before_agent_start", async (_event, ctx) => {
 		syncTools(ctx);
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName !== TOOL_NAME) return;
+		if (shouldUseCodexStyle(ctx, config)) return;
+
+		syncTools(ctx);
+		return {
+			block: true,
+			reason: config.enabled
+				? "apply_patch is only enabled for GPT/Codex models in codex-style-apply-patch mode."
+				: "apply_patch is disabled by codex-style-apply-patch. Run /reload if you want to fully unload any stale apply_patch state from this session.",
+		};
 	});
 
 	pi.registerCommand(COMMAND, {
@@ -464,7 +497,8 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 			try {
 				await saveConfig(config);
 				syncTools(ctx);
-				ctx.ui.notify(buildStatus(ctx, config, shouldUseCodexStyle(ctx, config)), "info");
+				const reloadHint = !nextEnabled ? " — active tool removed now; /reload fully clears any stale apply_patch session state" : "";
+				ctx.ui.notify(`${buildStatus(ctx, config, shouldUseCodexStyle(ctx, config))}${reloadHint}`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Failed to save ${COMMAND} config: ${message}`, "error");
