@@ -273,6 +273,73 @@ describe("createBetterEditToolDefinition", () => {
 		}
 	});
 
+	test("rejects repeated oldText inputs before builtin duplicate-match failures", async () => {
+		const { createBetterEditToolDefinition } = await loadBetterEditModule();
+		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
+		try {
+			writeFileSync(join(workspace, "sample.ts"), ["callOld();", "callOld();", ""].join("\n"), "utf8");
+			const tool = createBetterEditToolDefinition(workspace);
+
+			await expect(
+				tool.execute(
+					"call-repeat",
+					{
+						path: "sample.ts",
+						edits: [
+							{ oldText: "callOld()", newText: "callNew()" },
+							{ oldText: "callOld()", newText: "callNew()" },
+						],
+					},
+					undefined,
+					undefined,
+					{ cwd: workspace } as never,
+				),
+			).rejects.toThrow(/reuse the same oldText/);
+		} finally {
+			rmSync(workspace, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects conflicting repeated oldText inputs before execution", async () => {
+		const { createBetterEditToolDefinition } = await loadBetterEditModule();
+		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
+		try {
+			writeFileSync(join(workspace, "sample.ts"), ["callOld();", "callOld();", ""].join("\n"), "utf8");
+			const tool = createBetterEditToolDefinition(workspace);
+
+			await expect(
+				tool.execute(
+					"call-conflict",
+					{
+						path: "sample.ts",
+						edits: [
+							{ oldText: "callOld()", newText: "callNewA()" },
+							{ oldText: "callOld()", newText: "callNewB()" },
+						],
+					},
+					undefined,
+					undefined,
+					{ cwd: workspace } as never,
+				),
+			).rejects.toThrow(/different newText values/);
+		} finally {
+			rmSync(workspace, { recursive: true, force: true });
+		}
+	});
+
+	test("prompts for proactive replaceAll usage without failure-oriented wording", async () => {
+		const { createBetterEditToolDefinition } = await loadBetterEditModule();
+		const tool = createBetterEditToolDefinition(process.cwd());
+
+		expect(tool.description).toContain("Every edits[].oldText must match a unique, non-overlapping region of the original file.");
+		expect(tool.description).toContain("Supports top-level replaceAll: true");
+		expect(tool.promptSnippet).toContain("Make precise file edits with exact text replacement");
+		expect(tool.promptSnippet).toContain("replaceAll: true");
+		expect(tool.promptGuidelines).toContain("Use edit replaceAll: true on the first edit call whenever every exact occurrence of oldText in that file should be replaced.");
+		expect(tool.promptGuidelines).toContain("If the same exact string should change in multiple places in one file, use replaceAll: true.");
+		expect(tool.promptGuidelines.join("\n")).not.toContain("duplicate-match failure");
+	});
+
 	test("reports likely indentation mismatches with candidate lines", async () => {
 			const { createBetterEditToolDefinition } = await loadBetterEditModule();
 		const workspace = mkdtempSync(join(tmpdir(), "better-edit-"));
@@ -385,6 +452,12 @@ describe("createBetterEditToolDefinition", () => {
 			const lastEntry = JSON.parse(lines.at(-1) ?? "{}");
 			expect(lastEntry.toolCallId).toBe("call-log");
 			expect(lastEntry.path).toBe("sample.ts");
+			expect(lastEntry.preparedInput).toEqual({
+				path: "sample.ts",
+				edits: [{ oldText: "const value =", newText: "const total =" }],
+			});
+			expect(lastEntry.diagnostics?.category).toBe("duplicate_match");
+			expect(lastEntry.diagnostics?.perEdit?.[0]?.exactMatchCount).toBe(2);
 			expect(lastEntry.error.message).toContain("Found 2 occurrences");
 		} finally {
 			process.chdir(previousCwd);

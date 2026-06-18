@@ -22,7 +22,51 @@ export interface PreparedArgumentsWithWarnings {
 	warnings: string[];
 }
 
+export interface RepeatedEditInputGroup {
+	oldText: string;
+	newTexts: string[];
+	indexes: number[];
+}
+
+export type EditFailureCategory =
+	| "duplicate_input"
+	| "conflicting_input"
+	| "empty_old_text"
+	| "no_changes"
+	| "overlap"
+	| "file_error"
+	| "duplicate_match"
+	| "not_found"
+	| "unknown";
+
+export interface EditFailurePerEditDiagnostic {
+	editIndex: number;
+	oldTextPreview: string;
+	newTextPreview: string;
+	oldTextLength: number;
+	newTextLength: number;
+	lineSpan: number;
+	exactMatchCount: number;
+	fuzzyMatchCount: number;
+	aggressiveMatchCount: number;
+	exactLines: number[];
+	fuzzyLines: number[];
+	aggressiveLines: number[];
+}
+
+export interface EditFailureDiagnostics {
+	category: EditFailureCategory;
+	targetEditIndexes: number[];
+	fileReadSucceeded: boolean;
+	repeatedOldTextGroups: RepeatedEditInputGroup[];
+	repeatedExactEditGroups: RepeatedEditInputGroup[];
+	perEdit: EditFailurePerEditDiagnostic[];
+}
+
 interface EditAnalysis {
+	exactCount: number;
+	fuzzyCount: number;
+	aggressiveCount: number;
 	exactLines: number[];
 	fuzzyLines: number[];
 	aggressiveLines: number[];
@@ -166,6 +210,7 @@ export function buildValidationAdvice(path: string | undefined, issues: string[]
 		...issues.map((issue) => `- ${issue}`),
 		"Advice:",
 		"- Send the canonical shape exactly once: " + formatCanonicalShape(),
+		"- If every identical oldText in one file should change, include top-level replaceAll: true on the first edit call.",
 		"- Every edits[i] item must include both oldText and newText as strings.",
 		"- Top-level oldText/newText is still accepted for compatibility, but edits[] is preferred.",
 		"- Retry edit after fixing the arguments; do not fall back to write or rewrite the whole file.",
@@ -316,10 +361,117 @@ function analyzeEditAgainstContent(content: string, edit: ValidatedEdit): EditAn
 	const aggressiveIndexes = aggressiveOldText ? findAllOccurrences(aggressiveContent, aggressiveOldText) : [];
 
 	return {
+		exactCount: exactIndexes.length,
+		fuzzyCount: fuzzyIndexes.length,
+		aggressiveCount: aggressiveIndexes.length,
 		exactLines: indexesToLines(normalizedContent, exactIndexes, lineSpan),
 		fuzzyLines: indexesToLines(fuzzyContent, fuzzyIndexes, lineSpan),
 		aggressiveLines: indexesToLines(aggressiveContent, aggressiveIndexes, lineSpan),
 		lineSpan,
+	};
+}
+
+function collectRepeatedInputGroups(
+	input: ValidatedEditInput,
+	selector: (edit: ValidatedEdit) => string,
+): RepeatedEditInputGroup[] {
+	const groups = new Map<string, { oldText: string; newTexts: Set<string>; indexes: number[] }>();
+	for (let index = 0; index < input.edits.length; index += 1) {
+		const edit = input.edits[index]!;
+		const key = selector(edit);
+		const existing = groups.get(key);
+		if (existing) {
+			existing.indexes.push(index);
+			existing.newTexts.add(edit.newText);
+			continue;
+		}
+		groups.set(key, {
+			oldText: edit.oldText,
+			newTexts: new Set([edit.newText]),
+			indexes: [index],
+		});
+	}
+
+	return [...groups.values()]
+		.filter((group) => group.indexes.length > 1)
+		.map((group) => ({
+			oldText: group.oldText,
+			newTexts: [...group.newTexts],
+			indexes: group.indexes,
+		}));
+}
+
+function classifyFailureMessage(message: string, input: ValidatedEditInput): EditFailureCategory {
+	const repeatedOldTextGroups = collectRepeatedInputGroups(input, (edit) => edit.oldText);
+	if (repeatedOldTextGroups.length > 0) {
+		return repeatedOldTextGroups.some((group) => group.newTexts.length > 1) ? "conflicting_input" : "duplicate_input";
+	}
+	if (message.includes("oldText must not be empty")) return "empty_old_text";
+	if (message.includes("No changes made to")) return "no_changes";
+	if (message.includes("overlap in")) return "overlap";
+	if (message.includes("Could not edit file:")) return "file_error";
+	if (message.includes("Found ") && message.includes("occurrences")) return "duplicate_match";
+	if (message.includes("Could not find")) return "not_found";
+	return "unknown";
+}
+
+function buildPerEditDiagnostic(editIndex: number, edit: ValidatedEdit, analysis: EditAnalysis): EditFailurePerEditDiagnostic {
+	return {
+		editIndex,
+		oldTextPreview: edit.oldText.slice(0, 200),
+		newTextPreview: edit.newText.slice(0, 200),
+		oldTextLength: edit.oldText.length,
+		newTextLength: edit.newText.length,
+		lineSpan: analysis.lineSpan,
+		exactMatchCount: analysis.exactCount,
+		fuzzyMatchCount: analysis.fuzzyCount,
+		aggressiveMatchCount: analysis.aggressiveCount,
+		exactLines: analysis.exactLines,
+		fuzzyLines: analysis.fuzzyLines,
+		aggressiveLines: analysis.aggressiveLines,
+	};
+}
+
+export async function collectEditFailureDiagnostics({
+	cwd,
+	input,
+	error,
+}: {
+	cwd: string;
+	input: ValidatedEditInput;
+	error: unknown;
+}): Promise<EditFailureDiagnostics> {
+	const message = error instanceof Error ? error.message : String(error);
+	const targetEditIndexesFromError = extractEditIndexes(message);
+	const targetEditIndexes = targetEditIndexesFromError.length > 0 ? targetEditIndexesFromError : input.edits.length === 1 ? [0] : [];
+	const repeatedOldTextGroups = collectRepeatedInputGroups(input, (edit) => edit.oldText);
+	const repeatedExactEditGroups = collectRepeatedInputGroups(input, (edit) => `${edit.oldText}\u0000${edit.newText}`);
+	const category = classifyFailureMessage(message, input);
+
+	let rawContent: string | undefined;
+	try {
+		rawContent = await readFile(resolve(cwd, input.path), "utf8");
+	} catch {
+		rawContent = undefined;
+	}
+
+	const perEdit = rawContent
+		? targetEditIndexes
+				.map((editIndex) => {
+					const edit = input.edits[editIndex];
+					if (!edit) return undefined;
+					return buildPerEditDiagnostic(editIndex, edit, analyzeEditAgainstContent(rawContent, edit));
+				})
+				.filter((item): item is EditFailurePerEditDiagnostic => Boolean(item))
+		: [];
+
+	return {
+		category,
+		targetEditIndexes,
+		fileReadSucceeded: rawContent !== undefined,
+		repeatedOldTextGroups,
+		repeatedExactEditGroups,
+		perEdit,
 	};
 }
 
@@ -336,7 +488,7 @@ function buildDuplicateAdvice(path: string, editIndex: number, analysis: EditAna
 	const lines = analysis.exactLines.length > 0 ? analysis.exactLines : analysis.fuzzyLines.length > 0 ? analysis.fuzzyLines : analysis.aggressiveLines;
 	const bullets = [
 		`${path} contains multiple matches for edits[${editIndex}].oldText around lines ${formatLineRanges(lines, analysis.lineSpan)}.`,
-		`If every match should change, retry with top-level replaceAll: true to replace all occurrences in this file.`,
+		`If every match should change, retry with top-level replaceAll: true to replace all occurrences in this file, and use replaceAll from the first edit call next time.`,
 		`Expand edits[${editIndex}].oldText with one or two unique surrounding lines so it matches exactly one region.`,
 	];
 	const readAdvice = buildReadAdvice(path, lines, analysis.lineSpan);

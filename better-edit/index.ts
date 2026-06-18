@@ -11,6 +11,7 @@ import {
 import { Type } from "typebox";
 import {
 	buildAdvisedEditErrorMessage,
+	collectEditFailureDiagnostics,
 	prepareAdvisedEditArgumentsWithWarnings,
 	validateAdvisedEditInput,
 	type ValidatedEditInput,
@@ -77,6 +78,7 @@ async function logExecutionError({
 	toolCallId,
 	ctx,
 	validated,
+	preparedInput,
 	rawInput,
 	hiddenWarnings,
 	error,
@@ -84,10 +86,12 @@ async function logExecutionError({
 	toolCallId: string;
 	ctx: ExtensionContext;
 	validated: ValidatedEditInput;
+	preparedInput: unknown;
 	rawInput: unknown;
 	hiddenWarnings: string[];
 	error: unknown;
 }): Promise<void> {
+	const diagnostics = await collectEditFailureDiagnostics({ cwd: ctx.cwd, input: validated, error });
 	const entry = {
 		timestamp: new Date().toISOString(),
 		toolCallId,
@@ -95,8 +99,10 @@ async function logExecutionError({
 		modelId: typeof ctx.model?.id === "string" ? ctx.model.id : undefined,
 		path: validated.path,
 		edits: validated.edits,
+		preparedInput,
 		rawInput,
 		hiddenWarnings,
+		diagnostics,
 		error: serializeLogError(error),
 	};
 
@@ -353,29 +359,67 @@ function buildRenderCallArgs(args: unknown): unknown {
 	}
 }
 
-const replaceEditSchema = Type.Object({
-	oldText: Type.Optional(
-		Type.String({
-			description: "Exact text for one targeted replacement. Include the exact surrounding whitespace and newlines from the file.",
+function getRepeatedOldTextGroups(input: ValidatedEditInput): Array<{ oldText: string; indexes: number[]; newTexts: string[] }> {
+	const groups = new Map<string, { oldText: string; indexes: number[]; newTexts: Set<string> }>();
+	for (let index = 0; index < input.edits.length; index += 1) {
+		const edit = input.edits[index]!;
+		const existing = groups.get(edit.oldText);
+		if (existing) {
+			existing.indexes.push(index);
+			existing.newTexts.add(edit.newText);
+			continue;
+		}
+		groups.set(edit.oldText, { oldText: edit.oldText, indexes: [index], newTexts: new Set([edit.newText]) });
+	}
+	return [...groups.values()]
+		.filter((group) => group.indexes.length > 1)
+		.map((group) => ({ oldText: group.oldText, indexes: group.indexes, newTexts: [...group.newTexts] }));
+}
+
+function formatEditIndexes(indexes: number[]): string {
+	return indexes.map((index) => `edits[${index}]`).join(", ");
+}
+
+function validateRepeatedOldTextInputs(input: ValidatedEditInput): void {
+	if (input.replaceAll) return;
+	const repeatedGroups = getRepeatedOldTextGroups(input);
+	if (repeatedGroups.length === 0) return;
+	const conflictingGroup = repeatedGroups.find((group) => group.newTexts.length > 1);
+	if (conflictingGroup) {
+		throw new Error(
+			`${formatEditIndexes(conflictingGroup.indexes)} reuse the same oldText in ${input.path} but map it to different newText values. Split them into unique oldText blocks, or use one replaceAll edit only if every occurrence should become the same newText.`
+		);
+	}
+	const repeatedGroup = repeatedGroups[0]!;
+	throw new Error(
+		`${formatEditIndexes(repeatedGroup.indexes)} reuse the same oldText in ${input.path}. Use one edit with top-level replaceAll: true if every occurrence should change the same way, or make each oldText unique with surrounding context.`
+	);
+}
+
+const replaceEditSchema = Type.Object(
+	{
+		oldText: Type.String({
+			description:
+				"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
 		}),
-	),
-	newText: Type.Optional(Type.String({ description: "Replacement text for this targeted edit." })),
-});
+		newText: Type.String({ description: "Replacement text for this targeted edit." }),
+	},
+	{ additionalProperties: false },
+);
 
 const advisedEditSchema = Type.Object(
 	{
-		path: Type.Optional(Type.String({ description: "Path to the file to edit (required; relative or absolute)." })),
+		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 		replaceAll: Type.Optional(
 			Type.Boolean({
-				description: "When true, each oldText is replaced at every exact occurrence in the file. Default false keeps oldText uniqueness checks.",
-			}),
-		),
-		edits: Type.Optional(
-			Type.Array(replaceEditSchema, {
 				description:
-					"One or more targeted replacements. Each item must include both oldText and newText strings. Each oldText is matched against the original file, not incrementally.",
+					"When true, each oldText is replaced at every exact occurrence in the file. Use this only when every exact occurrence of that oldText in this file should be replaced the same way.",
 			}),
 		),
+		edits: Type.Array(replaceEditSchema, {
+			description:
+				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead. Use top-level replaceAll: true when every exact occurrence of an oldText in this file should be replaced.",
+		}),
 	},
 	{ additionalProperties: false },
 );
@@ -398,12 +442,13 @@ export function createBetterEditToolDefinition(cwd: string) {
 		name: "edit",
 		label: base.label,
 		description:
-			"Edit a single file using exact text replacement. Errors include advice that points to the next read/retry step so the agent can fix the edit call instead of rewriting the whole file.",
-		promptSnippet: base.promptSnippet,
+			"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes. Supports top-level replaceAll: true when every exact occurrence of an oldText in the file should be replaced the same way. On failure, returns read/retry advice so the next edit call can be corrected without rewriting the file.",
+		promptSnippet: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call; use replaceAll: true for intentional file-wide exact replacements",
 		promptGuidelines: [
 			...(base.promptGuidelines ?? []),
 			"When edit fails, follow the advised read/retry steps and refine oldText instead of falling back to write.",
-			"Use edit replaceAll: true only when every exact occurrence of oldText in that file should be replaced.",
+			"Use edit replaceAll: true on the first edit call whenever every exact occurrence of oldText in that file should be replaced.",
+			"If the same exact string should change in multiple places in one file, use replaceAll: true.",
 		],
 		parameters: advisedEditSchema,
 		renderShell: base.renderShell,
@@ -418,6 +463,7 @@ export function createBetterEditToolDefinition(cwd: string) {
 		},
 		async execute(toolCallId: string, input: unknown, signal: AbortSignal | undefined, onUpdate: unknown, ctx: ExtensionContext) {
 			const validated = validateAdvisedEditInput(input) as ValidatedEditInput;
+			validateRepeatedOldTextInputs(validated);
 			const warningKey = buildWarningKey(validated);
 			const hiddenWarnings = warningKey ? (preparationWarnings.get(warningKey) ?? []) : [];
 			if (warningKey) preparationWarnings.delete(warningKey);
@@ -432,6 +478,7 @@ export function createBetterEditToolDefinition(cwd: string) {
 					toolCallId,
 					ctx,
 					validated,
+					preparedInput: validated,
 					rawInput: input,
 					hiddenWarnings,
 					error,
