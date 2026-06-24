@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
 
 function model(provider: string, id: string, name = id): Model<Api> {

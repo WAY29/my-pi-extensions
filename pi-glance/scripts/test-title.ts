@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { defaultConfig } from "../config.js";
 import { stripControls } from "../format.js";
 import { renderInputSurface } from "../renderer.js";

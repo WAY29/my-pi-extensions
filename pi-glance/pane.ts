@@ -1,5 +1,5 @@
-import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatWorkspaceModelRule, listWorkspaceModelRules, normalizeWorkspaceDirectory, parseWorkspaceModelRuleEntry } from "./auto-model.js";
 import { cloneConfig, defaultConfig, moveSegment, toggleSegment } from "./config.js";
 import { displayDirectory, formatWorkspaceLabel } from "./format.js";

@@ -5,8 +5,6 @@ import { extname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	generateImages,
-	registerImagesApiProvider,
 	StringEnum,
 	Type,
 	type AssistantImages,
@@ -18,6 +16,7 @@ import {
 	type Static,
 	type Usage,
 } from "@earendil-works/pi-ai";
+import { generateImages, registerImagesApiProvider } from "@earendil-works/pi-ai/compat";
 
 const OPENAI_IMAGES_API = "openai-images" as const;
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";

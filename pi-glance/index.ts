@@ -1,5 +1,6 @@
-import { completeSimple, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Api, Model, UserMessage } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureGlobalSettingsSnapshot, formatAutoModelNotice, getWorkspaceAutoModelSpec, loadGlobalDefaultModelReference, restoreGlobalSettingsSnapshot } from "./auto-model.js";
 import { cloneConfig, loadConfig, saveConfig } from "./config.js";
 import { GlanceEditor } from "./editor.js";

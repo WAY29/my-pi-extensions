@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 export interface TitleModelRegistry {
 	find(provider: string, modelId: string): Model<Api> | undefined;

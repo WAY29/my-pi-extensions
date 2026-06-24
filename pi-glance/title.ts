@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export const TITLE_CUSTOM_TYPE = "pi-glance:title";
 export const TITLE_PLACEHOLDER = "Generating Title...";

@@ -1,6 +1,6 @@
-import type { ReadonlyFooterDataProvider } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stripControls } from "./format.js";
 import type { GlanceConfig, GlanceState, GoalSnapshot } from "./types.js";
 

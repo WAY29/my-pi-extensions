@@ -1,7 +1,7 @@
 import { rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "./title-model.js";
 
 const GLOBAL_SETTINGS_PATH = join(getAgentDir(), "settings.json");
