@@ -1,5 +1,13 @@
-import type { Api, Model, UserMessage } from "@earendil-works/pi-ai";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import {
+	// @ts-expect-error compat-only runtime export; extension loader aliases root to compat.
+	completeSimple as completeSimpleCompat,
+	type Api,
+	type AssistantMessage,
+	type Context,
+	type Model,
+	type SimpleStreamOptions,
+	type UserMessage,
+} from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { captureGlobalSettingsSnapshot, formatAutoModelNotice, getWorkspaceAutoModelSpec, loadGlobalDefaultModelReference, restoreGlobalSettingsSnapshot } from "./auto-model.js";
 import { cloneConfig, loadConfig, saveConfig } from "./config.js";
@@ -36,6 +44,12 @@ import {
 import { loadStoredTitle, saveStoredTitle, type StoredTitle } from "./title-store.js";
 import type { GlanceConfig, GlanceState, GoalSnapshot, GoalStatus } from "./types.js";
 import type { ThinkingLevel } from "./title-model.js";
+
+const completeSimple = completeSimpleCompat as <TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => Promise<AssistantMessage>;
 
 type PermissionGateStateResponse = {
 	available?: boolean;
