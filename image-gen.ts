@@ -24,6 +24,8 @@ import {
 const OPENAI_IMAGES_API = "openai-images" as const;
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const TRANSPARENT_IMAGE_MODEL = "gpt-image-1.5";
+const DEFAULT_GROK_IMAGE_MODEL = "grok-imagine-image";
+const DEFAULT_GROK_QUALITY_MODEL = "grok-imagine-image-quality";
 const DEFAULT_OUTPUT_DIR = "output/imagegen";
 const MAX_INPUT_IMAGES = 16;
 const TRANSPARENT_CHROMA_KEY_HEX = "#00FF00";
@@ -54,7 +56,12 @@ const IMAGE_GEN_PARAMS = Type.Object({
 			description: "Background mode. Use transparent when the output needs real alpha.",
 		}),
 	),
-	size: Type.Optional(Type.String({ description: "Output size, e.g. 1024x1024, 1536x1024, auto, or a flexible GPT Image 2 size" })),
+	size: Type.Optional(
+		Type.String({
+			description:
+				"Output size. GPT Image: 1024x1024 / 1536x1024 / auto. Grok Imagine: aspect ratio (1:1, 16:9, auto) or resolution (1k, 2k).",
+		}),
+	),
 	quality: Type.Optional(
 		StringEnum(QUALITY_VALUES, {
 			description: "Output quality. Use high for text-heavy or detail-critical assets.",
@@ -76,7 +83,12 @@ const IMAGE_GEN_PARAMS = Type.Object({
 	input_fidelity: Type.Optional(
 		Type.String({ description: "Optional input fidelity control for edit/reference workflows on models that support it" }),
 	),
-	model: Type.Optional(Type.String({ description: "Explicit GPT Image model id, e.g. gpt-image-2 or gpt-image-1.5" })),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Image model id. GPT: gpt-image-2 / gpt-image-1.5. Grok: grok-imagine-image / grok-imagine-image-quality. Default follows current chat provider.",
+		}),
+	),
 	output_dir: Type.Optional(Type.String({ description: "Workspace output directory. Defaults to output/imagegen" })),
 	filename_prefix: Type.Optional(Type.String({ description: "Stable filename prefix for saved outputs" })),
 });
@@ -192,6 +204,8 @@ type OpenAIImagesResponse = {
 	id?: string;
 	data?: Array<{
 		b64_json?: string;
+		url?: string;
+		mime_type?: string;
 		revised_prompt?: string;
 	}>;
 	usage?: {
@@ -224,6 +238,58 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
 
 function isGptImage2Model(modelId: string): boolean {
 	return modelId === "gpt-image-2" || modelId.startsWith("gpt-image-2-");
+}
+
+function isGrokImagineModel(modelId: string): boolean {
+	return modelId.startsWith("grok-imagine");
+}
+
+function isGrokProvider(provider: string | undefined): boolean {
+	if (!provider) {
+		return false;
+	}
+	return provider === "internal-grok" || provider === "xai" || provider.includes("grok");
+}
+
+function mapSizeForGrok(size: string | undefined): { aspect_ratio?: string; resolution?: string } {
+	const normalized = normalizeOptionalString(size);
+	if (!normalized) {
+		return {};
+	}
+	if (normalized === "1k" || normalized === "2k") {
+		return { resolution: normalized };
+	}
+	if (normalized === "auto" || normalized.includes(":")) {
+		return { aspect_ratio: normalized };
+	}
+	const common: Record<string, string> = {
+		"1024x1024": "1:1",
+		"1024x1536": "2:3",
+		"1536x1024": "3:2",
+		"1024x1792": "9:16",
+		"1792x1024": "16:9",
+	};
+	if (common[normalized]) {
+		return { aspect_ratio: common[normalized] };
+	}
+	const match = normalized.match(/^(\d+)x(\d+)$/i);
+	if (!match) {
+		return {};
+	}
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	let a = width;
+	let b = height;
+	while (b !== 0) {
+		const next = a % b;
+		a = b;
+		b = next;
+	}
+	const g = a || 1;
+	return {
+		aspect_ratio: `${width / g}:${height / g}`,
+		resolution: Math.max(width, height) >= 1536 ? "2k" : "1k",
+	};
 }
 
 function ensureTrailingSlash(url: string): string {
@@ -485,37 +551,63 @@ async function requestImagesEndpoint(
 	}
 
 	const endpoint = buildEndpoint(model.baseUrl, route === "generations" ? "images/generations" : "images/edits");
+	const grok = isGrokImagineModel(model.id);
 	const basePayload: Record<string, unknown> = {
 		model: model.id,
 		prompt: textPrompt,
 	};
 
-	if (options?.background !== undefined) {
-		basePayload.background = options.background;
-	}
-	if (options?.size !== undefined) {
-		basePayload.size = options.size;
-	}
-	if (options?.quality !== undefined) {
-		basePayload.quality = options.quality;
-	}
 	if (options?.n !== undefined) {
 		basePayload.n = options.n;
 	}
-	if (options?.output_format !== undefined) {
-		basePayload.output_format = options.output_format;
-	}
-	if (options?.output_compression !== undefined) {
-		basePayload.output_compression = options.output_compression;
-	}
 
-	if (route === "edits") {
-		basePayload.images = inputImages.map((image) => ({ image_url: toDataUrl(image) }));
-		if (options?.mask) {
-			basePayload.mask = { image_url: toDataUrl(options.mask) };
+	if (grok) {
+		// xAI Images API: aspect_ratio/resolution + b64_json; edits use image/images.url
+		basePayload.response_format = "b64_json";
+		const mapped = mapSizeForGrok(options?.size);
+		if (mapped.aspect_ratio) {
+			basePayload.aspect_ratio = mapped.aspect_ratio;
 		}
-		if (options?.input_fidelity !== undefined) {
-			basePayload.input_fidelity = options.input_fidelity;
+		if (mapped.resolution) {
+			basePayload.resolution = mapped.resolution;
+		} else if (options?.quality === "high") {
+			basePayload.resolution = "2k";
+		}
+		if (route === "edits") {
+			if (options?.mask) {
+				throw new Error("Grok Imagine does not support mask_path.");
+			}
+			if (inputImages.length === 1) {
+				basePayload.image = { url: toDataUrl(inputImages[0]) };
+			} else {
+				basePayload.images = inputImages.map((image) => ({ url: toDataUrl(image) }));
+			}
+		}
+	} else {
+		if (options?.background !== undefined) {
+			basePayload.background = options.background;
+		}
+		if (options?.size !== undefined) {
+			basePayload.size = options.size;
+		}
+		if (options?.quality !== undefined) {
+			basePayload.quality = options.quality;
+		}
+		if (options?.output_format !== undefined) {
+			basePayload.output_format = options.output_format;
+		}
+		if (options?.output_compression !== undefined) {
+			basePayload.output_compression = options.output_compression;
+		}
+
+		if (route === "edits") {
+			basePayload.images = inputImages.map((image) => ({ image_url: toDataUrl(image) }));
+			if (options?.mask) {
+				basePayload.mask = { image_url: toDataUrl(options.mask) };
+			}
+			if (options?.input_fidelity !== undefined) {
+				basePayload.input_fidelity = options.input_fidelity;
+			}
 		}
 	}
 
@@ -545,10 +637,18 @@ async function requestImagesEndpoint(
 	output.responseId = responseJson.id;
 	output.usage = parseUsage(responseJson.usage);
 
-	const mimeType = outputFormatToMimeType(responseJson.output_format ?? options?.output_format);
+	const fallbackMimeType = outputFormatToMimeType(responseJson.output_format ?? options?.output_format);
 	for (const item of responseJson.data ?? []) {
+		const mimeType = item.mime_type ?? fallbackMimeType;
 		if (item.b64_json) {
 			output.output.push({ type: "image", mimeType, data: item.b64_json });
+		} else if (item.url) {
+			const imageResponse = await fetch(item.url, { signal: options?.signal });
+			if (!imageResponse.ok) {
+				throw new Error(`Failed to download generated image URL: ${imageResponse.status} ${imageResponse.statusText}`);
+			}
+			const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+			output.output.push({ type: "image", mimeType, data: Buffer.from(bytes).toString("base64") });
 		}
 		if (item.revised_prompt) {
 			output.output.push({ type: "text", text: `Revised prompt: ${item.revised_prompt}` });
@@ -686,7 +786,8 @@ const generateImagesOpenAI: ImagesFunction<typeof OPENAI_IMAGES_API, OpenAIImage
 
 	try {
 		const openAIImagesModel = model as OpenAIImagesModel;
-		if (openAIImagesModel.responseApi === "openai-responses") {
+		// Grok Imagine is Images API only; GPT Image may use responses or /images.
+		if (!isGrokImagineModel(model.id) && openAIImagesModel.responseApi === "openai-responses") {
 			await requestResponsesImageGeneration(openAIImagesModel, context, options, output);
 		} else {
 			await requestImagesEndpoint(model, context, options, output);
@@ -708,29 +809,39 @@ function isOpenAICompatibleModel(model: Model<any>): boolean {
 	return model.provider === "openai" || model.api === "openai-responses" || model.api === "openai-completions";
 }
 
-async function resolveOpenAIRequestAuth(ctx: ExtensionContext): Promise<OpenAIRequestAuth> {
+async function resolveOpenAIRequestAuth(ctx: ExtensionContext, imageModelId: string): Promise<OpenAIRequestAuth> {
 	const availableModels = await ctx.modelRegistry.getAvailable();
-	const preferredModel =
-		availableModels.find((model: Model<any>) => model.provider === "openai") ??
-		availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model));
+	const wantGrok = isGrokImagineModel(imageModelId);
+	const preferredModel = wantGrok
+		? (availableModels.find((model: Model<any>) => model.provider === "internal-grok") ??
+			availableModels.find((model: Model<any>) => isGrokProvider(model.provider)) ??
+			availableModels.find((model: Model<any>) => model.id.toLowerCase().includes("grok")))
+		: (availableModels.find((model: Model<any>) => model.provider === "openai") ??
+			availableModels.find((model: Model<any>) => model.provider === "internal") ??
+			availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model) && !isGrokProvider(model.provider)) ??
+			availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model)));
 	if (!preferredModel) {
 		const knownCompatible = ctx.modelRegistry.getAll().find((model: Model<any>) => isOpenAICompatibleModel(model));
 		if (knownCompatible) {
 			throw new Error(
-				`No configured auth found for an OpenAI-compatible provider. Expected provider "openai" or another provider using openai-responses/openai-completions; found unconfigured provider ${knownCompatible.provider}.`,
+				wantGrok
+					? `No configured auth found for a Grok-compatible provider (internal-grok/xai). Found unconfigured provider ${knownCompatible.provider}.`
+					: `No configured auth found for an OpenAI-compatible provider. Expected provider "openai"/"internal" or another provider using openai-responses/openai-completions; found unconfigured provider ${knownCompatible.provider}.`,
 			);
 		}
 		throw new Error(
-			"No OpenAI-compatible provider model is available in pi's model registry, so image_gen cannot resolve image API routing.",
+			wantGrok
+				? "No Grok-compatible provider model is available in pi's model registry, so image_gen cannot resolve Grok Imagine routing."
+				: "No OpenAI-compatible provider model is available in pi's model registry, so image_gen cannot resolve image API routing.",
 		);
 	}
 
 	const resolvedAuth = await ctx.modelRegistry.getApiKeyAndHeaders(preferredModel);
 	if (!resolvedAuth.ok) {
-		throw new Error(`Failed to resolve OpenAI-compatible auth for image_gen: ${resolvedAuth.error}`);
+		throw new Error(`Failed to resolve image API auth for image_gen: ${resolvedAuth.error}`);
 	}
 	if (!resolvedAuth.apiKey) {
-		throw new Error("Resolved OpenAI-compatible auth for image_gen did not include an API key.");
+		throw new Error("Resolved image API auth for image_gen did not include an API key.");
 	}
 
 	return {
@@ -741,26 +852,47 @@ async function resolveOpenAIRequestAuth(ctx: ExtensionContext): Promise<OpenAIRe
 	};
 }
 
-function selectImageModel(params: ImageGenParams): SelectedModel {
+function selectImageModel(params: ImageGenParams, preferGrok: boolean): SelectedModel {
 	const explicitModel = normalizeOptionalString(params.model);
-	let effectiveModel = explicitModel ?? DEFAULT_IMAGE_MODEL;
 	const notes: string[] = [];
+	let effectiveModel: string;
 
-	if (!explicitModel && params.background === "transparent") {
+	if (explicitModel) {
+		effectiveModel = explicitModel;
+	} else if (preferGrok) {
+		if (params.background === "transparent") {
+			throw new Error(
+				"Grok Imagine does not support background=transparent. Set model=gpt-image-1.5 (or another GPT Image model) for transparent cutouts.",
+			);
+		}
+		effectiveModel = params.quality === "high" ? DEFAULT_GROK_QUALITY_MODEL : DEFAULT_GROK_IMAGE_MODEL;
+		notes.push(`Auto-routed to ${effectiveModel} via Grok Imagine.`);
+	} else if (params.background === "transparent") {
 		effectiveModel = TRANSPARENT_IMAGE_MODEL;
 		notes.push(`Auto-routed transparent request to ${TRANSPARENT_IMAGE_MODEL}.`);
+	} else {
+		effectiveModel = DEFAULT_IMAGE_MODEL;
 	}
 
-	if (params.background === "transparent" && isGptImage2Model(effectiveModel)) {
-		throw new Error(
-			"gpt-image-2 does not support background=transparent. Omit `model` to let image_gen auto-route to gpt-image-1.5, or choose gpt-image-1.5 explicitly.",
-		);
-	}
+	if (isGrokImagineModel(effectiveModel)) {
+		if (params.background === "transparent") {
+			throw new Error("Grok Imagine does not support background=transparent. Use gpt-image-1.5 instead.");
+		}
+		if (params.input_fidelity) {
+			notes.push("input_fidelity is ignored for Grok Imagine.");
+		}
+	} else {
+		if (params.background === "transparent" && isGptImage2Model(effectiveModel)) {
+			throw new Error(
+				"gpt-image-2 does not support background=transparent. Omit `model` to let image_gen auto-route to gpt-image-1.5, or choose gpt-image-1.5 explicitly.",
+			);
+		}
 
-	if (params.input_fidelity && isGptImage2Model(effectiveModel)) {
-		throw new Error(
-			"input_fidelity is not supported for gpt-image-2. Remove input_fidelity or choose a model that supports it.",
-		);
+		if (params.input_fidelity && isGptImage2Model(effectiveModel)) {
+			throw new Error(
+				"input_fidelity is not supported for gpt-image-2. Remove input_fidelity or choose a model that supports it.",
+			);
+		}
 	}
 
 	return {
@@ -955,13 +1087,14 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 		name: "image_gen",
 		label: "Image Gen",
 		description:
-			"Generate or edit raster images using OpenAI GPT Image models. Supports transparent backgrounds, reference-image edits, workspace image paths, attached image inputs, and saved outputs in the workspace.",
+			"Generate or edit raster images using OpenAI GPT Image or Grok Imagine models. Supports transparent backgrounds (GPT), reference-image edits, workspace image paths, attached image inputs, and saved outputs in the workspace.",
 		promptSnippet:
 			"Generate or edit raster image assets such as photos, illustrations, transparent cutouts, sprites, textures, and mockups.",
 		promptGuidelines: [
 			"Use image_gen when the user needs a raster image asset such as a photo, illustration, sprite, mockup, texture, or transparent-background cutout.",
 			"Use image_gen instead of SVG/HTML/CSS placeholders when the requested deliverable should be a bitmap asset.",
 			"Use image_gen with explicit image_paths for workspace files; if image_paths are omitted but the user recently attached images, image_gen can use those attachments as edit or reference inputs.",
+			"Default image backend follows the current chat provider: internal-grok -> grok-imagine-image; otherwise GPT Image (gpt-image-2). Override with model=grok-imagine-image|grok-imagine-image-quality|gpt-image-2|gpt-image-1.5.",
 			"When calling image_gen, omit redundant defaults unless the user explicitly asked for them: do not invent n=1, background=opaque, output_format=png, or action=generate if they are not needed.",
 			"When calling image_gen, do not invent tiny thumbnail sizes such as 256x256 unless the user explicitly requested them. Omit size when unsure.",
 		],
@@ -972,12 +1105,17 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 				throw new Error("image_gen requires a non-empty prompt.");
 			}
 
-			const auth = await resolveOpenAIRequestAuth(ctx);
-			const selectedModel = selectImageModel(params);
+			const explicitModel = normalizeOptionalString(params.model);
+			const preferGrok = explicitModel ? isGrokImagineModel(explicitModel) : isGrokProvider(ctx.model?.provider);
+			const selectedModel = selectImageModel(params, preferGrok);
+			const auth = await resolveOpenAIRequestAuth(ctx, selectedModel.effectiveModel);
 			const inputBundle = await resolveInputBundle(ctx.cwd, params, ctx);
 			const action = params.action ?? "auto";
 			if (action === "edit" && inputBundle.images.length === 0) {
 				throw new Error("image_gen action=edit requires at least one explicit image_path or a recent attached image.");
+			}
+			if (isGrokImagineModel(selectedModel.effectiveModel) && inputBundle.mask) {
+				throw new Error("Grok Imagine does not support mask_path.");
 			}
 
 			const outputDir = resolveOutputDir(ctx.cwd, params.output_dir);
@@ -1045,7 +1183,8 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 			}
 
 			const route: ImageGenDetails["route"] = inputBundle.images.length > 0 || inputBundle.mask ? "edits" : "generations";
-			const backend: ImageGenDetails["backend"] = auth.providerModel.api === "openai-responses" ? "responses" : "images";
+			const backend: ImageGenDetails["backend"] =
+				isGrokImagineModel(effectiveModelId) || auth.providerModel.api !== "openai-responses" ? "images" : "responses";
 			const effectiveOutputFormat = mimeTypeToOutputFormat(savedImages[0].mimeType);
 			const details: ImageGenDetails = {
 				route,
