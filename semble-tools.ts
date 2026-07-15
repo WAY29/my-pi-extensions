@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -9,16 +9,11 @@ const CONTENT_TYPES = ["code", "docs", "config", "all"] as const;
 type ContentType = (typeof CONTENT_TYPES)[number];
 type SembleToggleAction = "on" | "off" | "toggle" | "status";
 
-type SembleChunk = {
-	content?: string;
+type SembleSearchResult = {
 	file_path?: string;
 	start_line?: number;
 	end_line?: number;
-	location?: string;
-};
-
-type SembleSearchResult = {
-	chunk?: SembleChunk;
+	content?: string;
 	score?: number;
 };
 
@@ -51,10 +46,13 @@ const MAX_TOP_K = 10;
 const MAX_SNIPPET_CHARS = 900;
 const SEMBLE_TIMEOUT_MS = 45_000;
 const SEMBLE_CHECK_TIMEOUT_MS = 5_000;
+const GIT_TOPLEVEL_TIMEOUT_MS = 5_000;
 const SEMBLE_COMMAND = "semble";
 const SEMBLE_TOOL_NAMES = ["semble_search", "semble_find_related"] as const;
 const SEMBLE_CONFIG_PATH = join(getAgentDir(), "semble-tools", "config.json");
 const SEMBLE_CONFIG_VERSION = 1 as const;
+const GIT_URL_SCHEMES = ["https://", "http://", "ssh://", "git://", "git+ssh://", "file://"] as const;
+const SCP_GIT_URL_RE = /^[\w.-]+@[\w.-]+:(?!\/)/;
 
 interface SembleGlobalConfig {
 	version: typeof SEMBLE_CONFIG_VERSION;
@@ -63,7 +61,7 @@ interface SembleGlobalConfig {
 
 const SearchParams = Type.Object({
 	query: Type.String({ description: "Natural-language or code query." }),
-	repo: Type.Optional(Type.String({ description: "Local repository path or https:// git URL. Defaults to the current working directory." })),
+	repo: Type.Optional(Type.String({ description: "Local repository path or https:// git URL. Defaults to the current Git repo root when inside Git, otherwise the current working directory." })),
 	top_k: Type.Optional(Type.Number({ description: `Number of results to return. Default: ${DEFAULT_TOP_K}.`, minimum: 1, maximum: MAX_TOP_K })),
 	content: Type.Optional(Type.String({ description: "Content type: code, docs, config, or all." })),
 });
@@ -71,7 +69,7 @@ const SearchParams = Type.Object({
 const FindRelatedParams = Type.Object({
 	file_path: Type.String({ description: "Path returned by semble_search." }),
 	line: Type.Number({ description: "Line number from a semble_search result. Use the result's start line by default.", minimum: 1 }),
-	repo: Type.Optional(Type.String({ description: "Local repository path or https:// git URL. Defaults to the current working directory." })),
+	repo: Type.Optional(Type.String({ description: "Local repository path or https:// git URL. Defaults to the current Git repo root when inside Git, otherwise the current working directory." })),
 	top_k: Type.Optional(Type.Number({ description: `Number of related results to return. Default: ${DEFAULT_TOP_K}.`, minimum: 1, maximum: MAX_TOP_K })),
 	content: Type.Optional(Type.String({ description: "Content type: code, docs, config, or all." })),
 });
@@ -128,6 +126,10 @@ function normalizeContent(value: unknown): ContentType | undefined {
 	return (CONTENT_TYPES as readonly string[]).includes(value) ? (value as ContentType) : undefined;
 }
 
+function isGitUrlLike(value: string): boolean {
+	return GIT_URL_SCHEMES.some((prefix) => value.startsWith(prefix)) || SCP_GIT_URL_RE.test(value);
+}
+
 function trimSnippet(text: string): string {
 	const trimmed = text.trim();
 	if (trimmed.length <= MAX_SNIPPET_CHARS) return trimmed;
@@ -142,20 +144,16 @@ function roundScore(value: unknown): number | undefined {
 function compactResults(results: SembleSearchResult[] | undefined): CompactResult[] {
 	if (!Array.isArray(results)) return [];
 	return results.flatMap((result) => {
-		const chunk = result.chunk;
-		if (!chunk || typeof chunk.file_path !== "string" || typeof chunk.start_line !== "number") return [];
-		const endLine = typeof chunk.end_line === "number" ? chunk.end_line : undefined;
-		const location = typeof chunk.location === "string" && chunk.location.trim()
-			? chunk.location
-			: `${chunk.file_path}:${chunk.start_line}${endLine ? `-${endLine}` : ""}`;
+		if (typeof result.file_path !== "string" || typeof result.start_line !== "number") return [];
+		const endLine = typeof result.end_line === "number" ? result.end_line : undefined;
 		return [
 			{
-				file_path: chunk.file_path,
-				line: chunk.start_line,
+				file_path: result.file_path,
+				line: result.start_line,
 				end_line: endLine,
-				location,
+				location: `${result.file_path}:${result.start_line}${endLine ? `-${endLine}` : ""}`,
 				score: roundScore(result.score),
-				snippet: trimSnippet(typeof chunk.content === "string" ? chunk.content : ""),
+				snippet: trimSnippet(typeof result.content === "string" ? result.content : ""),
 			},
 		];
 	});
@@ -333,6 +331,28 @@ async function hasSembleCli(pi: ExtensionAPI): Promise<boolean> {
 	}
 }
 
+async function resolveGitTopLevel(pi: ExtensionAPI, cwd: string): Promise<string | undefined> {
+	try {
+		const resolvedCwd = resolvePath(cwd);
+		const result = await pi.exec("git", ["-C", resolvedCwd, "rev-parse", "--show-toplevel"], {
+			cwd: resolvedCwd,
+			timeout: GIT_TOPLEVEL_TIMEOUT_MS,
+		});
+		const gitRoot = result.code === 0 ? result.stdout.trim() : "";
+		return gitRoot || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function resolveSembleRepo(pi: ExtensionAPI, repo: string | undefined, cwd: string): Promise<string> {
+	if (repo) {
+		return isGitUrlLike(repo) ? repo : resolvePath(cwd, repo);
+	}
+
+	return (await resolveGitTopLevel(pi, cwd)) ?? resolvePath(cwd);
+}
+
 function prepareSearchArguments(args: unknown): unknown {
 	if (!args || typeof args !== "object") return args;
 	const input = args as Record<string, unknown>;
@@ -402,8 +422,8 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 					details: { phase: "searching" },
 				});
 
-				const args = ["search", params.query];
-				if (params.repo) args.push(params.repo);
+				const effectiveRepo = await resolveSembleRepo(pi, params.repo, ctx.cwd);
+				const args = ["search", params.query, effectiveRepo];
 				if (params.top_k) args.push("--top-k", String(params.top_k));
 				if (params.content) args.push("--content", params.content);
 
@@ -417,7 +437,7 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 					content: [{ type: "text", text: summary }],
 					details: {
 						query: raw.query ?? params.query,
-						repo: params.repo ?? ctx.cwd,
+						repo: effectiveRepo,
 						content: params.content ?? "code",
 						results,
 						rawCount: Array.isArray(raw.results) ? raw.results.length : 0,
@@ -450,8 +470,8 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 					details: { phase: "finding_related" },
 				});
 
-				const args = ["find-related", params.file_path, String(params.line)];
-				if (params.repo) args.push(params.repo);
+				const effectiveRepo = await resolveSembleRepo(pi, params.repo, ctx.cwd);
+				const args = ["find-related", params.file_path, String(params.line), effectiveRepo];
 				if (params.top_k) args.push("--top-k", String(params.top_k));
 				if (params.content) args.push("--content", params.content);
 
@@ -464,7 +484,7 @@ export default async function sembleTools(pi: ExtensionAPI): Promise<void> {
 					content: [{ type: "text", text: summary }],
 					details: {
 						target,
-						repo: params.repo ?? ctx.cwd,
+						repo: effectiveRepo,
 						content: params.content ?? "code",
 						results,
 						rawCount: Array.isArray(raw.results) ? raw.results.length : 0,
