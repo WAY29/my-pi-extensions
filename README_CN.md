@@ -61,6 +61,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `AskUserQuestion.ts` | 工具 | `AskUserQuestion` | 为 agent 添加交互式提问工具。支持单问题或多问题流程、选项列表、自定义文本回答和每个选项的备注。 |
 | `agent-browser/` | 真实浏览器桥接 + skill 引导工具 | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | 通过内置 bridge 和已解压 Chrome 扩展，把 pi 连接到用户真实的 Chrome 会话。工具默认不激活，只有显式 arm 后才暴露，以减少普通会话的 token 开销。 |
 | `codex-style-apply-patch/` | 工具渲染 / Codex 风格 patch 工具 | `/codex-style-apply-patch`, `apply_patch` | 为 GPT/Codex 模型增加一个 Codex 风格的 `apply_patch` 工具。启用时会关闭内置 `edit`/`write`，并使用 Pi 内置 `renderDiff` 路径把 patch 预览渲染为紧凑 diff 视图。 |
+| `pi-codex-profile/` | provider header 补丁 | 自动 | 通过 `before_provider_headers` 给 GPT 模型请求注入 Codex Desktop `User-Agent`，适配 ModelRuntime 鉴权改造后的主请求路径。 |
 | `better-edit/` | 工具包装 / edit 建议增强 | `/better-edit`, `edit` | 在不改变底层 edit 引擎的前提下包装 Pi 内置 `edit` 工具。增加更宽松的参数兼容、对 AI 更友好的错误 advice、重复匹配的行号提示，以及可持久化的增强开关。 |
 | `better-grep/` | 工具包装 / grep 引导增强 | `grep` | 包装 Pi 内置 `grep` 工具，强化字面量搜索提示，并在无效 regex 导致失败时自动用 `literal=true` 重试，避免 `AuthSpecialUser(` 这类精确代码搜索失败。 |
 | `tool-call-summary.ts` | UI/工具渲染器 | `/tool-output-mode`, `Ctrl+Shift+O`, `Alt+O` | 合并旧的 `hide-read-output.ts` 和 `tool-output-mode.ts` 行为。把连续的 `read`、`find`、`grep`、`ls` 调用分组成树状摘要，支持 `hidden` / `compact` / `full` 显示模式，并通过共享状态保持 `bash` 与 Semble 输出模式切换一致。 |

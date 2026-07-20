@@ -23,6 +23,7 @@
       "./AskUserQuestion.ts",
       "./agent-browser/index.ts",
       "./codex-style-apply-patch/index.ts",
+      "./pi-codex-profile/index.ts",
       "./better-edit/index.ts",
       "./better-grep/index.ts",
       "./tool-call-summary.ts",

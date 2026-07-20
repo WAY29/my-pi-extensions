@@ -8,6 +8,8 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
+	type ModelRegistry,
+	type ModelRuntime,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -23,6 +25,13 @@ import { applyReviewLiveEvent, createReviewEventFormatter, createReviewLiveState
 import { REVIEW_CONTINUE_PROMPT, getReviewSessionDir, persistReviewState, type ReviewResumeState } from "./state.js";
 import { showReviewLivePanel } from "./ui.js";
 import type { ResolvedReviewRequest, ReviewRunnerResult } from "./types.js";
+
+/** ModelRegistry is the extension facade; createAgentSession needs the underlying ModelRuntime. */
+function modelRuntimeOf(registry: ModelRegistry): ModelRuntime {
+	const runtime = (registry as unknown as { runtime?: ModelRuntime }).runtime;
+	if (!runtime) throw new Error("ModelRegistry.runtime is missing; nested audit session cannot share auth/models.");
+	return runtime;
+}
 
 function customResourceLoader(reviewPrompt: string): ResourceLoader {
 	return {
@@ -72,7 +81,7 @@ export async function runNestedReview(
 	const { session } = await createAgentSession({
 		cwd: ctx.cwd,
 		model,
-		modelRegistry: ctx.modelRegistry,
+		modelRuntime: modelRuntimeOf(ctx.modelRegistry),
 		resourceLoader: customResourceLoader(selectSystemPrompt(resolved, language)),
 		tools: REVIEW_TOOLS,
 		sessionManager: reviewSessionManager,
