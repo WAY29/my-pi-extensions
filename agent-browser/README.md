@@ -34,7 +34,7 @@ Pi 扩展骨架：把 `agent-browser-mcp` 迁成 Pi package 风格，并用 skil
 ## 当前仍是骨架/待完善
 
 - `browser_scan_page` 已接入 `simphtml` 核心移植版：`optHTML + findMainList + token 优化 + smart truncate`。但仍未做逐页对比校准，因此现在是“高相似度首版”，不是已验证的逐字符一致版。
-- page screenshot 还未真正写入 `save_path`。
+- page screenshot 固定为最大边 1280px、quality 60 的 JPEG，避免原始高分辨率 base64 撑爆上下文；还未真正写入 `save_path`。
 - 尚未加入危险动作确认分层。
 - 还未做更高层 skill workflow/router。
 - 还未做 Windows/macOS 差异验证。

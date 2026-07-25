@@ -11,7 +11,7 @@ Use this skill only for the user's real Chrome session, not for generic web rese
 
 1. First verify setup with `browser_status` if browser connectivity is unclear.
 2. If the session is not armed, ask the user to run `/browser-on` or run this skill explicitly.
-3. Prefer read-oriented actions first: list tabs, switch tab, scan page, capture page screenshot.
+3. Prefer read-oriented actions first: list tabs, switch tab, scan page, then capture a bounded screenshot only when visual inspection is necessary.
 4. Use raw JS or raw CDP only when simpler navigation or scan tools are insufficient.
 5. Tell the user before any action that could change page state.
 6. If a browser tool reports missing extension, missing tab connection, or blocked action, stop and explain the next manual step.

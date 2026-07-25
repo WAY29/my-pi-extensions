@@ -10,6 +10,7 @@ import type { ExtensionAPI, ExtensionContext, ToolExecutionMode } from '@earendi
 import { Type } from 'typebox';
 import { Text } from '@earendil-works/pi-tui';
 import { applyCutList, buildFindMainListScript, buildOptHtmlScript, normalizeTextOnlyOutput, postProcessScannedHtml } from './simphtml.js';
+import { isScreenshotCdpBatch, isScreenshotCdpMethod, SCREENSHOT_MAX_EDGE, screenshotCaptureParams, screenshotData, screenshotViewport } from './screenshot.js';
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const chromeExtensionDir = join(packageDir, 'chrome-extension');
@@ -66,6 +67,15 @@ interface PortOccupant {
   name?: string;
   command?: string;
   source: 'lsof' | 'netstat' | 'unknown';
+}
+
+interface ScreenshotResult {
+  active_session_id: string;
+  format: 'jpeg';
+  mime_type: 'image/jpeg';
+  width: number;
+  height: number;
+  data: string;
 }
 
 class BrowserBridge {
@@ -227,6 +237,9 @@ class BrowserBridge {
   }
 
   private async cdpCommandLocal(args: { method: string; params_json?: string; session_id?: string; tab_id?: number }) {
+    if (isScreenshotCdpMethod(args.method)) {
+      throw new Error('Use browser_capture_page_screenshot; raw Page.captureScreenshot output is blocked to protect context.');
+    }
     const tabId = this.resolveLocalTabId(args.session_id, args.tab_id);
     const params = JSON.parse(args.params_json || '{}');
     const result = await this.sendRaw(tabId, { cmd: 'cdp', method: args.method, params, tabId: Number(tabId) }, 20_000);
@@ -234,6 +247,9 @@ class BrowserBridge {
   }
 
   async cdpCommand(args: { method: string; params_json?: string; session_id?: string; tab_id?: number }) {
+    if (isScreenshotCdpMethod(args.method)) {
+      throw new Error('Use browser_capture_page_screenshot; raw Page.captureScreenshot output is blocked to protect context.');
+    }
     await this.ensureStarted();
     if (this.remoteMode) return await this.remoteRpc('cdp_command', args);
     return await this.cdpCommandLocal(args);
@@ -242,12 +258,18 @@ class BrowserBridge {
   private async cdpBatchLocal(args: { batch_json: string; session_id?: string }) {
     const payload = JSON.parse(args.batch_json || '{}');
     if (payload.cmd !== 'batch') throw new Error("batch_json must be a JSON object with cmd='batch'");
+    if (isScreenshotCdpBatch(args.batch_json)) {
+      throw new Error('Use browser_capture_page_screenshot; raw Page.captureScreenshot output is blocked to protect context.');
+    }
     const tabId = this.resolveLocalTabId(args.session_id, payload.tabId);
     const result = await this.sendRaw(tabId, { ...payload, tabId: payload.tabId ?? Number(tabId) }, 30_000);
     return { active_session_id: tabId, data: result };
   }
 
   async cdpBatch(args: { batch_json: string; session_id?: string }) {
+    if (isScreenshotCdpBatch(args.batch_json)) {
+      throw new Error('Use browser_capture_page_screenshot; raw Page.captureScreenshot output is blocked to protect context.');
+    }
     await this.ensureStarted();
     if (this.remoteMode) return await this.remoteRpc('cdp_batch', args);
     return await this.cdpBatchLocal(args);
@@ -324,20 +346,44 @@ class BrowserBridge {
     return await this.openNewTabLocal(args);
   }
 
-  private async capturePageScreenshotLocal(args: { session_id?: string; tab_id?: number; format?: string; save_path?: string }) {
+  private async capturePageScreenshotLocal(args: { session_id?: string; tab_id?: number; format?: string; save_path?: string }): Promise<ScreenshotResult> {
     const tabId = this.resolveLocalTabId(args.session_id, args.tab_id);
+    const layout = await this.sendRaw(tabId, {
+      cmd: 'cdp',
+      method: 'Page.getLayoutMetrics',
+      params: {},
+      tabId: Number(tabId),
+    }, 20_000);
+    const viewport = screenshotViewport(layout);
+    if (!viewport) throw new Error('Could not determine the viewport required for a bounded screenshot.');
+    const screenshotParams = screenshotCaptureParams(viewport);
     const result = await this.sendRaw(tabId, {
       cmd: 'cdp',
       method: 'Page.captureScreenshot',
-      params: { format: args.format || 'png' },
+      params: screenshotParams,
       tabId: Number(tabId),
     }, 20_000);
-    return { active_session_id: tabId, format: args.format || 'png', data: result, save_path: args.save_path || '' };
+    const data = screenshotData(result);
+    if (!data) throw new Error('Chrome returned an invalid screenshot payload.');
+    return {
+      active_session_id: tabId,
+      format: 'jpeg',
+      mime_type: 'image/jpeg',
+      width: Math.round(viewport.width * screenshotParams.clip.scale),
+      height: Math.round(viewport.height * screenshotParams.clip.scale),
+      data,
+    };
   }
 
-  async capturePageScreenshot(args: { session_id?: string; tab_id?: number; format?: string; save_path?: string }) {
+  async capturePageScreenshot(args: { session_id?: string; tab_id?: number; format?: string; save_path?: string }): Promise<ScreenshotResult> {
     await this.ensureStarted();
-    if (this.remoteMode) return await this.remoteRpc('capture_page_screenshot', args);
+    if (this.remoteMode) {
+      const result = await this.remoteRpc('capture_page_screenshot', args) as Partial<ScreenshotResult>;
+      if (result.format !== 'jpeg' || result.mime_type !== 'image/jpeg' || typeof result.data !== 'string') {
+        throw new Error('The shared browser bridge does not support bounded screenshots. Restart it with the current agent-browser extension.');
+      }
+      return result as ScreenshotResult;
+    }
     return await this.capturePageScreenshotLocal(args);
   }
 
@@ -1335,7 +1381,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_cdp_command',
     label: 'Browser CDP Command',
-    description: 'Call a single Chrome DevTools Protocol command on the current or specified tab.',
+    description: 'Call a single Chrome DevTools Protocol command on the current or specified tab. Page.captureScreenshot is blocked; use browser_capture_page_screenshot.',
     parameters: Type.Object({
       method: Type.String({ description: 'CDP method name, such as Page.captureScreenshot' }),
       params_json: Type.Optional(Type.String({ description: 'JSON object encoded as a string' })),
@@ -1364,7 +1410,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_cdp_batch',
     label: 'Browser CDP Batch',
-    description: 'Run a CDP bridge batch command encoded as a JSON object string.',
+    description: 'Run a CDP bridge batch command encoded as a JSON object string. Page.captureScreenshot is blocked; use browser_capture_page_screenshot.',
     parameters: Type.Object({
       batch_json: Type.String({ description: "Full JSON object string with cmd='batch'" }),
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
@@ -1418,24 +1464,31 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_capture_page_screenshot',
     label: 'Browser Capture Screenshot',
-    description: 'Capture a screenshot of the current page/tab via CDP.',
+    description: 'Capture the current viewport as a bounded JPEG screenshot (max edge 1280px, quality 60) via CDP.',
     parameters: Type.Object({
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
       tab_id: Type.Optional(Type.Number({ description: 'Optional explicit Chrome tab id' })),
-      format: Type.Optional(Type.String({ description: 'Screenshot format, usually png or jpeg' })),
+      format: Type.Optional(Type.String({ description: 'Deprecated; screenshots are always returned as bounded JPEG.' })),
       save_path: Type.Optional(Type.String({ description: 'Reserved for future save-to-file support' })),
     }),
     executionMode: 'sequential' as ToolExecutionMode,
     async execute(_id: any, params: any) {
       try {
         const result = await bridge.capturePageScreenshot(params);
-        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+        const { data, mime_type, width, height, ...details } = result;
+        return {
+          content: [
+            { type: 'text', text: `JPEG screenshot (${width}x${height}, max edge ${SCREENSHOT_MAX_EDGE}px).` },
+            { type: 'image', data, mimeType: mime_type },
+          ],
+          details: { ...details, width, height, mime_type },
+        };
       } catch (error) {
         return browserErrorResult(error);
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('screenshot', args.format || 'png', theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall('screenshot', 'jpeg', theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
