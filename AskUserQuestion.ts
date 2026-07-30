@@ -86,9 +86,9 @@ const QuestionSchema = Type.Object({
 	options: Type.Optional(
 		Type.Union([Type.Array(QuestionOptionSchema, { description: "Available options to choose from" }), Type.Null()]),
 	),
-	allowOther: Type.Optional(Type.Boolean({ description: "Allow 'Type something' option (default: true)" })),
-	isOther: Type.Optional(Type.Boolean({ description: "Codex-style alias for allowOther" })),
-	is_other: Type.Optional(Type.Boolean({ description: "Snake-case alias for allowOther" })),
+	allowOther: Type.Optional(Type.Boolean({ description: "Ignored; Other is always available" })),
+	isOther: Type.Optional(Type.Boolean({ description: "Ignored; Other is always available" })),
+	is_other: Type.Optional(Type.Boolean({ description: "Ignored; Other is always available" })),
 	isSecret: Type.Optional(Type.Boolean({ description: "Codex-style flag for secret input (currently rendered as normal text)" })),
 	is_secret: Type.Optional(Type.Boolean({ description: "Snake-case alias for isSecret" })),
 });
@@ -112,7 +112,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		name: "AskUserQuestion",
 		label: "Ask User Question",
 		description:
-			"Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. Press Tab on an option to let the user attach a note to that option.",
+			"Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. Always includes a free-text Other option. Press Tab on an option to let the user attach a note to that option.",
 		parameters: QuestionnaireParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -124,6 +124,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 			}
 
 			// Normalize questions with defaults and Codex-style aliases.
+			// Other/free-text is always available so users can answer outside the given options.
 			const questions: Question[] = (params.questions as RawQuestion[]).map((q, i) => ({
 				id: q.id,
 				label: q.label || q.header || `Q${i + 1}`,
@@ -133,14 +134,11 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 					label: opt.label,
 					description: opt.description,
 				})),
-				allowOther: q.allowOther ?? q.isOther ?? q.is_other ?? true,
+				allowOther: true,
 			}));
 
 			if (questions.some((q) => !q.prompt.trim())) {
 				return errorResult("Error: Each question must include prompt or question text", questions);
-			}
-			if (questions.some((q) => q.options.length === 0 && !q.allowOther)) {
-				return errorResult("Error: Each question must include options or allowOther/isOther", questions);
 			}
 
 			const isMulti = questions.length > 1;
@@ -190,11 +188,10 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				function currentOptions(): RenderOption[] {
 					const q = currentQuestion();
 					if (!q) return [];
-					const opts: RenderOption[] = [...q.options];
-					if (q.allowOther) {
-						opts.push({ value: "__other__", label: "Type something.", isOther: true });
-					}
-					return opts;
+					return [
+						...q.options,
+						{ value: "__other__", label: "Type something.", isOther: true },
+					];
 				}
 
 				function allAnswered(): boolean {
