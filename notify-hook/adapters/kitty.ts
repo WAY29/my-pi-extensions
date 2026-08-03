@@ -63,7 +63,7 @@ function closeNotification(id: string): void {
 function bodyFor(signal: NotifyHookLifecycleSignal): string | undefined {
 	if (signal.eventName === "request_user_input") return "Ready for Input";
 	if (signal.eventName !== "Stop") return undefined;
-	if (signal.source !== "agent_end") return undefined;
+	if (signal.source !== "agent_end" && signal.source !== "agent_settled") return undefined;
 	return "Finish";
 }
 
