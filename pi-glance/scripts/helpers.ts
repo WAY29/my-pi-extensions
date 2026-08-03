@@ -4,6 +4,7 @@ import type { GlanceState } from "../types.js";
 export function testState(overrides: Partial<GlanceState> = {}): GlanceState {
 	const base: GlanceState = {
 		workspace: { name: "repo", path: "/repo" },
+		hostTheme: null,
 		git: emptyGitSnapshot(),
 		providers: { availableCount: 1 },
 		model: { id: "gpt-5.5", provider: "openai", displayName: "GPT 5.5", thinking: "off" },

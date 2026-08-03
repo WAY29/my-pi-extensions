@@ -1,6 +1,9 @@
-import type { GlancePalette, GlanceThemeName, IconMode, IconSet, Rgb } from "./types.js";
+import { existsSync, readFileSync } from "node:fs";
+import type { GlancePalette, GlanceThemeName, HostThemeRef, IconMode, IconSet, Rgb, SegmentId } from "./types.js";
 
-export const PALETTES: Record<GlanceThemeName, GlancePalette> = {
+export const FIXED_THEMES = ["light", "dark", "catppuccin-latte", "catppuccin-mocha"] as const satisfies readonly Exclude<GlanceThemeName, "follow">[];
+
+export const PALETTES: Record<Exclude<GlanceThemeName, "follow">, GlancePalette> = {
 	light: {
 		name: "light",
 		text: { r: 15, g: 23, b: 42 },
@@ -106,4 +109,108 @@ function rgbToFg(color: Rgb): string {
 
 export function fg(color: Rgb, text: string): string {
 	return `${rgbToFg(color)}${text}\x1b[39m`;
+}
+
+function hexToRgb(hex: string): Rgb | undefined {
+	const cleaned = hex.trim().replace(/^#/, "");
+	if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return undefined;
+	return {
+		r: Number.parseInt(cleaned.slice(0, 2), 16),
+		g: Number.parseInt(cleaned.slice(2, 4), 16),
+		b: Number.parseInt(cleaned.slice(4, 6), 16),
+	};
+}
+
+function resolveThemeVar(value: unknown, vars: Record<string, unknown>, seen = new Set<string>()): string | undefined {
+	if (typeof value === "number") return undefined;
+	if (typeof value !== "string") return undefined;
+	if (value === "") return undefined;
+	if (value.startsWith("#")) return value;
+	if (seen.has(value)) return undefined;
+	seen.add(value);
+	if (!(value in vars)) return undefined;
+	return resolveThemeVar(vars[value], vars, seen);
+}
+
+/** Load resolved hex colors from a pi theme JSON path. */
+export function loadHostThemeColors(themePath: string | undefined): Record<string, string> | undefined {
+	if (!themePath || !existsSync(themePath)) return undefined;
+	try {
+		const json = JSON.parse(readFileSync(themePath, "utf8")) as {
+			vars?: Record<string, unknown>;
+			colors?: Record<string, unknown>;
+		};
+		const vars = json.vars ?? {};
+		const colors = json.colors ?? {};
+		const resolved: Record<string, string> = {};
+		for (const [key, value] of Object.entries(colors)) {
+			const hex = resolveThemeVar(value, vars);
+			if (hex) resolved[key] = hex;
+		}
+		return Object.keys(resolved).length > 0 ? resolved : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function pickRgb(colors: Record<string, string>, keys: string[], fallback: Rgb): Rgb {
+	for (const key of keys) {
+		const hex = colors[key];
+		if (!hex) continue;
+		const rgb = hexToRgb(hex);
+		if (rgb) return rgb;
+	}
+	return fallback;
+}
+
+function segment(fg: Rgb): { fg: Rgb } {
+	return { fg };
+}
+
+/** Build a glance palette from host theme color tokens. */
+export function paletteFromHostColors(hostName: string, colors: Record<string, string>): GlancePalette {
+	const fallback = PALETTES.dark;
+	const text = pickRgb(colors, ["text", "userMessageText"], fallback.text);
+	const dim = pickRgb(colors, ["dim", "muted"], fallback.dim);
+	const warn = pickRgb(colors, ["warning"], fallback.warn);
+	const error = pickRgb(colors, ["error"], fallback.error);
+	const border = pickRgb(colors, ["border", "borderMuted", "borderAccent"], fallback.border);
+	const title = pickRgb(colors, ["accent", "borderAccent"], fallback.title);
+	const success = pickRgb(colors, ["success", "syntaxString"], fallback.segments.git.fg);
+	const model = pickRgb(colors, ["accent", "toolTitle", "syntaxFunction"], fallback.segments.model.fg);
+	const context = pickRgb(colors, ["success", "syntaxType", "accent"], fallback.segments.context.fg);
+	const tokens = pickRgb(colors, ["muted", "dim", "toolOutput"], fallback.segments.tokens.fg);
+	const cost = pickRgb(colors, ["warning", "syntaxNumber"], fallback.segments.cost.fg);
+
+	const segments: Record<SegmentId, { fg: Rgb }> = {
+		git: segment(success),
+		plan: segment(warn),
+		sandbox: segment(warn),
+		model: segment(model),
+		context: segment(context),
+		tokens: segment(tokens),
+		cost: segment(cost),
+	};
+
+	return {
+		name: hostName || "follow",
+		text,
+		dim,
+		warn,
+		error,
+		separator: dim,
+		border,
+		title,
+		segments,
+	};
+}
+
+/** Resolve glance palette: fixed id or host-follow. */
+export function resolvePalette(theme: GlanceThemeName, host: HostThemeRef | null | undefined): GlancePalette {
+	if (theme !== "follow") {
+		return PALETTES[theme] ?? PALETTES.dark;
+	}
+	const colors = loadHostThemeColors(host?.path);
+	if (!colors) return PALETTES.dark;
+	return paletteFromHostColors(host?.name ?? "follow", colors);
 }

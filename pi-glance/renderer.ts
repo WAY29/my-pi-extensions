@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatWorkspaceLabel } from "./format.js";
-import { ICONS, PALETTES, fg } from "./palette.js";
+import { ICONS, fg, resolvePalette } from "./palette.js";
 import { SEGMENT_BY_ID, renderSegment } from "./segments.js";
 import { TITLE_PLACEHOLDER } from "./title.js";
 import type {
@@ -44,7 +44,7 @@ function renderEnabledSegments(
 	providerCount = 1,
 ): { palette: GlancePalette; segments: SegmentRenderResult[] } {
 	const widthMode = config.display.adaptive ? widthModeFor(width) : "full";
-	const palette = PALETTES[config.theme];
+	const palette = resolvePalette(config.theme, state.hostTheme);
 	const icons = ICONS[config.icons];
 	const ctx: SegmentRenderContext = {
 		state,
@@ -103,23 +103,23 @@ interface InputSurfaceRenderOptions {
 	showTitle?: boolean;
 }
 
-function borderColor(config: GlanceConfig, text: string): string {
-	const palette = PALETTES[config.theme];
+function borderColor(config: GlanceConfig, state: GlanceState, text: string): string {
+	const palette = resolvePalette(config.theme, state.hostTheme);
 	return fg(palette.border, text);
 }
 
-function textColor(config: GlanceConfig, text: string): string {
-	const palette = PALETTES[config.theme];
+function textColor(config: GlanceConfig, state: GlanceState, text: string): string {
+	const palette = resolvePalette(config.theme, state.hostTheme);
 	return fg(palette.text, text);
 }
 
-function titleColor(config: GlanceConfig, text: string): string {
-	const palette = PALETTES[config.theme];
+function titleColor(config: GlanceConfig, state: GlanceState, text: string): string {
+	const palette = resolvePalette(config.theme, state.hostTheme);
 	return fg(palette.title, text);
 }
 
-function dimColor(config: GlanceConfig, text: string): string {
-	const palette = PALETTES[config.theme];
+function dimColor(config: GlanceConfig, state: GlanceState, text: string): string {
+	const palette = resolvePalette(config.theme, state.hostTheme);
 	return fg(palette.dim, text);
 }
 
@@ -130,6 +130,7 @@ function padPlain(text: string, width: number): string {
 export function renderInputSurfacePreview(config: GlanceConfig, width: number, options: InputSurfaceRenderOptions = {}): string[] {
 	const state: GlanceState = {
 		workspace: { name: "pi-glance", path: "/Users/winnie/projects/pi-glance" },
+		hostTheme: null,
 		git: {
 			repo: true,
 			branch: "main",
@@ -177,32 +178,32 @@ export function renderInputSurface(
 	const statusBudget = Math.max(0, innerWidth - (title ? visibleWidth(title) + 3 : 1));
 	const status = renderGlanceLine(state, config, statusBudget, state.providers.availableCount);
 	const statusWidth = visibleWidth(status);
-	const leftTitle = title ? `${borderColor(config, "─")}${titleColor(config, title)}` : borderColor(config, "─");
+	const leftTitle = title ? `${borderColor(config, state, "─")}${titleColor(config, state, title)}` : borderColor(config, state, "─");
 	const leftTitleWidth = visibleWidth(leftTitle);
 	const gap = status ? " " : "";
 	const rightGap = status ? " " : "";
-	const rightCap = status ? borderColor(config, "─") : "";
+	const rightCap = status ? borderColor(config, state, "─") : "";
 	const fillerWidth = Math.max(
 		0,
 		innerWidth - leftTitleWidth - visibleWidth(gap) - statusWidth - visibleWidth(rightGap) - visibleWidth(rightCap),
 	);
-	const top = `${borderColor(config, "╭")}${leftTitle}${borderColor(config, "─".repeat(fillerWidth))}${gap}${status}${rightGap}${rightCap}${borderColor(config, "╮")}`;
-	const lines = [truncateToWidth(top, safeWidth, borderColor(config, "…"))];
+	const top = `${borderColor(config, state, "╭")}${leftTitle}${borderColor(config, state, "─".repeat(fillerWidth))}${gap}${status}${rightGap}${rightCap}${borderColor(config, state, "╮")}`;
+	const lines = [truncateToWidth(top, safeWidth, borderColor(config, state, "…"))];
 	for (let i = 0; i < rows; i++) {
 		const raw = contentLines[i] ?? "";
-		const prefix = i === 0 && options.focused ? dimColor(config, "› ") : "  ";
+		const prefix = i === 0 && options.focused ? dimColor(config, state, "› ") : "  ";
 		const contentBudget = Math.max(0, innerWidth - visibleWidth(prefix));
-		const content = truncateToWidth(raw, contentBudget, dimColor(config, "…"));
-		const padded = padPlain(`${prefix}${textColor(config, content)}`, innerWidth);
-		lines.push(`${borderColor(config, "│")}${padded}${borderColor(config, "│")}`);
+		const content = truncateToWidth(raw, contentBudget, dimColor(config, state, "…"));
+		const padded = padPlain(`${prefix}${textColor(config, state, content)}`, innerWidth);
+		lines.push(`${borderColor(config, state, "│")}${padded}${borderColor(config, state, "│")}`);
 	}
-	lines.push(`${borderColor(config, "╰")}${borderColor(config, "─".repeat(innerWidth))}${borderColor(config, "╯")}`);
+	lines.push(`${borderColor(config, state, "╰")}${borderColor(config, state, "─".repeat(innerWidth))}${borderColor(config, state, "╯")}`);
 	if (config.title.enabled) {
 		const titleText = state.title.text ?? (state.title.generating ? TITLE_PLACEHOLDER : "");
 		if (titleText) {
 			const indent = Math.min(2, Math.max(0, safeWidth - 1));
-			const title = truncateToWidth(titleText, Math.max(0, safeWidth - indent), dimColor(config, "…"));
-			lines.push(`${" ".repeat(indent)}${dimColor(config, title)}`);
+			const title = truncateToWidth(titleText, Math.max(0, safeWidth - indent), dimColor(config, state, "…"));
+			lines.push(`${" ".repeat(indent)}${dimColor(config, state, title)}`);
 		}
 	}
 	return lines;

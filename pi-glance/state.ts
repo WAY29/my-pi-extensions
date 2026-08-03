@@ -11,6 +11,7 @@ export function createInitialState(ctx: ExtensionContext, config: GlanceConfig, 
 			name: displayDirectory(cwd),
 			path: cwd,
 		},
+		hostTheme: null,
 		git: emptyGitSnapshot(),
 		providers: {
 			availableCount: 1,

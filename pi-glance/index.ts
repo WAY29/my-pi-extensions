@@ -129,6 +129,19 @@ export default function piGlance(pi: ExtensionAPI): void {
 		return config;
 	}
 
+	function syncHostTheme(ctx: ExtensionContext): boolean {
+		if (!state || !ctx.hasUI) return false;
+		const hostTheme = ctx.ui.theme as { name?: string } | undefined;
+		const name = typeof hostTheme?.name === "string" && hostTheme.name ? hostTheme.name : undefined;
+		if (!name) return false;
+		const path = ctx.ui.getAllThemes?.().find((entry) => entry.name === name)?.path;
+		const next = { name, path };
+		if (state.hostTheme?.name === next.name && state.hostTheme?.path === next.path) return false;
+		state.hostTheme = next;
+		state.version++;
+		return true;
+	}
+
 	function ensureState(ctx: ExtensionContext): GlanceState {
 		if (!state) {
 			state = createInitialState(ctx, getConfig(), pi.getThinkingLevel());
@@ -677,8 +690,21 @@ export default function piGlance(pi: ExtensionAPI): void {
 
 		ensureGitRefresher().schedule(true);
 		clearBridge();
-		ctx.ui.setFooter((tui, _theme, footerData) => {
+		ctx.ui.setFooter((tui, theme, footerData) => {
 			requestRender = () => tui.requestRender();
+			// Keep glance palette in lockstep with host theme changes (live preview + /theme).
+			const themeName = typeof (theme as { name?: string } | undefined)?.name === "string"
+				? (theme as { name: string }).name
+				: undefined;
+			if (themeName && state) {
+				const path = ctx.ui.getAllThemes?.().find((entry) => entry.name === themeName)?.path;
+				if (state.hostTheme?.name !== themeName || state.hostTheme?.path !== path) {
+					state.hostTheme = { name: themeName, path };
+					state.version++;
+				}
+			} else {
+				syncHostTheme(ctx);
+			}
 			footerBridge = new GlanceFooterBridge(() => state ?? ensureState(ctx), () => getConfig(), footerData, requestRender);
 			return footerBridge;
 		});
@@ -739,6 +765,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		cancelTitleGeneration();
 		config = await loadConfig();
 		state = createInitialState(ctx, config, pi.getThinkingLevel());
+		syncHostTheme(ctx);
 		if (pendingPlanModeState) setPlanModeSnapshot(state, pendingPlanModeState);
 		if (pendingGoalState !== undefined) setGoalSnapshot(state, pendingGoalState);
 		const autoModelNotice = await applyWorkspaceAutoModel(ctx);

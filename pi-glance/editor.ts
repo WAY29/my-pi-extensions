@@ -1,6 +1,6 @@
 import { CustomEditor, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type EditorOptions, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
-import { PALETTES, fg } from "./palette.js";
+import { fg, resolvePalette } from "./palette.js";
 import { renderGlanceLine } from "./renderer.js";
 import { formatWorkspaceLabel, stripControls } from "./format.js";
 import { TITLE_PLACEHOLDER } from "./title.js";
@@ -106,13 +106,17 @@ export class GlanceEditor extends CustomEditor {
 		return status;
 	}
 
+	private palette() {
+		return resolvePalette(this.getConfig().theme, this.getState().hostTheme);
+	}
+
 	private border(text: string, isFocused: boolean): string {
-		const palette = PALETTES[this.getConfig().theme];
+		const palette = this.palette();
 		return fg(isFocused ? palette.border : palette.dim, text);
 	}
 
 	private title(text: string, isFocused: boolean): string {
-		const palette = PALETTES[this.getConfig().theme];
+		const palette = this.palette();
 		return fg(isFocused ? palette.title : palette.dim, text);
 	}
 
@@ -153,7 +157,7 @@ export class GlanceEditor extends CustomEditor {
 
 	private dimStatus(status: string, isFocused: boolean, config: GlanceConfig): string {
 		if (isFocused || !status) return status;
-		return fg(PALETTES[config.theme].dim, stripControls(status));
+		return fg(resolvePalette(config.theme, this.getState().hostTheme).dim, stripControls(status));
 	}
 
 	private makeTopBorder(width: number, original: string, isFocused: boolean): string {
@@ -206,7 +210,7 @@ export class GlanceEditor extends CustomEditor {
 		if (!titleText) return undefined;
 		const indent = Math.min(1 + CONTENT_PADDING_X, Math.max(0, width - 1));
 		const title = truncateToWidth(titleText, Math.max(0, width - indent), "…");
-		return `${" ".repeat(indent)}${fg(PALETTES[config.theme].dim, title)}`;
+		return `${" ".repeat(indent)}${fg(resolvePalette(config.theme, this.getState().hostTheme).dim, title)}`;
 	}
 
 	render(width: number): string[] {

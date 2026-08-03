@@ -82,12 +82,18 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `sudo-auth.ts` | sudo 辅助 | 自动 | 为 bash 命令中的 `sudo` 提供 TUI askpass 桥接。密码只缓存在扩展内存中，并会在认证失败或会话结束时清除。 |
 | `notify-hook.ts` | 集成钩子 | 自动 | 面向外部平台的通用通知桥接层，用于转发 pi 生命周期事件和临时“等待用户介入”状态。当前内置的是 Superset adapter（调用 Superset 的 `notify.sh`），但核心扩展本身不与 Superset 绑定，后续可继续增加其它通知后端。 |
 | `notify-hook/attention.ts` | 辅助模块 | 自动 | 为 `notify-hook.ts`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
-| `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
+| `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案，并把折叠 thinking 显示为 `thoughts · Xs`。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `startup-info.ts` | 启动信息聚合器 | 自动 | 聚合多个扩展协作发出的启动期 `info` 提示，并合并为一条启动消息，避免 `pi-sandbox/` 状态与 `pi-glance/` AutoModel 切换之类的信息互相覆盖。 |
-| `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。它的设置面板也可以配置工作区自动模型规则，包括 `model[:thinking]` 形式的 AutoModel 规则，并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
+| `herdr-agent-state.ts` | 集成钩子 | 自动 | Herdr 管理的 pane 集成，只在 herdr 管理的 pane 中生效。 |
+| `orca-agent-status.ts` | 集成钩子 | 自动 | Orca 管理的状态桥，把 pi 生命周期快照推送到本地 Orca endpoint。 |
+| `orca-prefill.ts` | 集成钩子 | 自动 | Orca 管理的 prefill helper，用于 Orca 连接的 pi 会话。 |
+| `orca-titlebar-spinner.ts` | 集成钩子 | 自动 | Orca 管理的标题栏 spinner，在 agent 工作时显示。 |
+| `superset-hooks.ts` | 集成钩子 | 自动 | 向 Superset 的 `notify.sh` 发送 Claude Code 兼容生命周期钩子，用于工作中/完成提示。 |
+| `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。主题默认可跟随 host pi 主题；设置面板也可配置工作区自动模型规则（含 `model[:thinking]`），并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
 | `pi-debug-mode/` | 调试工作流 + skill 桥接 | `/debug`, `/debug-status`, `/debug:cleanup`, `debug_mode_state`, `debug_mode_session`, `debug-mode` skill | 为 Pi 增加一个最小版 Cursor 风格调试工作流。调试工具只会在手动进入 debug mode 的回合注入，负责 collector/session 管理与 footer 状态，并与仓库内置的 `skills/debug-mode/` 运行时取证 skill 配套工作。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
+| `pi-trio/` | 规划/执行/评审工作流 | `/trio` | 单会话 planner → executor → reviewer 工作流，支持角色模型与可选 review 轮次上限。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 | `review/` | 评审工作流 | `/review` | 启动一个隔离的 Codex 风格代码评审会话，支持预设目标选择、主线程实时工具/assistant 渲染、可恢复的中断评审，以及一键解决全部或选定 findings 的后续动作。 |
 

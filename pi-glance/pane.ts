@@ -389,8 +389,14 @@ class GlanceConfigPane implements Component {
 			toggleRow("Enabled", this.draft.enabled, "Temporarily disable pi-glance.", () => {
 				this.draft.enabled = !this.draft.enabled;
 			}),
-			cycleRow("Theme", this.draft.theme, "Switch the palette.", () => {
-				this.draft.theme = nextIn(this.draft.theme, ["light", "dark", "catppuccin-latte", "catppuccin-mocha"] as GlanceThemeName[]);
+			cycleRow("Theme", this.draft.theme, "follow = match pi host theme; others are fixed palettes.", () => {
+				this.draft.theme = nextIn(this.draft.theme, [
+					"follow",
+					"light",
+					"dark",
+					"catppuccin-latte",
+					"catppuccin-mocha",
+				] as GlanceThemeName[]);
 			}),
 			cycleRow("Icons", this.draft.icons, "Plain works without Nerd Font.", () => {
 				this.draft.icons = nextIn(this.draft.icons, ["plain", "nerd"] as IconMode[]);

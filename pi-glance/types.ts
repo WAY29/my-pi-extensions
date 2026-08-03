@@ -1,5 +1,5 @@
 export type SegmentId = "git" | "plan" | "sandbox" | "model" | "context" | "tokens" | "cost";
-export type GlanceThemeName = "light" | "dark" | "catppuccin-latte" | "catppuccin-mocha";
+export type GlanceThemeName = "follow" | "light" | "dark" | "catppuccin-latte" | "catppuccin-mocha";
 export type IconMode = "nerd" | "plain";
 export type WidthMode = "full" | "compact" | "minimal";
 export type GitStatus = "clean" | "dirty" | "conflict" | "unknown";
@@ -129,11 +129,18 @@ export interface GitSnapshot {
 	updatedAt: number;
 }
 
+export interface HostThemeRef {
+	name: string;
+	path?: string;
+}
+
 export interface GlanceState {
 	workspace: {
 		name: string;
 		path: string;
 	};
+	/** Active pi host theme (name + json path). Used when config.theme === "follow". */
+	hostTheme: HostThemeRef | null;
 	git: GitSnapshot;
 	providers: {
 		availableCount: number;
@@ -183,7 +190,8 @@ interface SegmentPalette {
 }
 
 export interface GlancePalette {
-	name: GlanceThemeName;
+	/** Fixed palette id, or host theme name when following. */
+	name: string;
 	text: Rgb;
 	dim: Rgb;
 	warn: Rgb;

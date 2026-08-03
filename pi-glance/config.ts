@@ -31,7 +31,7 @@ const DEFAULT_SEGMENTS: SegmentConfig[] = [
 ];
 
 const SEGMENT_IDS = new Set<SegmentId>(DEFAULT_SEGMENTS.map((s) => s.id));
-const THEMES = new Set<GlanceThemeName>(["light", "dark", "catppuccin-latte", "catppuccin-mocha"]);
+const THEMES = new Set<GlanceThemeName>(["follow", "light", "dark", "catppuccin-latte", "catppuccin-mocha"]);
 const ICON_MODES = new Set<IconMode>(["nerd", "plain"]);
 const PROVIDER_MODES = new Set<GlanceConfig["display"]["showProvider"]>(["auto", "always", "never"]);
 const WORKSPACE_LABEL_MODES = new Set<WorkspaceLabelMode>(["name", "smart", "path"]);
@@ -46,7 +46,7 @@ export function defaultConfig(): GlanceConfig {
 	return {
 		version: CONFIG_VERSION,
 		enabled: true,
-		theme: "light",
+		theme: "follow",
 		icons: "plain",
 		editor: {
 			minContentRows: 3,

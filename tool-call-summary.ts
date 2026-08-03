@@ -43,6 +43,7 @@ const SHORTCUTS = [
 ] as const;
 
 const PATCH_STATE_KEY = Symbol.for("pi.tool-call-summary.toolExecutionRenderPatch");
+const componentInvalidators = new Map<string, () => void>();
 const MAX_PATH_DISPLAY_LENGTH = 80;
 const MAX_READABLE_PARENT_SEGMENTS = 2;
 const EXTRA_PARENT_SEGMENT_PENALTY = 4;
@@ -359,26 +360,27 @@ function setStatus(ctx: { ui: { setStatus(key: string, text: string | undefined)
 	ctx.ui.setStatus(STATUS_KEY, `tool output: ${peekToolOutputMode()}`);
 }
 
-function refreshToolRows(ctx: {
-	ui: {
-		getToolsExpanded(): boolean;
-		setToolsExpanded(expanded: boolean): void;
-	};
-}): void {
+function refreshToolRows(): void {
 	refreshBashTool();
 	refreshGrepTool();
-	ctx.ui.setToolsExpanded(ctx.ui.getToolsExpanded());
+	// Re-render existing tool rows without host setToolsExpanded(), which always
+	// emits a chat status line: "Tool output: collapsed/expanded".
+	for (const invalidate of componentInvalidators.values()) {
+		invalidate();
+	}
 }
 
-function syncGroupedCallsFromSession(ctx: {
-	sessionManager: { getBranch(): unknown[] };
-	ui: {
-		getToolsExpanded(): boolean;
-		setToolsExpanded(expanded: boolean): void;
-	};
-}, rebuildStateFromSession: (ctx: { sessionManager: { getBranch(): unknown[] } }) => void): void {
+function trackComponentInvalidator(toolCallId: string, invalidate: (() => void) | undefined): void {
+	if (typeof invalidate !== "function") return;
+	componentInvalidators.set(toolCallId, invalidate);
+}
+
+function syncGroupedCallsFromSession(
+	ctx: { sessionManager: { getBranch(): unknown[] } },
+	rebuildStateFromSession: (ctx: { sessionManager: { getBranch(): unknown[] } }) => void,
+): void {
 	rebuildStateFromSession(ctx);
-	refreshToolRows(ctx);
+	refreshToolRows();
 }
 
 function applyOutputMode(
@@ -386,8 +388,6 @@ function applyOutputMode(
 		ui: {
 			setStatus(key: string, text: string | undefined): void;
 			notify(message: string, type?: "info" | "warning" | "error"): void;
-			getToolsExpanded(): boolean;
-			setToolsExpanded(expanded: boolean): void;
 		};
 	},
 	mode: ToolOutputMode,
@@ -395,7 +395,7 @@ function applyOutputMode(
 	const previousMode = setToolOutputMode(mode);
 	const nextMode = peekToolOutputMode();
 	setStatus(ctx);
-	refreshToolRows(ctx);
+	refreshToolRows();
 	ctx.ui.notify(`${TOOL_SCOPE} output: ${previousMode} → ${nextMode}`, "info");
 }
 
@@ -697,7 +697,12 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		return {
 			...definition,
 			renderShell: "self",
-			renderCall(args: unknown, theme: SummaryTheme, context: { lastComponent?: unknown; toolCallId: string }) {
+			renderCall(
+				args: unknown,
+				theme: SummaryTheme,
+				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void },
+			) {
+				trackComponentInvalidator(context.toolCallId, context.invalidate);
 				const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
 				component.setText(
 					formatGroupedTree(
@@ -725,6 +730,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 	registerBashToolPlugin(pi, {
 		id: "tool-call-summary",
 		wrapRenderResult: (next) => (result, options, theme, context) => {
+			trackComponentInvalidator(context.toolCallId, context.invalidate);
 			const outputMode = peekToolOutputMode();
 			if (outputMode === "hidden") return new Container();
 			return next(result, { ...options, expanded: outputMode === "full" }, theme, context);
@@ -802,7 +808,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			}
 			if (message.role === "toolResult" && isTargetToolName(message.toolName)) {
 				storeToolResultMessage(event.message);
-				refreshToolRows(ctx);
+				refreshToolRows();
 			}
 		}
 	});
@@ -811,6 +817,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		if (patchState.shouldHide === isHiddenGroupedComponent) {
 			patchState.shouldHide = undefined;
 		}
+		componentInvalidators.clear();
 		releaseBashToolOwner(pi);
 		releaseGrepToolOwner(pi);
 		deactivateToolOutputMode();

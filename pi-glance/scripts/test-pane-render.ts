@@ -132,12 +132,14 @@ const themePane = await makePane();
 press(themePane.component, "\x1b[C");
 press(themePane.component, "\x1b[B");
 press(themePane.component, "\x1b[C");
+// default theme is follow; Enter cycles fixed palettes after that
+assertLineContainsAll(plainText(themePane.component), ["Theme", "follow"], "default theme should be follow");
+press(themePane.component, "\r");
+assertLineContainsAll(plainText(themePane.component), ["Theme", "light"], "theme should cycle to light");
 press(themePane.component, "\r");
 assertLineContainsAll(plainText(themePane.component), ["Theme", "dark"], "theme should cycle to dark");
 press(themePane.component, "\r");
 assertLineContainsAll(plainText(themePane.component), ["Theme", "catppuccin-latte"], "theme should cycle to Catppuccin Latte");
-press(themePane.component, "\r");
-assertLineContainsAll(plainText(themePane.component), ["Theme", "catppuccin-mocha"], "theme should cycle to Catppuccin Mocha");
 
 const gridPane = await makePane();
 press(gridPane.component, "\x1b[B");
@@ -269,7 +271,7 @@ const generalHintPane = await makePane();
 press(generalHintPane.component, "\x1b[C");
 assertContains(plainText(generalHintPane.component), "Temporarily disable pi-glance.", "general enabled hint should render");
 press(generalHintPane.component, "\x1b[B");
-assertContains(plainText(generalHintPane.component), "Switch the palette.", "general theme hint should render");
+assertContains(plainText(generalHintPane.component), "follow = match pi host theme", "general theme hint should render");
 press(generalHintPane.component, "\x1b[B");
 press(generalHintPane.component, "\x1b[B");
 press(generalHintPane.component, "\x1b[B");
