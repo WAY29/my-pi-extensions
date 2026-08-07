@@ -1,28 +1,48 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const CODEX_DESKTOP_USER_AGENT =
-	"Codex Desktop/0.140.0-alpha.19 (Mac OS 26.5.1; arm64) unknown (Codex Desktop; 26.611.61753)";
+// Align with sub2api gateway default (codexCLIVersion / CodexDefaultOriginator).
+const CODEX_VERSION = "0.146.0";
+const CODEX_ORIGINATOR = "codex-tui";
+const CODEX_USER_AGENT = `${CODEX_ORIGINATOR}/${CODEX_VERSION} (Mac OS X 15.0; arm64) xterm-256color`;
 
 function isGptModel(model: { id?: string } | undefined): boolean {
 	return typeof model?.id === "string" && model.id.toLowerCase().startsWith("gpt");
 }
 
-/** Apply Codex Desktop UA for GPT models. Mutates headers in place. */
-export function applyCodexUserAgent(
+function clearHeader(headers: Record<string, string | null>, name: string): void {
+	const lower = name.toLowerCase();
+	for (const key of Object.keys(headers)) {
+		if (key.toLowerCase() === lower) headers[key] = null;
+	}
+}
+
+/**
+ * Apply Codex official client headers so sub2api codex_cli_only passes:
+ * official UA/originator + parseable version + x-codex-* engine fingerprint.
+ * Mutates headers in place.
+ */
+export function applyCodexProfile(
 	headers: Record<string, string | null>,
 	model: { id?: string } | undefined,
+	windowId: string = randomUUID(),
 ): boolean {
 	if (!isGptModel(model)) return false;
 
-	for (const key of Object.keys(headers)) {
-		if (key.toLowerCase() === "user-agent") headers[key] = null;
-	}
-	headers["User-Agent"] = CODEX_DESKTOP_USER_AGENT;
+	clearHeader(headers, "user-agent");
+	clearHeader(headers, "originator");
+	clearHeader(headers, "version");
+	clearHeader(headers, "x-codex-window-id");
+
+	headers["User-Agent"] = CODEX_USER_AGENT;
+	headers["originator"] = CODEX_ORIGINATOR;
+	headers["version"] = CODEX_VERSION;
+	headers["x-codex-window-id"] = windowId;
 	return true;
 }
 
 export default function piCodexProfile(pi: ExtensionAPI): void {
 	pi.on("before_provider_headers", (event, ctx) => {
-		applyCodexUserAgent(event.headers, ctx.model);
+		applyCodexProfile(event.headers, ctx.model);
 	});
 }
