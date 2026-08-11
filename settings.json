@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.82.1",
+  "lastChangelogVersion": "0.84.1",
   "defaultProjectTrust": "always",
   "defaultProvider": "internal",
   "defaultModel": "gpt-5.6-terra",
@@ -7,9 +7,15 @@
   "theme": "catppuccin-mocha",
   "packages": [
     "git:github.com/DietrichGebert/ponytail",
-    "git:github.com/jnsahaj/trio",
-    "npm:@cortexkit/pi-magic-context"
+    "npm:@cortexkit/pi-magic-context",
+    "npm:pi-btw"
   ],
   "hideThinkingBlock": true,
-  "transport": "websocket-cached"
+  "transport": "websocket-cached",
+   "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto",
+  "markdown": {
+    "mermaid": "final",
+    "codeBlockIndent": ""
+  }
 }
