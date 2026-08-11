@@ -96,6 +96,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-trio/` | 规划/执行/评审工作流 | `/trio` | 单会话 planner → executor → reviewer 工作流，支持角色模型与可选 review 轮次上限。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 | `review/` | 评审工作流 | `/review` | 启动一个隔离的 Codex 风格代码评审会话，支持预设目标选择、主线程实时工具/assistant 渲染、可恢复的中断评审，以及一键解决全部或选定 findings 的后续动作。 |
+| `sidecar/` | 轻量 herdr 子 agent | `/sidecar` | 按 `.sidecar` 声明在 Herdr tab 中拉起阻塞/异步子 agent，从 session jsonl 取干净结果，支持多轮 `sidecar_prompt`/`sidecar_stop` 与 stop-keyword 协议。定义目录：`~/.pi/agent/sidecars/`。 |
 
 ## 扩展之间的关系
 

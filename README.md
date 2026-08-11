@@ -96,6 +96,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-trio/` | planner/executor/reviewer workflow | `/trio` | Single-session planner → executor → reviewer workflow with role models and optional review-round caps. |
 | `plan-mode/` | planning workflow | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | Read-only exploration mode for safe planning, then execution mode with 1-10 numbered plan steps, immediate `plan_complete_step` progress, a 3-step visible todo window, optional clear-context execution, and `[DONE:n]` fallback recovery. Emits state for `pi-glance/` and integrates with `pi-sandbox/`. |
 | `review/` | review workflow | `/review` | Runs an isolated Codex-style code review session with preset target pickers, main-thread live rendering for tool/assistant activity, resumable interrupted reviews, and follow-up actions to resolve all or selected findings. |
+| `sidecar/` | lightweight herdr subagent | `/sidecar` | Spawns declarative `.sidecar` agents in a Herdr tab (blocking/async), injects clean session-jsonl results, multi-round `sidecar_prompt`/`sidecar_stop`, and stop-keyword protocol. Definitions live under `~/.pi/agent/sidecars/`. |
 
 ## Extension Relationships
 
