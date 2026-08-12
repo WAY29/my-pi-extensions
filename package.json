@@ -23,7 +23,6 @@
       "./agent-browser/index.ts",
       "./AskUserQuestion.ts",
       "./bash-tool-coordinator.ts",
-      "./better-edit/index.ts",
       "./better-grep/index.ts",
       "./builtin-tools.ts",
       "./code-block-enhancer.ts",
