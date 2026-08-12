@@ -4,10 +4,9 @@
  * Generic lifecycle bridge for external notification platforms.
  *
  * Current adapters:
- * - Orca (`notify-hook/adapters/orca.ts`)
  * - Kitty (`notify-hook/adapters/kitty.ts`)
  *
- * Aligned with Orca's managed pi status extension:
+ * Lifecycle semantics:
  * - working: before_agent_start / agent_start / tool_* / message_end
  * - done: agent_settled (or agent_end + isIdle fallback)
  * - compact / /new teardown do not emit completion
@@ -21,7 +20,6 @@ import {
 	type NotifyHookAttentionEvent,
 } from "./notify-hook/attention";
 import { createKittyNotifyHookAdapter } from "./notify-hook/adapters/kitty";
-import { createOrcaNotifyHookAdapter } from "./notify-hook/adapters/orca";
 import type {
 	NotifyHookAdapter,
 	NotifyHookContext,
@@ -30,8 +28,8 @@ import type {
 	NotifyHookLifecycleSource,
 } from "./notify-hook/adapters/types";
 
-// Why: match Orca's managed pi plugin idle recheck. agent_end can fire while
-// retry/compact/follow-up work is still queued; isIdle flips slightly later.
+// Why: agent_end can fire while retry/compact/follow-up work is still queued;
+// isIdle flips slightly later, so recheck before treating the turn as done.
 const AGENT_END_IDLE_RECHECK_MS = 25;
 const AGENT_END_IDLE_RECHECK_MAX_MS = 250;
 
@@ -59,9 +57,8 @@ function extractAssistantText(message: unknown): string {
 }
 
 export default function notifyHook(pi: ExtensionAPI) {
-	const orcaAdapter = createOrcaNotifyHookAdapter();
 	const kittyAdapter = createKittyNotifyHookAdapter();
-	const adapters = [orcaAdapter, kittyAdapter].filter(
+	const adapters = [kittyAdapter].filter(
 		(adapter): adapter is NotifyHookAdapter => adapter !== null,
 	);
 	if (adapters.length === 0) return;
@@ -69,8 +66,8 @@ export default function notifyHook(pi: ExtensionAPI) {
 	let lastCtx: HookCtx | undefined;
 	const activeAttentionIds = new Set<string>();
 
-	// Why: once agent_settled is observed, prefer it forever for this process
-	// (same as Orca's managed extension). agent_end is then ignored.
+	// Why: once agent_settled is observed, prefer it forever for this process.
+	// agent_end is then ignored.
 	let agentSettledSupported = false;
 	let agentEndReported = false;
 	let agentEndIdleRecheckMs = AGENT_END_IDLE_RECHECK_MS;
@@ -103,13 +100,13 @@ export default function notifyHook(pi: ExtensionAPI) {
 		const effectiveCtx = (ctx ?? lastCtx) as NotifyHookContext | undefined;
 		const signal: NotifyHookLifecycleSignal = { eventName, source, details };
 
-		// Why: local attention cue even when no Orca/Kitty adapter is active.
+		// Why: local attention cue even when no external adapter is active.
 		if (eventName === "request_user_input") {
 			process.stdout.write("\x07");
 		}
 
-		// Why: adapters must not block pi's awaited extension handlers. Orca's
-		// managed plugin posts fire-and-forget; we do the same.
+		// Why: adapters must not block pi's awaited extension handlers.
+		// Fire-and-forget delivery keeps the extension path non-blocking.
 		for (const adapter of adapters) {
 			void Promise.resolve(adapter.fire(signal, effectiveCtx)).catch(() => undefined);
 		}
@@ -243,7 +240,6 @@ export default function notifyHook(pi: ExtensionAPI) {
 		if (shouldSkip(ctx)) return;
 		// Why: /new /resume /fork teardown is not turn completion. Still emit a
 		// session_shutdown-sourced Stop so adapters like Kitty can dismiss UI.
-		// Orca adapter deliberately no-ops this source.
 		clearPendingAgentEndCheck();
 		activeAttentionIds.clear();
 		fireLifecycle("Stop", "session_shutdown", ctx);

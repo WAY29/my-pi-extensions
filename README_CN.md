@@ -83,9 +83,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案，并把折叠 thinking 显示为 `thoughts · Xs`。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `startup-info.ts` | 启动信息聚合器 | 自动 | 聚合多个扩展协作发出的启动期 `info` 提示，并合并为一条启动消息，避免 `pi-sandbox/` 状态与 `pi-glance/` AutoModel 切换之类的信息互相覆盖。 |
 | `herdr-agent-state.ts` | 集成钩子 | 自动 | Herdr 管理的 pane 集成，只在 herdr 管理的 pane 中生效。 |
-| `orca-agent-status.ts` | 集成钩子 | 自动 | Orca 管理的状态桥，把 pi 生命周期快照推送到本地 Orca endpoint。 |
-| `orca-prefill.ts` | 集成钩子 | 自动 | Orca 管理的 prefill helper，用于 Orca 连接的 pi 会话。 |
-| `orca-titlebar-spinner.ts` | 集成钩子 | 自动 | Orca 管理的标题栏 spinner，在 agent 工作时显示。 |
 | `superset-hooks.ts` | 集成钩子 | 自动 | 向 Superset 的 `notify.sh` 发送 Claude Code 兼容生命周期钩子，用于工作中/完成提示。 |
 | `pi-glance/` | UI/输入界面 | `/glance` | 用圆角多行编辑器和内联状态概览替换默认输入区，展示模型、上下文、tokens、费用、Git、标题和计划状态。主题默认可跟随 host pi 主题；设置面板也可配置工作区自动模型规则（含 `model[:thinking]`），并在相关扩展已安装时切换 `permission-gate.ts` / `pi-sandbox/`。 |
 | `pi-debug-mode/` | 调试工作流 + skill 桥接 | `/debug`, `/debug-status`, `/debug:cleanup`, `debug_mode_state`, `debug_mode_session`, `debug-mode` skill | 为 Pi 增加一个最小版 Cursor 风格调试工作流。调试工具只会在手动进入 debug mode 的回合注入，负责 collector/session 管理与 footer 状态，并与仓库内置的 `skills/debug-mode/` 运行时取证 skill 配套工作。 |
