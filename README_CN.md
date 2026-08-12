@@ -77,7 +77,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pretty-image-paste.ts` | 输入/图片辅助 | 自动 | 将粘贴进编辑器的 pi 剪贴板图片路径替换为易读的 `[Image #n]` 标签，并在提交时附加对应图片。 |
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
-| `stable-scroll.ts` | UI patch | 自动 | 过滤正常重绘时的终端清空 scrollback 序列，避免 TUI 刷新抹掉滚动历史，同时保留会话启动时的清屏。 |
 | `sudo-auth.ts` | sudo 辅助 | 自动 | 为 bash 命令中的 `sudo` 提供 TUI askpass 桥接。密码只缓存在扩展内存中，并会在认证失败或会话结束时清除。 |
 | `notify-hook.ts` | 集成钩子 | 自动 | 面向外部平台的通用通知桥接层，用于转发 pi 生命周期事件和临时“等待用户介入”状态。当前内置的是 Superset adapter（调用 Superset 的 `notify.sh`），但核心扩展本身不与 Superset 绑定，后续可继续增加其它通知后端。 |
 | `notify-hook/attention.ts` | 辅助模块 | 自动 | 为 `notify-hook.ts`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
@@ -92,7 +91,6 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `pi-debug-mode/` | 调试工作流 + skill 桥接 | `/debug`, `/debug-status`, `/debug:cleanup`, `debug_mode_state`, `debug_mode_session`, `debug-mode` skill | 为 Pi 增加一个最小版 Cursor 风格调试工作流。调试工具只会在手动进入 debug mode 的回合注入，负责 collector/session 管理与 footer 状态，并与仓库内置的 `skills/debug-mode/` 运行时取证 skill 配套工作。 |
 | `pi-rewind/` | 检查点/恢复 | `/rewind`, `Esc Esc` | 在产生文件改动的回合后创建检查点，并在 agent 改错时回退文件和/或会话状态。有 Git 仓库时使用仓库 Git 数据；非 Git 目录会使用 pi-rewind 管理的外部 Git 存储。 |
 | `pi-sandbox/` | 安全/沙箱 | `/sandbox`, `/sandbox-enable`, `/sandbox-disable`, `--no-sandbox`, `/glance` 开关 | 增加 OS 级 bash 沙箱，以及针对直接工具的文件系统/网络权限提示。消费 `plan-mode/` 请求的只读锁，通过 `bash-tool-coordinator.ts` 包装 bash，并向 pi-glance 暴露事件总线状态/切换钩子。 |
-| `pi-trio/` | 规划/执行/评审工作流 | `/trio` | 单会话 planner → executor → reviewer 工作流，支持角色模型与可选 review 轮次上限。 |
 | `plan-mode/` | 计划工作流 | `/plan`, `/plan-todos`, `/plan-execute-clear-context`, `Shift+Tab`, `--plan`, `plan_complete_step` | 用于安全规划的只读探索模式，以及带 1-10 个编号步骤、即时 `plan_complete_step` 进度、3 步可见 todo 窗口、可选清上下文执行和 `[DONE:n]` 兜底恢复的执行模式。向 `pi-glance/` 广播状态，并与 `pi-sandbox/` 集成。 |
 | `review/` | 评审工作流 | `/review` | 启动一个隔离的 Codex 风格代码评审会话，支持预设目标选择、主线程实时工具/assistant 渲染、可恢复的中断评审，以及一键解决全部或选定 findings 的后续动作。 |
 | `sidecar/` | 轻量 herdr 子 agent | `/sidecar` | 按 `.sidecar` 声明在 Herdr tab 中拉起阻塞/异步子 agent，从 session jsonl 取干净结果，支持多轮 `sidecar_prompt`/`sidecar_stop` 与 stop-keyword 协议。定义目录：`~/.pi/agent/sidecars/`。 |
