@@ -31,7 +31,7 @@ export interface SidecarTabConfig {
 export interface SidecarDefinition {
 	name: string;
 	description?: string;
-	/** display/runtime mode; v1 only implements herdr */
+	/** display/runtime mode: herdr tab or in-process inner session */
 	mode?: SidecarMode;
 	blocking: boolean;
 	prompt: string;
@@ -61,9 +61,16 @@ export type SidecarInstanceStatus =
 	| "stopped"
 	| "error";
 
+export interface SidecarInnerHandle {
+	session: import("@earendil-works/pi-coding-agent").AgentSession;
+	unsubscribe: () => void;
+}
+
 export interface SidecarInstance {
 	name: string;
 	def: SidecarDefinition;
+	/** resolved runtime mode for this instance */
+	mode: SidecarMode;
 	agentName: string;
 	tabId: string;
 	paneId: string;
@@ -76,4 +83,10 @@ export interface SidecarInstance {
 	stoppedByKeyword?: boolean;
 	abort: AbortController;
 	createdAt: number;
+	/** chrome lines (start/error) shown dim above transcript */
+	statusLines: string[];
+	/** session messages rendered like stock main agent */
+	messages: any[];
+	/** in-process nested session (mode=inner) */
+	inner?: SidecarInnerHandle;
 }

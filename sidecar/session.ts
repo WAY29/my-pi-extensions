@@ -34,10 +34,20 @@ function extractText(content: unknown): string {
  * Read the last non-empty assistant text from a pi session jsonl.
  * Ignores TUI chrome; only message content.
  */
-export function readLastAssistantFromSession(sessionFile: string): string {
-	if (!sessionFile || !existsSync(sessionFile)) return "";
+function parseSessionMessage(obj: any): any | null {
+	if (!obj || typeof obj !== "object") return null;
+	// entry shapes: { type:"message", message:{ role, content } } or nested variants
+	if (obj.type === "message") return obj.message ?? null;
+	if (obj.role) return obj;
+	if (obj.message?.role) return obj.message;
+	return null;
+}
+
+/** Full user/assistant/toolResult message list from a pi session jsonl. */
+export function readMessagesFromSession(sessionFile: string): any[] {
+	if (!sessionFile || !existsSync(sessionFile)) return [];
 	const text = readFileSync(sessionFile, "utf8");
-	let last = "";
+	const out: any[] = [];
 	for (const line of text.split("\n")) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
@@ -47,16 +57,20 @@ export function readLastAssistantFromSession(sessionFile: string): string {
 		} catch {
 			continue;
 		}
-		// entry shapes: { type:"message", message:{ role, content } } or nested variants
-		const msg =
-			obj?.type === "message"
-				? (obj.message ?? obj)
-				: obj?.role
-					? obj
-					: obj?.message?.role
-						? obj.message
-						: null;
-		if (!msg || msg.role !== "assistant") continue;
+		const msg = parseSessionMessage(obj);
+		if (!msg?.role) continue;
+		if (msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult") {
+			out.push(msg);
+		}
+	}
+	return out;
+}
+
+export function readLastAssistantFromSession(sessionFile: string): string {
+	const messages = readMessagesFromSession(sessionFile);
+	let last = "";
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
 		const body = extractText(msg.content);
 		if (body.trim()) last = body;
 	}

@@ -28,8 +28,24 @@ import {
 	tabCreate,
 	waitForAvailableShell,
 } from "./herdr.js";
-import { newSidecarSessionFile, readLastAssistantFromSession } from "./session.js";
+import {
+	createInnerRuntime,
+	disposeInnerRuntime,
+	runInnerRound,
+} from "./inner.js";
+import {
+	newSidecarSessionFile,
+	readLastAssistantFromSession,
+	readMessagesFromSession,
+} from "./session.js";
+import {
+	showSidecarStatusOverlay,
+	type SidecarLiveView,
+	type StatusOverlaySource,
+} from "./status-ui.js";
 import type { SidecarDefinition, SidecarInstance, SidecarMode } from "./types.js";
+
+const STATUS_MAX_LINES = 40;
 
 const TOOL_NAMES = ["sidecar_prompt", "sidecar_stop"] as const;
 const MSG_RESULT = "sidecar-result";
@@ -46,14 +62,75 @@ function formatDefLine(d: SidecarDefinition): string {
 
 export default function sidecarExtension(pi: ExtensionAPI): void {
 	const instances = new Map<string, SidecarInstance>();
+	const liveListeners = new Set<() => void>();
 	let toolsArmed = false;
 	let sessionCwd = process.cwd();
+
+	function notifyLive(): void {
+		for (const cb of liveListeners) {
+			try {
+				cb();
+			} catch {
+				// ignore listener errors
+			}
+		}
+	}
+
+	function appendStatus(inst: SidecarInstance, line: string, quiet = false): void {
+		inst.statusLines.push(line);
+		if (inst.statusLines.length > STATUS_MAX_LINES) {
+			inst.statusLines.splice(0, inst.statusLines.length - STATUS_MAX_LINES);
+		}
+		if (!quiet) notifyLive();
+	}
+
+	function setMessages(inst: SidecarInstance, messages: any[]): void {
+		inst.messages = messages;
+		notifyLive();
+	}
+
+	function refreshMessagesFromSession(inst: SidecarInstance): void {
+		if (inst.mode === "inner" && inst.inner) {
+			setMessages(inst, [...(inst.inner.session.messages as any[])]);
+			return;
+		}
+		if (inst.sessionFile) {
+			setMessages(inst, readMessagesFromSession(inst.sessionFile));
+		}
+	}
+
+	function toLiveView(inst: SidecarInstance): SidecarLiveView {
+		return {
+			name: inst.name,
+			status: inst.status,
+			mode: inst.mode,
+			blocking: inst.def.blocking,
+			statusLines: inst.statusLines,
+			messages: inst.messages,
+			updatedAt: Date.now(),
+		};
+	}
+
+	function statusSource(): StatusOverlaySource {
+		return {
+			// Only live instances — completed sidecars are removed from the map on cleanup.
+			list: () => [...instances.values()].map(toLiveView).sort((a, b) => b.updatedAt - a.updatedAt),
+			subscribe: (cb) => {
+				liveListeners.add(cb);
+				return () => liveListeners.delete(cb);
+			},
+			canStop: (name) => instances.has(name),
+			stop: async (name) => {
+				await stopSidecar(name);
+			},
+		};
+	}
 
 	const SUBCOMMANDS = [
 		{ name: "start", description: "Start a sidecar: start <name> [extra…]" },
 		{ name: "stop", description: "Stop a running sidecar: stop [name]" },
 		{ name: "list", description: "List discovered .sidecar definitions" },
-		{ name: "status", description: "Show mode, instances, definitions" },
+		{ name: "status", description: "Open live dual-pane status overlay" },
 		{ name: "mode", description: "Get/set mode: mode [herdr|inner]" },
 	] as const;
 
@@ -195,7 +272,37 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		return (await agentRead({ target: inst.agentName, lines: cfg.read_lines })).trim();
 	}
 
-	/** Spinner overlay while waiting; Esc cancels via inst.abort. */
+	/** Blocking wait: show status overlay (live log) instead of a mute spinner. Esc cancels. */
+	async function withStatusWait<T>(
+		ctx: ExtensionContext | ExtensionCommandContext | undefined,
+		inst: SidecarInstance,
+		work: () => Promise<T>,
+	): Promise<T> {
+		if (!ctx?.hasUI) return work();
+
+		let settled: { ok: true; value: T } | { ok: false; error: unknown } | undefined;
+		const workP = work().then(
+			(value) => {
+				settled = { ok: true, value };
+			},
+			(error) => {
+				settled = { ok: false, error };
+			},
+		);
+
+		await showSidecarStatusOverlay(ctx, statusSource(), {
+			selectName: inst.name,
+			until: workP,
+			waitMode: true,
+			onCancel: () => inst.abort.abort(),
+		});
+		await workP;
+		if (!settled) throw new HerdrError("sidecar wait settled without result");
+		if (!settled.ok) throw settled.error;
+		return settled.value;
+	}
+
+	/** Short spinner for quick boot (async start). Esc cancels via inst.abort. */
 	async function withWaitingSpinner<T>(
 		ctx: ExtensionContext | ExtensionCommandContext | undefined,
 		message: string,
@@ -229,9 +336,12 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 	}
 
 	async function cleanupInstance(inst: SidecarInstance, reason: string): Promise<void> {
-		inst.status = "stopped";
+		if (inst.status !== "error") inst.status = "stopped";
+		appendStatus(inst, `[cleanup:${reason}]`);
 		inst.abort.abort();
-		if (inst.closeOnStop) {
+		if (inst.mode === "inner") {
+			disposeInnerRuntime(inst);
+		} else if (inst.closeOnStop && inst.tabId) {
 			try {
 				await tabClose(inst.tabId);
 			} catch (err) {
@@ -240,7 +350,7 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		}
 		instances.delete(inst.name);
 		disarmTools();
-		void reason;
+		notifyLive();
 	}
 
 	async function rollbackTab(tabId: string | undefined): Promise<void> {
@@ -257,30 +367,106 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		promptText: string,
 	): Promise<{ output: string; stopped: boolean }> {
 		const cfg = loadGlobalConfig();
-		const before = readLastAssistantFromSession(inst.sessionFile);
 		inst.status = "waiting";
-		await agentPrompt({
-			target: inst.agentName,
-			text: promptText,
-			wait: true,
-			timeoutMs: cfg.prompt_timeout_ms,
-		});
-		if (inst.abort.signal.aborted) {
-			throw new HerdrError("sidecar aborted");
-		}
-		// herdr idle can race slightly ahead of session flush — brief retry
+		appendStatus(inst, `[prompt] ${promptText.slice(0, 200)}${promptText.length > 200 ? "…" : ""}`);
+		notifyLive();
+
 		let output = "";
-		for (let i = 0; i < 8; i++) {
-			output = await readSidecarOutput(inst);
-			if (output && output !== before) break;
-			await new Promise((r) => setTimeout(r, 150));
+		if (inst.mode === "inner") {
+			output = await runInnerRound(inst, promptText, cfg.prompt_timeout_ms);
+		} else {
+			const before = readLastAssistantFromSession(inst.sessionFile);
+			// Poll TUI while --wait blocks, so /sidecar status can stream.
+			let promptDone = false;
+			const waitP = agentPrompt({
+				target: inst.agentName,
+				text: promptText,
+				wait: true,
+				timeoutMs: cfg.prompt_timeout_ms,
+			}).finally(() => {
+				promptDone = true;
+			});
+
+			while (!promptDone) {
+				if (inst.abort.signal.aborted) {
+					throw new HerdrError("sidecar aborted");
+				}
+				try {
+					// Prefer session jsonl so status can use stock message renderers.
+					refreshMessagesFromSession(inst);
+				} catch {
+					// session may not exist yet
+				}
+				await Promise.race([
+					waitP.then(() => undefined).catch(() => undefined),
+					new Promise<void>((r) => setTimeout(r, 500)),
+				]);
+			}
+			await waitP;
+
+			if (inst.abort.signal.aborted) {
+				throw new HerdrError("sidecar aborted");
+			}
+			// herdr idle can race slightly ahead of session flush — brief retry
+			for (let i = 0; i < 8; i++) {
+				output = await readSidecarOutput(inst);
+				if (output && output !== before) break;
+				await new Promise((r) => setTimeout(r, 150));
+			}
+			if (!output) output = await readSidecarOutput(inst);
 		}
-		if (!output) output = await readSidecarOutput(inst);
+
 		inst.lastOutput = output;
 		const stopped = containsStopKeyword(output, inst.def.stop_keyword);
 		inst.stoppedByKeyword = stopped;
 		inst.status = stopped ? "stopped" : "running";
+		refreshMessagesFromSession(inst);
+		appendStatus(inst, `[round ${stopped ? "STOPPED" : "done"}]`);
 		return { output, stopped };
+	}
+
+	async function bootRuntime(
+		inst: SidecarInstance,
+		ctx: ExtensionContext | ExtensionCommandContext,
+	): Promise<void> {
+		const def = inst.def;
+		if (inst.mode === "inner") {
+			const runtime = await createInnerRuntime(
+				def,
+				ctx,
+				(messages) => setMessages(inst, messages),
+				(line) => appendStatus(inst, line),
+			);
+			inst.inner = { session: runtime.session, unsubscribe: runtime.unsubscribe };
+			if (runtime.sessionFile) inst.sessionFile = runtime.sessionFile;
+			inst.status = "running";
+			appendStatus(inst, `[running inner]`);
+			armTools();
+			return;
+		}
+
+		assertHerdrEnv();
+		const agentName = inst.agentName;
+		const label = def.tab?.label?.trim() || `sidecar:${def.name}`;
+		await reclaimAgentName(agentName);
+		const created = await tabCreate({
+			workspace: currentWorkspaceId(),
+			cwd: ctx.cwd,
+			label,
+			focus: def.tab?.focus === true,
+		});
+		inst.tabId = created.tabId;
+		inst.paneId = created.paneId;
+		await waitForAvailableShell(created.paneId);
+		await agentStart({
+			name: agentName,
+			kind: def.agent?.kind || "pi",
+			paneId: created.paneId,
+			agentArgs: buildPiArgs(def, ctx, inst.sessionFile),
+		});
+		inst.status = "running";
+		appendStatus(inst, `[running tab=${inst.tabId}]`);
+		armTools();
 	}
 
 	async function startSidecar(
@@ -290,25 +476,21 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 	): Promise<SidecarInstance> {
 		const global = loadGlobalConfig();
 		const mode: SidecarMode = def.mode ?? global.mode;
-		if (mode !== "herdr") {
-			throw new HerdrError(`mode '${mode}' is not implemented yet (only herdr)`);
-		}
-		assertHerdrEnv();
+		if (mode === "herdr") assertHerdrEnv();
 
 		if (instances.has(def.name)) {
 			throw new HerdrError(`sidecar '${def.name}' is already running`);
 		}
 
 		const agentName = slugAgentName(def.agent?.name, def.name);
-		const label = def.tab?.label?.trim() || `sidecar:${def.name}`;
 		const closeOnStop = def.close_on_stop !== false;
 		const abort = new AbortController();
 		const sessionFile = newSidecarSessionFile(def.name);
-		let tabId: string | undefined;
 
 		const inst: SidecarInstance = {
 			name: def.name,
 			def,
+			mode,
 			agentName,
 			tabId: "",
 			paneId: "",
@@ -317,86 +499,45 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			closeOnStop,
 			abort,
 			createdAt: Date.now(),
+			statusLines: [
+				`[starting ${def.name}]`,
+				`[mode ${mode}]`,
+				`[agent ${agentName}]`,
+				`[session ${sessionFile}]`,
+			],
+			messages: [],
 		};
+		instances.set(def.name, inst);
+		notifyLive();
 
 		try {
-			send(MSG_INFO, `starting sidecar **${def.name}**…`, {
+			send(MSG_INFO, `starting sidecar **${def.name}** (${mode}${def.blocking ? ", blocking" : ", async"})…`, {
 				name: def.name,
 				agentName,
 				sessionFile,
 				blocking: def.blocking,
+				mode,
 			});
 
 			const firstPrompt = buildRoundPrompt(def.prompt, def, extra);
 
 			if (def.blocking) {
-				const { output, stopped } = await withWaitingSpinner(
-					ctx,
-					`sidecar:${def.name} · starting & waiting…`,
-					inst,
-					async () => {
-						// /reload drops in-memory state; reclaim leftover live agent name/tab
-						await reclaimAgentName(agentName);
-
-						const created = await tabCreate({
-							workspace: currentWorkspaceId(),
-							cwd: ctx.cwd,
-							label,
-							focus: def.tab?.focus === true,
-						});
-						tabId = created.tabId;
-						inst.tabId = created.tabId;
-						inst.paneId = created.paneId;
-
-						await waitForAvailableShell(created.paneId);
-						await agentStart({
-							name: agentName,
-							kind: def.agent?.kind || "pi",
-							paneId: created.paneId,
-							agentArgs: buildPiArgs(def, ctx, sessionFile),
-						});
-
-						instances.set(def.name, inst);
-						inst.status = "running";
-						armTools();
-
-						return runRound(inst, firstPrompt);
-					},
-				);
+				const { output, stopped } = await withStatusWait(ctx, inst, async () => {
+					await bootRuntime(inst, ctx);
+					return runRound(inst, firstPrompt);
+				});
 				emitRoundResult(inst, output, stopped, /*kick*/ true);
 				if (stopped) await cleanupInstance(inst, "keyword");
 			} else {
-				// async: start under short spinner, then background the round
 				await withWaitingSpinner(ctx, `sidecar:${def.name} · starting…`, inst, async () => {
-					await reclaimAgentName(agentName);
-
-					const created = await tabCreate({
-						workspace: currentWorkspaceId(),
-						cwd: ctx.cwd,
-						label,
-						focus: def.tab?.focus === true,
-					});
-					tabId = created.tabId;
-					inst.tabId = created.tabId;
-					inst.paneId = created.paneId;
-
-					await waitForAvailableShell(created.paneId);
-					await agentStart({
-						name: agentName,
-						kind: def.agent?.kind || "pi",
-						paneId: created.paneId,
-						agentArgs: buildPiArgs(def, ctx, sessionFile),
-					});
-
-					instances.set(def.name, inst);
-					inst.status = "running";
-					armTools();
+					await bootRuntime(inst, ctx);
 				});
 
-				send(MSG_INFO, `sidecar **${def.name}** running (async)`, {
+				send(MSG_INFO, `sidecar **${def.name}** running (async, ${mode})`, {
 					name: def.name,
 					agentName,
 					tabId: inst.tabId,
+					mode,
 				});
 				void (async () => {
 					try {
@@ -417,9 +558,15 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			}
 			return inst;
 		} catch (err) {
-			await rollbackTab(tabId);
+			if (inst.mode === "herdr") await rollbackTab(inst.tabId || undefined);
+			else disposeInnerRuntime(inst);
+			const message = err instanceof Error ? err.message : String(err);
+			inst.status = "error";
+			inst.lastError = message;
+			appendStatus(inst, `[error] ${message}`);
 			instances.delete(def.name);
 			disarmTools();
+			notifyLive();
 			throw err;
 		}
 	}
@@ -434,12 +581,7 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		if (inst.status === "waiting") throw new HerdrError(`sidecar '${name}' is already waiting`);
 		const base = prompt?.trim() || inst.def.continue_prompt || "Continue.";
 		const text = buildRoundPrompt(base, inst.def);
-		const { output, stopped } = await withWaitingSpinner(
-			ctx,
-			`sidecar:${name} · waiting…`,
-			inst,
-			() => runRound(inst, text),
-		);
+		const { output, stopped } = await withStatusWait(ctx, inst, () => runRound(inst, text));
 		// tool path: agent already mid-turn — display only, no kick
 		emitRoundResult(inst, output, stopped, /*kick*/ false);
 		if (stopped) await cleanupInstance(inst, "keyword");
@@ -650,6 +792,10 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			}
 
 			if (sub === "status") {
+				if (ctx.hasUI) {
+					await showSidecarStatusOverlay(ctx, statusSource());
+					return;
+				}
 				send(MSG_INFO, statusText(ctx.cwd));
 				return;
 			}
@@ -666,10 +812,7 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 					return;
 				}
 				const cfg = setGlobalMode(token);
-				send(
-					MSG_INFO,
-					`mode set to ${cfg.mode}${token === "inner" ? " (inner not implemented yet)" : ""}`,
-				);
+				send(MSG_INFO, `mode set to ${cfg.mode}`);
 				return;
 			}
 
