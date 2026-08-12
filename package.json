@@ -33,7 +33,6 @@
       "./image-gen.ts",
       "./keydump.ts",
       "./notify-hook.ts",
-      "./notify-hook/attention.ts",
       "./orca-agent-status.ts",
       "./orca-prefill.ts",
       "./orca-titlebar-spinner.ts",
