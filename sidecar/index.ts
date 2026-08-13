@@ -272,7 +272,22 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		return (await agentRead({ target: inst.agentName, lines: cfg.read_lines })).trim();
 	}
 
-	/** Blocking wait: show status overlay (live log) instead of a mute spinner. Esc cancels. */
+	/**
+	 * Blocking wait UI by mode:
+	 * - herdr: BorderedLoader (captures input; user watches the tab)
+	 * - inner: status overlay (live transcript; no separate tab)
+	 */
+	async function withBlockingWait<T>(
+		ctx: ExtensionContext | ExtensionCommandContext | undefined,
+		inst: SidecarInstance,
+		message: string,
+		work: () => Promise<T>,
+	): Promise<T> {
+		if (inst.mode === "inner") return withStatusWait(ctx, inst, work);
+		return withWaitingSpinner(ctx, message, inst, work);
+	}
+
+	/** Blocking wait: show status overlay (live log). Esc cancels. Inner only by default. */
 	async function withStatusWait<T>(
 		ctx: ExtensionContext | ExtensionCommandContext | undefined,
 		inst: SidecarInstance,
@@ -294,7 +309,7 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			selectName: inst.name,
 			until: workP,
 			waitMode: true,
-			onCancel: () => inst.abort.abort(),
+			// Esc closes the panel only; use Shift+S / /sidecar stop to kill work.
 		});
 		await workP;
 		if (!settled) throw new HerdrError("sidecar wait settled without result");
@@ -522,10 +537,15 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			const firstPrompt = buildRoundPrompt(def.prompt, def, extra);
 
 			if (def.blocking) {
-				const { output, stopped } = await withStatusWait(ctx, inst, async () => {
-					await bootRuntime(inst, ctx);
-					return runRound(inst, firstPrompt);
-				});
+				const { output, stopped } = await withBlockingWait(
+					ctx,
+					inst,
+					`sidecar:${def.name} · starting & waiting…`,
+					async () => {
+						await bootRuntime(inst, ctx);
+						return runRound(inst, firstPrompt);
+					},
+				);
 				emitRoundResult(inst, output, stopped, /*kick*/ true);
 				if (stopped) await cleanupInstance(inst, "keyword");
 			} else {
@@ -581,7 +601,12 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		if (inst.status === "waiting") throw new HerdrError(`sidecar '${name}' is already waiting`);
 		const base = prompt?.trim() || inst.def.continue_prompt || "Continue.";
 		const text = buildRoundPrompt(base, inst.def);
-		const { output, stopped } = await withStatusWait(ctx, inst, () => runRound(inst, text));
+		const { output, stopped } = await withBlockingWait(
+			ctx,
+			inst,
+			`sidecar:${name} · waiting…`,
+			() => runRound(inst, text),
+		);
 		// tool path: agent already mid-turn — display only, no kick
 		emitRoundResult(inst, output, stopped, /*kick*/ false);
 		if (stopped) await cleanupInstance(inst, "keyword");

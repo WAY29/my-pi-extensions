@@ -315,8 +315,9 @@ class SidecarStatusOverlay {
 			return;
 		}
 
+		// Esc / Ctrl+C always only close the panel — never stop the sidecar.
+		// Stop is explicit: Shift+S (confirm) or /sidecar stop.
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-			if (this.opts.waitMode) this.opts.onCancel?.();
 			this.close();
 			return;
 		}
@@ -542,7 +543,7 @@ class SidecarStatusOverlay {
 			maxScroll > 0
 				? `↑${this.scrollOffset} ↓${Math.max(0, maxScroll - this.scrollOffset)}`
 				: "·";
-		const escHint = this.opts.waitMode ? "Esc cancel" : "Esc close";
+		const escHint = "Esc close";
 		const hints = `Tab pane · ↑↓ · wheel=log · Shift+S stop · ${escHint}`;
 		const foot = truncateToWidth(` ${scrollInfo}  ${hints}`, totalW - 2, "");
 		const footPad = foot + " ".repeat(Math.max(0, totalW - 2 - visibleWidth(foot)));
