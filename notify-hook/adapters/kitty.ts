@@ -1,5 +1,8 @@
 import { basename, extname } from "node:path";
 
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+import { registerNotifyHookAdapter } from "../registry";
 import type { NotifyHookAdapter, NotifyHookContext, NotifyHookLifecycleSignal } from "./types";
 
 function isKittyTerminal(): boolean {
@@ -87,4 +90,9 @@ export function createKittyNotifyHookAdapter(): NotifyHookAdapter | null {
 			notifyTitleAndBody(id, getSessionTitle(ctx), body);
 		},
 	};
+}
+
+export default function kittyNotifyHookAdapter(_pi: ExtensionAPI): void {
+	const adapter = createKittyNotifyHookAdapter();
+	if (adapter) registerNotifyHookAdapter(adapter);
 }

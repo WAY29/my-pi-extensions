@@ -3,9 +3,9 @@
  *
  * Generic lifecycle bridge for external notification platforms.
  *
- * Current adapters:
- * - Kitty (`notify-hook/adapters/kitty.ts`)
- * - Herdr (`notify-hook/adapters/herdr.ts`) — attention → herdr:blocked only
+ * Adapters self-register via `registerNotifyHookAdapter()` and are discovered
+ * from `notify-hook/package.json`. This file must not import adapter modules —
+ * a missing adapter must not prevent pi from starting.
  *
  * Lifecycle semantics:
  * - working: before_agent_start / agent_start / tool_* / message_end
@@ -16,19 +16,17 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import {
-	NOTIFY_HOOK_ATTENTION_EVENT,
-	type NotifyHookAttentionEvent,
-} from "./notify-hook/attention";
-import { createHerdrNotifyHookAdapter } from "./notify-hook/adapters/herdr";
-import { createKittyNotifyHookAdapter } from "./notify-hook/adapters/kitty";
 import type {
-	NotifyHookAdapter,
 	NotifyHookContext,
 	NotifyHookLifecycleEvent,
 	NotifyHookLifecycleSignal,
 	NotifyHookLifecycleSource,
-} from "./notify-hook/adapters/types";
+} from "./adapters/types";
+import {
+	NOTIFY_HOOK_ATTENTION_EVENT,
+	type NotifyHookAttentionEvent,
+} from "./attention";
+import { listNotifyHookAdapters } from "./registry";
 
 // Why: agent_end can fire while retry/compact/follow-up work is still queued;
 // isIdle flips slightly later, so recheck before treating the turn as done.
@@ -59,13 +57,6 @@ function extractAssistantText(message: unknown): string {
 }
 
 export default function notifyHook(pi: ExtensionAPI) {
-	const kittyAdapter = createKittyNotifyHookAdapter();
-	const herdrAdapter = createHerdrNotifyHookAdapter(pi);
-	const adapters = [kittyAdapter, herdrAdapter].filter(
-		(adapter): adapter is NotifyHookAdapter => adapter !== null,
-	);
-	if (adapters.length === 0) return;
-
 	let lastCtx: HookCtx | undefined;
 	const activeAttentionIds = new Set<string>();
 
@@ -110,7 +101,8 @@ export default function notifyHook(pi: ExtensionAPI) {
 
 		// Why: adapters must not block pi's awaited extension handlers.
 		// Fire-and-forget delivery keeps the extension path non-blocking.
-		for (const adapter of adapters) {
+		// Read the registry at fire time so later-loaded adapters are included.
+		for (const adapter of listNotifyHookAdapters()) {
 			void Promise.resolve(adapter.fire(signal, effectiveCtx)).catch(() => undefined);
 		}
 	}

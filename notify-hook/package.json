@@ -1,0 +1,7 @@
+{
+	"private": true,
+	"type": "module",
+	"pi": {
+		"extensions": ["./index.ts", "./adapters/kitty.ts", "./adapters/herdr.ts"]
+	}
+}

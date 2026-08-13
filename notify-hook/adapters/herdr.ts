@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { registerNotifyHookAdapter } from "../registry";
 import type { NotifyHookAdapter, NotifyHookLifecycleSignal } from "./types";
 
 function herdrEnabled(): boolean {
@@ -37,4 +38,9 @@ export function createHerdrNotifyHookAdapter(pi: ExtensionAPI): NotifyHookAdapte
 			}
 		},
 	};
+}
+
+export default function herdrNotifyHookAdapter(pi: ExtensionAPI): void {
+	const adapter = createHerdrNotifyHookAdapter(pi);
+	if (adapter) registerNotifyHookAdapter(adapter);
 }
