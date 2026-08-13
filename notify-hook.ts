@@ -5,6 +5,7 @@
  *
  * Current adapters:
  * - Kitty (`notify-hook/adapters/kitty.ts`)
+ * - Herdr (`notify-hook/adapters/herdr.ts`) — attention → herdr:blocked only
  *
  * Lifecycle semantics:
  * - working: before_agent_start / agent_start / tool_* / message_end
@@ -19,6 +20,7 @@ import {
 	NOTIFY_HOOK_ATTENTION_EVENT,
 	type NotifyHookAttentionEvent,
 } from "./notify-hook/attention";
+import { createHerdrNotifyHookAdapter } from "./notify-hook/adapters/herdr";
 import { createKittyNotifyHookAdapter } from "./notify-hook/adapters/kitty";
 import type {
 	NotifyHookAdapter,
@@ -58,7 +60,8 @@ function extractAssistantText(message: unknown): string {
 
 export default function notifyHook(pi: ExtensionAPI) {
 	const kittyAdapter = createKittyNotifyHookAdapter();
-	const adapters = [kittyAdapter].filter(
+	const herdrAdapter = createHerdrNotifyHookAdapter(pi);
+	const adapters = [kittyAdapter, herdrAdapter].filter(
 		(adapter): adapter is NotifyHookAdapter => adapter !== null,
 	);
 	if (adapters.length === 0) return;
@@ -152,7 +155,10 @@ export default function notifyHook(pi: ExtensionAPI) {
 		if (event.phase === "start") {
 			activeAttentionIds.add(event.id);
 			if (previousSize === 0 && activeAttentionIds.size === 1) {
-				fireLifecycle("request_user_input", "attention_start");
+				fireLifecycle("request_user_input", "attention_start", undefined, {
+					source: event.source,
+					kind: event.kind,
+				});
 			}
 			return;
 		}
