@@ -2,7 +2,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@e
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type EffortAction = ThinkingLevel | "next" | "prev" | "status";
 type EffortScope = "session" | "global";
 
@@ -12,7 +12,7 @@ type GlobalDefaultSnapshot = {
 	value: ThinkingLevel | undefined;
 };
 
-const LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const GLOBAL_SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
 const ALIASES: Record<string, EffortAction> = {
@@ -22,10 +22,10 @@ const ALIASES: Record<string, EffortAction> = {
 	"3": "medium",
 	"4": "high",
 	"5": "xhigh",
+	"6": "max",
 	none: "off",
 	min: "minimal",
 	med: "medium",
-	max: "xhigh",
 	x: "xhigh",
 	n: "next",
 	next: "next",
@@ -77,7 +77,7 @@ function settingLabel(scope: EffortScope): string {
 }
 
 function usage(scope: EffortScope): string {
-	return `${commandName(scope)} [off|minimal|low|medium|high|xhigh|next|prev|status]`;
+	return `${commandName(scope)} [off|minimal|low|medium|high|xhigh|max|next|prev|status]`;
 }
 
 function readGlobalSettings(): Record<string, unknown> {
