@@ -1,4 +1,5 @@
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { renderDiff } from "@earendil-works/pi-coding-agent";
 import {
 	lineMatchFuzz,
@@ -61,10 +62,20 @@ function displayPath(path: string, cwd: string): string {
 	return path;
 }
 
+function osc8FileLink(display: string, absolutePath: string): string {
+	return `\x1b]8;;${pathToFileURL(absolutePath).href}\x1b\\${display}\x1b]8;;\x1b\\`;
+}
+
+function linkDisplayPath(path: string, cwd: string): string {
+	const display = displayPath(path, cwd);
+	const absolute = isAbsolute(path) ? path : resolve(cwd, path);
+	return osc8FileLink(display, absolute);
+}
+
 export function formatPatchTarget(path: string, movePath: string | undefined, cwd: string): string {
-	const from = displayPath(path, cwd);
+	const from = linkDisplayPath(path, cwd);
 	if (!movePath) return from;
-	return `${from} → ${displayPath(movePath, cwd)}`;
+	return `${from} → ${linkDisplayPath(movePath, cwd)}`;
 }
 
 function readFileLines(path: string, cwd: string): string[] {
