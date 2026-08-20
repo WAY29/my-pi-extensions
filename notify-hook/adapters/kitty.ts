@@ -2,8 +2,13 @@ import { basename, extname } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { registerNotifyHookAdapter } from "../registry";
-import type { NotifyHookAdapter, NotifyHookContext, NotifyHookLifecycleSignal } from "./types";
+import {
+	NOTIFY_HOOK_LIFECYCLE_EVENT,
+	type NotifyHookAdapter,
+	type NotifyHookContext,
+	type NotifyHookLifecycleDispatch,
+	type NotifyHookLifecycleSignal,
+} from "./types";
 
 function isKittyTerminal(): boolean {
 	return Boolean(process.env.KITTY_WINDOW_ID);
@@ -92,7 +97,10 @@ export function createKittyNotifyHookAdapter(): NotifyHookAdapter | null {
 	};
 }
 
-export default function kittyNotifyHookAdapter(_pi: ExtensionAPI): void {
+export default function kittyNotifyHookAdapter(pi: ExtensionAPI): void {
 	const adapter = createKittyNotifyHookAdapter();
-	if (adapter) registerNotifyHookAdapter(adapter);
+	if (!adapter) return;
+	pi.events.on(NOTIFY_HOOK_LIFECYCLE_EVENT, (dispatch: NotifyHookLifecycleDispatch) => {
+		void adapter.fire(dispatch.signal, dispatch.ctx).catch(() => undefined);
+	});
 }

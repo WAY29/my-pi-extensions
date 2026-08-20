@@ -1,5 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+export const NOTIFY_HOOK_LIFECYCLE_EVENT = "notify-hook:lifecycle";
+
 export type NotifyHookLifecycleEvent =
 	| "UserPromptSubmit"
 	| "Start"
@@ -31,6 +33,11 @@ export interface NotifyHookLifecycleSignal {
 }
 
 export type NotifyHookContext = Pick<ExtensionContext, "sessionManager">;
+
+export interface NotifyHookLifecycleDispatch {
+	signal: NotifyHookLifecycleSignal;
+	ctx?: NotifyHookContext;
+}
 
 export interface NotifyHookAdapter {
 	name: string;

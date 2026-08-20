@@ -11,4 +11,6 @@ test("notify-hook core does not import adapter modules", () => {
 	expect(src).not.toContain("adapters/herdr");
 	expect(src).not.toContain("adapters/kitty");
 	expect(src).not.toMatch(/from\s+["']\.\/adapters\/(?!types)/);
+	expect(src).not.toContain("./registry");
+	expect(src).toContain("NOTIFY_HOOK_LIFECYCLE_EVENT");
 });

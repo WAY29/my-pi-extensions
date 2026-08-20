@@ -78,7 +78,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 | `progress-checkpoints.ts` | 提示词辅助 | `/progress`, `/progress-checkpoints` | 注入进度检查点策略，让 assistant 在多步骤或大量工具调用任务中给出简短状态更新。 |
 | `retry-stream-read-error.ts` | 重试 patch | 自动 | 通过 patch pi 的重试分类逻辑，把 `stream_read_error` assistant 失败视为可重试；当前 pi 版本不支持时会给出警告。 |
 | `sudo-auth.ts` | sudo 辅助 | 自动 | 为 bash 命令中的 `sudo` 提供 TUI askpass 桥接。密码只缓存在扩展内存中，并会在认证失败或会话结束时清除。 |
-| `notify-hook/` | 集成钩子 | 自动 | 面向外部平台的通用通知桥接层，用于转发 pi 生命周期事件和临时“等待用户介入”状态。Adapter（Kitty、Herdr）自行注册，缺少某个 adapter 不会导致 pi 无法启动。 |
+| `notify-hook/` | 集成钩子 | 自动 | 面向外部平台的通用通知桥接层，用于转发 pi 生命周期事件和临时“等待用户介入”状态。Adapter（Kitty、Herdr）通过 pi 的共享事件总线订阅，缺少某个 adapter 不会导致 pi 无法启动。 |
 | `notify-hook/attention.ts` | 辅助模块 | 自动 | 为 `notify-hook/`、`permission-gate.ts`、`pi-sandbox/` 等扩展共享临时“等待用户介入”信号的 helper，避免重复实现事件名和 start/end 计数逻辑。 |
 | `working-status.ts` | 工作状态/UI 状态 | 自动 | 将 pi 流式阶段的 `Working...` 替换为带动作感知和实时耗时的文案，并把折叠 thinking 显示为 `thoughts · Xs`。模型继续输出时会保持显示最近一次工具动作，并在 `agent_end` 后保留一条浅灰色 `Finished working in ...` 状态，直到下一次运行。 |
 | `startup-info.ts` | 启动信息聚合器 | 自动 | 聚合多个扩展协作发出的启动期 `info` 提示，并合并为一条启动消息，避免 `pi-sandbox/` 状态与 `pi-glance/` AutoModel 切换之类的信息互相覆盖。 |
@@ -181,7 +181,7 @@ cp sandbox.json ~/.pi/agent/sandbox.json
 - 根目录 `package.json` 通过 `pi.extensions` 声明 package 的扩展入口。新增或删除顶层扩展时需要同步更新。
 - `bash-tool-coordinator.ts` 和 `grep-tool-coordinator.ts` 是辅助模块，但仍列在 package manifest 中，以便 package 安装方式尽量贴近本地自动发现的扩展目录。
 - `notify-hook/attention.ts` 也是辅助模块。它让多个扩展可以共享同一套临时“等待用户介入”信号，而不用重复实现事件名和 start/end 状态维护逻辑。
-- `notify-hook/adapters/` 存放自行注册的平台适配器。新增后端时同时写入 `notify-hook/package.json` 和根目录 `pi.extensions`，保证本地发现和 package 安装一致。
+- `notify-hook/adapters/` 存放订阅共享通知生命周期事件的平台适配器。新增后端时同时写入 `notify-hook/package.json` 和根目录 `pi.extensions`，保证本地发现和 package 安装一致。
 - `pi-glance/` 和 `pi-sandbox/` 拥有自己的 `package.json`，也可能可以作为独立 pi 包使用。
 - 仓库里的 `skills/debug-mode/` 会一并打包，因为 `pi-debug-mode/` 的调试工作流依赖它。现在 package 通过 `pi.skills` 加载仓库根目录下的 `skills/`。
 - 根目录 `sandbox.json` 是从 `~/.pi/agent/sandbox.json` 复制来的 macOS 推荐 `pi-sandbox/` 策略；它应与属于独立包源码的 `pi-sandbox/sandbox.json` 分开维护。

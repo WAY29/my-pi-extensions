@@ -3,9 +3,9 @@
  *
  * Generic lifecycle bridge for external notification platforms.
  *
- * Adapters self-register via `registerNotifyHookAdapter()` and are discovered
- * from `notify-hook/package.json`. This file must not import adapter modules —
- * a missing adapter must not prevent pi from starting.
+ * Adapters subscribe through pi's shared event bus and are discovered from
+ * `notify-hook/package.json`. This file must not import adapter modules — a
+ * missing adapter must not prevent pi from starting.
  *
  * Lifecycle semantics:
  * - working: before_agent_start / agent_start / tool_* / message_end
@@ -16,17 +16,18 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import type {
-	NotifyHookContext,
-	NotifyHookLifecycleEvent,
-	NotifyHookLifecycleSignal,
-	NotifyHookLifecycleSource,
+import {
+	NOTIFY_HOOK_LIFECYCLE_EVENT,
+	type NotifyHookLifecycleDispatch,
+	type NotifyHookContext,
+	type NotifyHookLifecycleEvent,
+	type NotifyHookLifecycleSignal,
+	type NotifyHookLifecycleSource,
 } from "./adapters/types";
 import {
 	NOTIFY_HOOK_ATTENTION_EVENT,
 	type NotifyHookAttentionEvent,
 } from "./attention";
-import { listNotifyHookAdapters } from "./registry";
 
 // Why: agent_end can fire while retry/compact/follow-up work is still queued;
 // isIdle flips slightly later, so recheck before treating the turn as done.
@@ -99,12 +100,8 @@ export default function notifyHook(pi: ExtensionAPI) {
 			process.stdout.write("\x07");
 		}
 
-		// Why: adapters must not block pi's awaited extension handlers.
-		// Fire-and-forget delivery keeps the extension path non-blocking.
-		// Read the registry at fire time so later-loaded adapters are included.
-		for (const adapter of listNotifyHookAdapters()) {
-			void Promise.resolve(adapter.fire(signal, effectiveCtx)).catch(() => undefined);
-		}
+		const dispatch: NotifyHookLifecycleDispatch = { signal, ctx: effectiveCtx };
+		pi.events.emit(NOTIFY_HOOK_LIFECYCLE_EVENT, dispatch);
 	}
 
 	function postStopOnce(source: NotifyHookLifecycleSource, ctx?: HookCtx): void {
