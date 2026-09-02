@@ -126,8 +126,12 @@ if (text_only) {
   domCopy.querySelectorAll('*').forEach(el => {
     if (blocks.has(el.tagName)) el.insertAdjacentText('beforebegin', '\n');
   });
+  domCopy.querySelectorAll('[data-pi]').forEach(el=>{
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+    el.insertAdjacentText('beforebegin','['+el.getAttribute('data-pi')+']');
+  });
   domCopy.querySelectorAll('input:not([type=hidden]),textarea,select').forEach(el=>{
-    const p=[el.tagName,el.id&&'#'+el.id,el.getAttribute('name')&&'name='+el.getAttribute('name'),el.tagName==='INPUT'&&'type='+(el.getAttribute('type')||'text'),el.getAttribute('placeholder')&&'"'+el.getAttribute('placeholder')+'"',el.getAttribute('data-autofilled')&&'autofilled',el.disabled&&'disabled',el.tagName==='SELECT'&&el.getAttribute('data-selected')&&'="'+el.getAttribute('data-selected')+'"'].filter(Boolean).join(' ');
+    const p=[el.tagName,el.getAttribute('data-pi'),el.id&&'#'+el.id,el.getAttribute('name')&&'name='+el.getAttribute('name'),el.tagName==='INPUT'&&'type='+(el.getAttribute('type')||'text'),el.getAttribute('placeholder')&&'"'+el.getAttribute('placeholder')+'"',el.getAttribute('data-autofilled')&&'autofilled',el.disabled&&'disabled',el.tagName==='SELECT'&&el.getAttribute('data-selected')&&'="'+el.getAttribute('data-selected')+'"'].filter(Boolean).join(' ');
     el.insertAdjacentText('beforebegin','\n['+p+']\n');
   });
   domCopy.querySelectorAll('button[disabled]').forEach(el=>el.insertAdjacentText('beforebegin','[DISABLED] '));
@@ -478,7 +482,7 @@ const ALLOWED_ATTRS = new Set([
   'id', 'class', 'name', 'src', 'href', 'alt', 'value', 'type', 'placeholder',
   'disabled', 'checked', 'selected', 'readonly', 'required', 'multiple',
   'role', 'aria-label', 'aria-expanded', 'aria-hidden', 'contenteditable',
-  'title', 'for', 'action', 'method', 'target', 'colspan', 'rowspan'
+  'title', 'for', 'action', 'method', 'target', 'colspan', 'rowspan', 'data-pi'
 ]);
 
 function collapseTextForOutput(text: string): string {
@@ -619,10 +623,43 @@ export interface ScanPageOptions {
   extraJs?: string;
 }
 
+export const jsStampPiRefs = String.raw`function stampPiRefs() {
+  var ATTR = 'data-pi';
+  var SELECT = 'a,button,input:not([type="hidden"]),textarea,select,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="checkbox"],[role="radio"],[role="switch"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="slider"],[role="spinbutton"],[contenteditable="true"],[contenteditable=""],[tabindex]:not([tabindex="-1"])';
+  var n = 0;
+  function skip(el) {
+    return !!(el.closest && el.closest('#ljq-ind, #pi-agent-browser-indicator'));
+  }
+  function stampRoot(root) {
+    try { root.querySelectorAll('[' + ATTR + ']').forEach(function(el) { el.removeAttribute(ATTR); }); } catch (e) {}
+    var nodes;
+    try { nodes = root.querySelectorAll(SELECT); } catch (e) { return; }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (skip(el)) continue;
+      el.setAttribute(ATTR, 'e' + (++n));
+    }
+    var all;
+    try { all = root.querySelectorAll('*'); } catch (e) { return; }
+    for (var j = 0; j < all.length; j++) {
+      if (all[j].shadowRoot) stampRoot(all[j].shadowRoot);
+    }
+  }
+  stampRoot(document);
+  var frames = document.querySelectorAll('iframe');
+  for (var k = 0; k < frames.length; k++) {
+    try {
+      var doc = frames[k].contentDocument;
+      if (doc) stampRoot(doc);
+    } catch (e) {}
+  }
+  return n;
+}`;
+
 export function buildOptHtmlScript(options: Pick<ScanPageOptions, 'textOnly' | 'extraJs'>): string {
   const textOnly = options.textOnly ? 'true' : 'false';
   const extraJs = options.extraJs?.trim() ? `${options.extraJs}\n` : '';
-  return `${extraJs}${jsOptHtml}\nreturn optHTML(${textOnly});`;
+  return `${extraJs}${jsStampPiRefs}\nstampPiRefs();\n${jsOptHtml}\nreturn optHTML(${textOnly});`;
 }
 
 export function buildFindMainListScript(): string {

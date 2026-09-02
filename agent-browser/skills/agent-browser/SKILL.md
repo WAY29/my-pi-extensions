@@ -12,8 +12,8 @@ Use this skill only for the user's real Chrome session, not for generic web rese
 1. Never bring Chrome to the foreground. Never switch tabs. Never move the user's OS cursor or type on the OS keyboard.
 2. Target a tab with `session_id`. Background tabs are the normal case.
 3. If `browser_status` is unclear, check it first. If the session is not armed, ask the user to run `/browser-on`.
-4. Prefer `browser_click` / `browser_hover` / `browser_scroll` / `browser_type` / `browser_press` over `browser_execute_js`.
-5. Use `browser_execute_js` only when those tools cannot do the job (drag, canvas paths, page-specific APIs).
+4. `browser_scan_page` first. Interactive nodes are tagged `data-pi="e12"`. Pass that `ref` to click / hover / scroll / type / press. Re-scan after navigation or DOM changes; refs expire.
+5. Prefer those action tools over `browser_execute_js`. Use JS only for drag, canvas, or page-specific APIs.
 6. Tell the user before any action that could change page state.
 7. If a browser tool reports missing extension, missing tab connection, or blocked action, stop and explain the next manual step.
 
@@ -21,7 +21,7 @@ Use this skill only for the user's real Chrome session, not for generic web rese
 
 1. `browser_list_tabs` and pick the `session_id`.
 2. `browser_scan_page` with that `session_id`.
-3. Act with click / hover / scroll / type / press on the same `session_id`.
+3. Act with `ref` values from that scan, same `session_id`.
 4. Screenshot or raw JS/CDP only when needed.
 
 ## Install help

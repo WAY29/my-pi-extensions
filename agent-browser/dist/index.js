@@ -22007,8 +22007,12 @@ if (text_only) {
   domCopy.querySelectorAll('*').forEach(el => {
     if (blocks.has(el.tagName)) el.insertAdjacentText('beforebegin', '\n');
   });
+  domCopy.querySelectorAll('[data-pi]').forEach(el=>{
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+    el.insertAdjacentText('beforebegin','['+el.getAttribute('data-pi')+']');
+  });
   domCopy.querySelectorAll('input:not([type=hidden]),textarea,select').forEach(el=>{
-    const p=[el.tagName,el.id&&'#'+el.id,el.getAttribute('name')&&'name='+el.getAttribute('name'),el.tagName==='INPUT'&&'type='+(el.getAttribute('type')||'text'),el.getAttribute('placeholder')&&'"'+el.getAttribute('placeholder')+'"',el.getAttribute('data-autofilled')&&'autofilled',el.disabled&&'disabled',el.tagName==='SELECT'&&el.getAttribute('data-selected')&&'="'+el.getAttribute('data-selected')+'"'].filter(Boolean).join(' ');
+    const p=[el.tagName,el.getAttribute('data-pi'),el.id&&'#'+el.id,el.getAttribute('name')&&'name='+el.getAttribute('name'),el.tagName==='INPUT'&&'type='+(el.getAttribute('type')||'text'),el.getAttribute('placeholder')&&'"'+el.getAttribute('placeholder')+'"',el.getAttribute('data-autofilled')&&'autofilled',el.disabled&&'disabled',el.tagName==='SELECT'&&el.getAttribute('data-selected')&&'="'+el.getAttribute('data-selected')+'"'].filter(Boolean).join(' ');
     el.insertAdjacentText('beforebegin','\n['+p+']\n');
   });
   domCopy.querySelectorAll('button[disabled]').forEach(el=>el.insertAdjacentText('beforebegin','[DISABLED] '));
@@ -22380,7 +22384,8 @@ var ALLOWED_ATTRS = /* @__PURE__ */ new Set([
   "method",
   "target",
   "colspan",
-  "rowspan"
+  "rowspan",
+  "data-pi"
 ]);
 function collapseTextForOutput(text) {
   return text.replace(/ {2,}/g, " ").replace(/^ +/gm, "").replace(/(\n\s*){3,}/g, "\n\n").trim();
@@ -22499,11 +22504,45 @@ function smartTruncateElement(document, root, budget, depth) {
     else cutElementToBudget(document, item.node, newKeep);
   }
 }
+var jsStampPiRefs = String.raw`function stampPiRefs() {
+  var ATTR = 'data-pi';
+  var SELECT = 'a,button,input:not([type="hidden"]),textarea,select,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="checkbox"],[role="radio"],[role="switch"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="slider"],[role="spinbutton"],[contenteditable="true"],[contenteditable=""],[tabindex]:not([tabindex="-1"])';
+  var n = 0;
+  function skip(el) {
+    return !!(el.closest && el.closest('#ljq-ind, #pi-agent-browser-indicator'));
+  }
+  function stampRoot(root) {
+    try { root.querySelectorAll('[' + ATTR + ']').forEach(function(el) { el.removeAttribute(ATTR); }); } catch (e) {}
+    var nodes;
+    try { nodes = root.querySelectorAll(SELECT); } catch (e) { return; }
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (skip(el)) continue;
+      el.setAttribute(ATTR, 'e' + (++n));
+    }
+    var all;
+    try { all = root.querySelectorAll('*'); } catch (e) { return; }
+    for (var j = 0; j < all.length; j++) {
+      if (all[j].shadowRoot) stampRoot(all[j].shadowRoot);
+    }
+  }
+  stampRoot(document);
+  var frames = document.querySelectorAll('iframe');
+  for (var k = 0; k < frames.length; k++) {
+    try {
+      var doc = frames[k].contentDocument;
+      if (doc) stampRoot(doc);
+    } catch (e) {}
+  }
+  return n;
+}`;
 function buildOptHtmlScript(options2) {
   const textOnly = options2.textOnly ? "true" : "false";
   const extraJs = options2.extraJs?.trim() ? `${options2.extraJs}
 ` : "";
-  return `${extraJs}${jsOptHtml}
+  return `${extraJs}${jsStampPiRefs}
+stampPiRefs();
+${jsOptHtml}
 return optHTML(${textOnly});`;
 }
 function buildFindMainListScript() {
@@ -23148,52 +23187,95 @@ var PAGE_ACTOR = String.raw`function __piBrowserAct(cmd) {
     const mods = parseMods(parts.slice(0, -1).join('+'));
     return Object.assign({ key: parts[parts.length - 1] || '' }, mods);
   }
-  function resolve() {
-    if (cmd.selector) {
-      const el = document.querySelector(cmd.selector);
+  function refId(v) {
+    const m = String(v || '').match(/e\d+/i);
+    return m ? m[0].toLowerCase() : '';
+  }
+  function findByRef(v) {
+    const id = refId(v);
+    if (!id) return null;
+    const sel = '[data-pi="' + id + '"]';
+    function walk(root) {
+      try {
+        const hit = root.querySelector(sel);
+        if (hit) return hit;
+        const all = root.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          if (all[i].shadowRoot) {
+            const inner = walk(all[i].shadowRoot);
+            if (inner) return inner;
+          }
+        }
+      } catch (e) {}
+      return null;
+    }
+    let el = walk(document);
+    if (el) return el;
+    const frames = document.querySelectorAll('iframe');
+    for (let i = 0; i < frames.length; i++) {
+      try {
+        const doc = frames[i].contentDocument;
+        if (doc) {
+          el = walk(doc);
+          if (el) return el;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  function findEl(required) {
+    let el = null;
+    if (cmd.ref) {
+      el = findByRef(cmd.ref);
+      if (!el) throw new Error('No element with ref ' + cmd.ref + '. Scan the page first.');
+    } else if (cmd.selector) {
+      el = document.querySelector(cmd.selector);
       if (!el) throw new Error('No element matching ' + cmd.selector);
+    } else if (required) {
+      throw new Error('Provide ref from scan_page (e.g. e12) or a CSS selector');
+    }
+    return el;
+  }
+  function resolve() {
+    const el = findEl(false);
+    if (el) {
       el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const r = el.getBoundingClientRect();
       const x = cmd.x != null ? r.left + Number(cmd.x) : r.left + Math.max(1, r.width / 2);
       const y = cmd.y != null ? r.top + Number(cmd.y) : r.top + Math.max(1, r.height / 2);
       return { el, x, y };
     }
-    if (cmd.x == null || cmd.y == null) throw new Error('Provide selector or x and y');
+    if (cmd.x == null || cmd.y == null) throw new Error('Provide ref, selector, or x and y');
     const x = Number(cmd.x);
     const y = Number(cmd.y);
     return { el: document.elementFromPoint(x, y) || document.body, x, y };
   }
   function info(el) {
-    return { tag: el && el.tagName, id: el && el.id || undefined, text: String((el && (el.innerText || el.value)) || '').slice(0, 80) };
+    return { tag: el && el.tagName, ref: el && el.getAttribute && el.getAttribute('data-pi') || undefined, id: el && el.id || undefined, text: String((el && (el.innerText || el.value)) || '').slice(0, 80) };
   }
   const mods = parseMods(cmd.modifiers);
   const op = cmd.op;
   if (op === 'scroll') {
-    if (cmd.selector && cmd.dx == null && cmd.dy == null && !cmd.to) {
-      const el = document.querySelector(cmd.selector);
-      if (!el) throw new Error('No element matching ' + cmd.selector);
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return Object.assign({ op, scrolled: 'into-view' }, info(el));
+    const target = findEl(false);
+    if (target && cmd.dx == null && cmd.dy == null && !cmd.to) {
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return Object.assign({ op, scrolled: 'into-view' }, info(target));
     }
     if (cmd.to === 'top') window.scrollTo(0, 0);
     else if (cmd.to === 'bottom') window.scrollTo(0, document.documentElement.scrollHeight);
     else {
       const dx = Number(cmd.dx) || 0;
       const dy = Number(cmd.dy) || 0;
-      if (cmd.selector) {
-        const el = document.querySelector(cmd.selector);
-        if (!el) throw new Error('No element matching ' + cmd.selector);
-        el.scrollBy(dx, dy);
-        return Object.assign({ op, dx, dy }, info(el));
+      if (target) {
+        target.scrollBy(dx, dy);
+        return Object.assign({ op, dx, dy }, info(target));
       }
       window.scrollBy(dx, dy);
     }
     return { op, x: window.scrollX, y: window.scrollY };
   }
   if (op === 'type') {
-    if (!cmd.selector) throw new Error('type requires selector');
-    const el = document.querySelector(cmd.selector);
-    if (!el) throw new Error('No element matching ' + cmd.selector);
+    const el = findEl(true);
     el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (typeof el.focus === 'function') el.focus();
     const text = cmd.text == null ? '' : String(cmd.text);
@@ -23222,8 +23304,8 @@ var PAGE_ACTOR = String.raw`function __piBrowserAct(cmd) {
   }
   if (op === 'press') {
     const chord = parseChord(cmd.keys || cmd.key);
-    const el = cmd.selector ? document.querySelector(cmd.selector) : (document.activeElement || document.body);
-    if (!el) throw new Error(cmd.selector ? 'No element matching ' + cmd.selector : 'No target element');
+    const el = findEl(false) || document.activeElement || document.body;
+    if (!el) throw new Error('No target element');
     if (typeof el.focus === 'function') el.focus();
     const opts = { key: chord.key, bubbles: true, cancelable: true, ctrlKey: chord.ctrlKey, metaKey: chord.metaKey, altKey: chord.altKey, shiftKey: chord.shiftKey };
     el.dispatchEvent(new KeyboardEvent('keydown', opts));
@@ -23812,7 +23894,7 @@ ${message}`;
   registerBrowserTool({
     name: "browser_scan_page",
     label: "Browser Scan Page",
-    description: "Read a tab as simplified HTML or plain text. Works on background tabs via session_id; does not focus Chrome.",
+    description: 'Read a tab as simplified HTML or plain text. Interactive nodes get data-pi="e12" refs; pass those to click/hover/scroll/type/press. Re-scan after navigation. Background tabs are fine; does not focus Chrome.',
     parameters: typebox_exports.Object({
       session_id: typebox_exports.Optional(typebox_exports.String({ description: "Optional target tab/session id" })),
       text_only: typebox_exports.Optional(typebox_exports.Boolean({ description: "Return plain text instead of HTML" })),
@@ -23843,11 +23925,12 @@ ${message}`;
   registerBrowserTool({
     name: "browser_click",
     label: "Browser Click",
-    description: "Click in a tab without focusing Chrome or moving the OS cursor. Provide selector and/or viewport x,y. button=left|right|middle, count=2 for double-click, modifiers like Control or Meta+Shift.",
+    description: "Click in a tab without focusing Chrome or moving the OS cursor. Prefer ref from the last scan_page (e.g. e12). button=left|right|middle, count=2 for double-click, modifiers like Control or Meta+Shift.",
     parameters: typebox_exports.Object({
-      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector. Optional x,y are offsets inside this element." })),
-      x: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport X, or offset X inside selector" })),
-      y: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport Y, or offset Y inside selector" })),
+      ref: typebox_exports.Optional(typebox_exports.String({ description: "Element ref from last scan_page, e.g. e12" })),
+      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector fallback if no ref" })),
+      x: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport X, or offset X inside the target" })),
+      y: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport Y, or offset Y inside the target" })),
       button: typebox_exports.Optional(typebox_exports.String({ description: "left (default), right, or middle" })),
       count: typebox_exports.Optional(typebox_exports.Number({ description: "1=single, 2=double-click" })),
       modifiers: typebox_exports.Optional(typebox_exports.String({ description: "Chord such as Control, Meta+Shift" })),
@@ -23863,22 +23946,23 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      return renderBrowserCall("click", args.selector || `${args.x ?? ""},${args.y ?? ""}`, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall("click", args.ref || args.selector || `${args.x ?? ""},${args.y ?? ""}`, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;
-      const summary = details?.error ? `Error: ${details.error}` : `click \xB7 ${summarizeText(String(context.args?.selector || context.args?.button || "left"), 40)}`;
+      const summary = details?.error ? `Error: ${details.error}` : `click \xB7 ${summarizeText(String(context.args?.ref || context.args?.selector || context.args?.button || "left"), 40)}`;
       return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
     }
   });
   registerBrowserTool({
     name: "browser_hover",
     label: "Browser Hover",
-    description: "Hover a selector or viewport point (dropdowns/tooltips). Does not move the OS cursor or focus Chrome.",
+    description: "Hover a ref, selector, or viewport point (dropdowns/tooltips). Does not move the OS cursor or focus Chrome.",
     parameters: typebox_exports.Object({
-      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector to hover" })),
-      x: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport X if no selector" })),
-      y: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport Y if no selector" })),
+      ref: typebox_exports.Optional(typebox_exports.String({ description: "Element ref from last scan_page, e.g. e12" })),
+      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector fallback if no ref" })),
+      x: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport X if no ref/selector" })),
+      y: typebox_exports.Optional(typebox_exports.Number({ description: "Viewport Y if no ref/selector" })),
       session_id: typebox_exports.Optional(typebox_exports.String({ description: "Target tab/session id" }))
     }),
     executionMode: "sequential",
@@ -23891,20 +23975,21 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      return renderBrowserCall("hover", args.selector || `${args.x ?? ""},${args.y ?? ""}`, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall("hover", args.ref || args.selector || `${args.x ?? ""},${args.y ?? ""}`, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;
-      const summary = details?.error ? `Error: ${details.error}` : `hover \xB7 ${summarizeText(String(context.args?.selector || "point"), 40)}`;
+      const summary = details?.error ? `Error: ${details.error}` : `hover \xB7 ${summarizeText(String(context.args?.ref || context.args?.selector || "point"), 40)}`;
       return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
     }
   });
   registerBrowserTool({
     name: "browser_scroll",
     label: "Browser Scroll",
-    description: "Scroll a tab or element. selector alone scrolls it into view; dx/dy scroll by pixels; to=top|bottom. Does not focus Chrome.",
+    description: "Scroll a tab or element. ref/selector alone scrolls it into view; dx/dy scroll by pixels; to=top|bottom. Does not focus Chrome.",
     parameters: typebox_exports.Object({
-      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector to scroll into view, or the element to scrollBy" })),
+      ref: typebox_exports.Optional(typebox_exports.String({ description: "Element ref from last scan_page, e.g. e12" })),
+      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector fallback if no ref" })),
       dx: typebox_exports.Optional(typebox_exports.Number({ description: "Horizontal pixels" })),
       dy: typebox_exports.Optional(typebox_exports.Number({ description: "Vertical pixels; positive is down" })),
       to: typebox_exports.Optional(typebox_exports.String({ description: "top or bottom of the page" })),
@@ -23920,7 +24005,7 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      const hint = args.to || args.selector || `dy=${args.dy ?? 0}`;
+      const hint = args.to || args.ref || args.selector || `dy=${args.dy ?? 0}`;
       return renderBrowserCall("scroll", String(hint), theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
@@ -23932,9 +24017,10 @@ ${message}`;
   registerBrowserTool({
     name: "browser_type",
     label: "Browser Type",
-    description: "Fill an input, textarea, contenteditable, or select by CSS selector. Uses the native value setter (React-safe). Does not use the OS keyboard or focus Chrome.",
+    description: "Fill an input, textarea, contenteditable, or select. Prefer ref from the last scan_page. Native value setter (React-safe). Does not use the OS keyboard or focus Chrome.",
     parameters: typebox_exports.Object({
-      selector: typebox_exports.String({ description: "CSS selector of the field" }),
+      ref: typebox_exports.Optional(typebox_exports.String({ description: "Element ref from last scan_page, e.g. e12" })),
+      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector fallback if no ref" })),
       text: typebox_exports.String({ description: "Value to set. For <select>, option value or label." }),
       submit: typebox_exports.Optional(typebox_exports.Boolean({ description: "Submit the enclosing form after filling" })),
       session_id: typebox_exports.Optional(typebox_exports.String({ description: "Target tab/session id" }))
@@ -23949,7 +24035,7 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      return renderBrowserCall("type", args.selector || "", theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall("type", args.ref || args.selector || "", theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;
@@ -23963,7 +24049,8 @@ ${message}`;
     description: "Press a key or chord in a tab: Enter, Escape, Tab, ArrowDown, Control+a, Meta+Enter. Does not press the OS keyboard or focus Chrome.",
     parameters: typebox_exports.Object({
       keys: typebox_exports.String({ description: "Key or chord, e.g. Enter, Tab, Escape, ArrowDown, Control+a, Meta+Enter" }),
-      selector: typebox_exports.Optional(typebox_exports.String({ description: "Focus this selector first; otherwise the active element" })),
+      ref: typebox_exports.Optional(typebox_exports.String({ description: "Focus this scan_page ref first, e.g. e12" })),
+      selector: typebox_exports.Optional(typebox_exports.String({ description: "CSS selector fallback if no ref" })),
       session_id: typebox_exports.Optional(typebox_exports.String({ description: "Target tab/session id" }))
     }),
     executionMode: "sequential",

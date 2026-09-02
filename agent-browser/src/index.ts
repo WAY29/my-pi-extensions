@@ -654,52 +654,95 @@ const PAGE_ACTOR = String.raw`function __piBrowserAct(cmd) {
     const mods = parseMods(parts.slice(0, -1).join('+'));
     return Object.assign({ key: parts[parts.length - 1] || '' }, mods);
   }
-  function resolve() {
-    if (cmd.selector) {
-      const el = document.querySelector(cmd.selector);
+  function refId(v) {
+    const m = String(v || '').match(/e\d+/i);
+    return m ? m[0].toLowerCase() : '';
+  }
+  function findByRef(v) {
+    const id = refId(v);
+    if (!id) return null;
+    const sel = '[data-pi="' + id + '"]';
+    function walk(root) {
+      try {
+        const hit = root.querySelector(sel);
+        if (hit) return hit;
+        const all = root.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          if (all[i].shadowRoot) {
+            const inner = walk(all[i].shadowRoot);
+            if (inner) return inner;
+          }
+        }
+      } catch (e) {}
+      return null;
+    }
+    let el = walk(document);
+    if (el) return el;
+    const frames = document.querySelectorAll('iframe');
+    for (let i = 0; i < frames.length; i++) {
+      try {
+        const doc = frames[i].contentDocument;
+        if (doc) {
+          el = walk(doc);
+          if (el) return el;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  function findEl(required) {
+    let el = null;
+    if (cmd.ref) {
+      el = findByRef(cmd.ref);
+      if (!el) throw new Error('No element with ref ' + cmd.ref + '. Scan the page first.');
+    } else if (cmd.selector) {
+      el = document.querySelector(cmd.selector);
       if (!el) throw new Error('No element matching ' + cmd.selector);
+    } else if (required) {
+      throw new Error('Provide ref from scan_page (e.g. e12) or a CSS selector');
+    }
+    return el;
+  }
+  function resolve() {
+    const el = findEl(false);
+    if (el) {
       el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const r = el.getBoundingClientRect();
       const x = cmd.x != null ? r.left + Number(cmd.x) : r.left + Math.max(1, r.width / 2);
       const y = cmd.y != null ? r.top + Number(cmd.y) : r.top + Math.max(1, r.height / 2);
       return { el, x, y };
     }
-    if (cmd.x == null || cmd.y == null) throw new Error('Provide selector or x and y');
+    if (cmd.x == null || cmd.y == null) throw new Error('Provide ref, selector, or x and y');
     const x = Number(cmd.x);
     const y = Number(cmd.y);
     return { el: document.elementFromPoint(x, y) || document.body, x, y };
   }
   function info(el) {
-    return { tag: el && el.tagName, id: el && el.id || undefined, text: String((el && (el.innerText || el.value)) || '').slice(0, 80) };
+    return { tag: el && el.tagName, ref: el && el.getAttribute && el.getAttribute('data-pi') || undefined, id: el && el.id || undefined, text: String((el && (el.innerText || el.value)) || '').slice(0, 80) };
   }
   const mods = parseMods(cmd.modifiers);
   const op = cmd.op;
   if (op === 'scroll') {
-    if (cmd.selector && cmd.dx == null && cmd.dy == null && !cmd.to) {
-      const el = document.querySelector(cmd.selector);
-      if (!el) throw new Error('No element matching ' + cmd.selector);
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return Object.assign({ op, scrolled: 'into-view' }, info(el));
+    const target = findEl(false);
+    if (target && cmd.dx == null && cmd.dy == null && !cmd.to) {
+      target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return Object.assign({ op, scrolled: 'into-view' }, info(target));
     }
     if (cmd.to === 'top') window.scrollTo(0, 0);
     else if (cmd.to === 'bottom') window.scrollTo(0, document.documentElement.scrollHeight);
     else {
       const dx = Number(cmd.dx) || 0;
       const dy = Number(cmd.dy) || 0;
-      if (cmd.selector) {
-        const el = document.querySelector(cmd.selector);
-        if (!el) throw new Error('No element matching ' + cmd.selector);
-        el.scrollBy(dx, dy);
-        return Object.assign({ op, dx, dy }, info(el));
+      if (target) {
+        target.scrollBy(dx, dy);
+        return Object.assign({ op, dx, dy }, info(target));
       }
       window.scrollBy(dx, dy);
     }
     return { op, x: window.scrollX, y: window.scrollY };
   }
   if (op === 'type') {
-    if (!cmd.selector) throw new Error('type requires selector');
-    const el = document.querySelector(cmd.selector);
-    if (!el) throw new Error('No element matching ' + cmd.selector);
+    const el = findEl(true);
     el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (typeof el.focus === 'function') el.focus();
     const text = cmd.text == null ? '' : String(cmd.text);
@@ -728,8 +771,8 @@ const PAGE_ACTOR = String.raw`function __piBrowserAct(cmd) {
   }
   if (op === 'press') {
     const chord = parseChord(cmd.keys || cmd.key);
-    const el = cmd.selector ? document.querySelector(cmd.selector) : (document.activeElement || document.body);
-    if (!el) throw new Error(cmd.selector ? 'No element matching ' + cmd.selector : 'No target element');
+    const el = findEl(false) || document.activeElement || document.body;
+    if (!el) throw new Error('No target element');
     if (typeof el.focus === 'function') el.focus();
     const opts = { key: chord.key, bubbles: true, cancelable: true, ctrlKey: chord.ctrlKey, metaKey: chord.metaKey, altKey: chord.altKey, shiftKey: chord.shiftKey };
     el.dispatchEvent(new KeyboardEvent('keydown', opts));
@@ -1417,7 +1460,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_scan_page',
     label: 'Browser Scan Page',
-    description: 'Read a tab as simplified HTML or plain text. Works on background tabs via session_id; does not focus Chrome.',
+    description: 'Read a tab as simplified HTML or plain text. Interactive nodes get data-pi="e12" refs; pass those to click/hover/scroll/type/press. Re-scan after navigation. Background tabs are fine; does not focus Chrome.',
     parameters: Type.Object({
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
       text_only: Type.Optional(Type.Boolean({ description: 'Return plain text instead of HTML' })),
@@ -1449,11 +1492,12 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_click',
     label: 'Browser Click',
-    description: 'Click in a tab without focusing Chrome or moving the OS cursor. Provide selector and/or viewport x,y. button=left|right|middle, count=2 for double-click, modifiers like Control or Meta+Shift.',
+    description: 'Click in a tab without focusing Chrome or moving the OS cursor. Prefer ref from the last scan_page (e.g. e12). button=left|right|middle, count=2 for double-click, modifiers like Control or Meta+Shift.',
     parameters: Type.Object({
-      selector: Type.Optional(Type.String({ description: 'CSS selector. Optional x,y are offsets inside this element.' })),
-      x: Type.Optional(Type.Number({ description: 'Viewport X, or offset X inside selector' })),
-      y: Type.Optional(Type.Number({ description: 'Viewport Y, or offset Y inside selector' })),
+      ref: Type.Optional(Type.String({ description: 'Element ref from last scan_page, e.g. e12' })),
+      selector: Type.Optional(Type.String({ description: 'CSS selector fallback if no ref' })),
+      x: Type.Optional(Type.Number({ description: 'Viewport X, or offset X inside the target' })),
+      y: Type.Optional(Type.Number({ description: 'Viewport Y, or offset Y inside the target' })),
       button: Type.Optional(Type.String({ description: 'left (default), right, or middle' })),
       count: Type.Optional(Type.Number({ description: '1=single, 2=double-click' })),
       modifiers: Type.Optional(Type.String({ description: 'Chord such as Control, Meta+Shift' })),
@@ -1469,11 +1513,11 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('click', args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall('click', args.ref || args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
-      const summary = details?.error ? `Error: ${details.error}` : `click · ${summarizeText(String(context.args?.selector || context.args?.button || 'left'), 40)}`;
+      const summary = details?.error ? `Error: ${details.error}` : `click · ${summarizeText(String(context.args?.ref || context.args?.selector || context.args?.button || 'left'), 40)}`;
       return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
     },
   });
@@ -1481,11 +1525,12 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_hover',
     label: 'Browser Hover',
-    description: 'Hover a selector or viewport point (dropdowns/tooltips). Does not move the OS cursor or focus Chrome.',
+    description: 'Hover a ref, selector, or viewport point (dropdowns/tooltips). Does not move the OS cursor or focus Chrome.',
     parameters: Type.Object({
-      selector: Type.Optional(Type.String({ description: 'CSS selector to hover' })),
-      x: Type.Optional(Type.Number({ description: 'Viewport X if no selector' })),
-      y: Type.Optional(Type.Number({ description: 'Viewport Y if no selector' })),
+      ref: Type.Optional(Type.String({ description: 'Element ref from last scan_page, e.g. e12' })),
+      selector: Type.Optional(Type.String({ description: 'CSS selector fallback if no ref' })),
+      x: Type.Optional(Type.Number({ description: 'Viewport X if no ref/selector' })),
+      y: Type.Optional(Type.Number({ description: 'Viewport Y if no ref/selector' })),
       session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
     }),
     executionMode: 'sequential' as ToolExecutionMode,
@@ -1498,11 +1543,11 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('hover', args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall('hover', args.ref || args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
-      const summary = details?.error ? `Error: ${details.error}` : `hover · ${summarizeText(String(context.args?.selector || 'point'), 40)}`;
+      const summary = details?.error ? `Error: ${details.error}` : `hover · ${summarizeText(String(context.args?.ref || context.args?.selector || 'point'), 40)}`;
       return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
     },
   });
@@ -1510,9 +1555,10 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_scroll',
     label: 'Browser Scroll',
-    description: 'Scroll a tab or element. selector alone scrolls it into view; dx/dy scroll by pixels; to=top|bottom. Does not focus Chrome.',
+    description: 'Scroll a tab or element. ref/selector alone scrolls it into view; dx/dy scroll by pixels; to=top|bottom. Does not focus Chrome.',
     parameters: Type.Object({
-      selector: Type.Optional(Type.String({ description: 'CSS selector to scroll into view, or the element to scrollBy' })),
+      ref: Type.Optional(Type.String({ description: 'Element ref from last scan_page, e.g. e12' })),
+      selector: Type.Optional(Type.String({ description: 'CSS selector fallback if no ref' })),
       dx: Type.Optional(Type.Number({ description: 'Horizontal pixels' })),
       dy: Type.Optional(Type.Number({ description: 'Vertical pixels; positive is down' })),
       to: Type.Optional(Type.String({ description: 'top or bottom of the page' })),
@@ -1528,7 +1574,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      const hint = args.to || args.selector || `dy=${args.dy ?? 0}`;
+      const hint = args.to || args.ref || args.selector || `dy=${args.dy ?? 0}`;
       return renderBrowserCall('scroll', String(hint), theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
@@ -1541,9 +1587,10 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_type',
     label: 'Browser Type',
-    description: 'Fill an input, textarea, contenteditable, or select by CSS selector. Uses the native value setter (React-safe). Does not use the OS keyboard or focus Chrome.',
+    description: 'Fill an input, textarea, contenteditable, or select. Prefer ref from the last scan_page. Native value setter (React-safe). Does not use the OS keyboard or focus Chrome.',
     parameters: Type.Object({
-      selector: Type.String({ description: 'CSS selector of the field' }),
+      ref: Type.Optional(Type.String({ description: 'Element ref from last scan_page, e.g. e12' })),
+      selector: Type.Optional(Type.String({ description: 'CSS selector fallback if no ref' })),
       text: Type.String({ description: 'Value to set. For <select>, option value or label.' }),
       submit: Type.Optional(Type.Boolean({ description: 'Submit the enclosing form after filling' })),
       session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
@@ -1558,7 +1605,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('type', args.selector || '', theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall('type', args.ref || args.selector || '', theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
@@ -1573,7 +1620,8 @@ export default function agentBrowser(pi: ExtensionAPI) {
     description: 'Press a key or chord in a tab: Enter, Escape, Tab, ArrowDown, Control+a, Meta+Enter. Does not press the OS keyboard or focus Chrome.',
     parameters: Type.Object({
       keys: Type.String({ description: 'Key or chord, e.g. Enter, Tab, Escape, ArrowDown, Control+a, Meta+Enter' }),
-      selector: Type.Optional(Type.String({ description: 'Focus this selector first; otherwise the active element' })),
+      ref: Type.Optional(Type.String({ description: 'Focus this scan_page ref first, e.g. e12' })),
+      selector: Type.Optional(Type.String({ description: 'CSS selector fallback if no ref' })),
       session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
     }),
     executionMode: 'sequential' as ToolExecutionMode,
