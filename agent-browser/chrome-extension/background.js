@@ -362,18 +362,48 @@ function errorResult(error) {
   return { ok: false, error: { name: err.name || 'Error', message: err.message || String(error), stack: err.stack || '' } };
 }
 
+function isForeignExtensionError(error) {
+  return /Cannot access a chrome-extension:\/\/ URL of different extension/i.test(String(error && error.message || error));
+}
+
+async function mainWorldContextId(tabId) {
+  const tree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+  const mainFrameId = tree && tree.frameTree && tree.frameTree.frame && tree.frameTree.frame.id;
+  if (!mainFrameId) return undefined;
+  let contextId;
+  const onEvent = (source, method, params) => {
+    if (source.tabId !== tabId) return;
+    if (method !== 'Runtime.executionContextCreated') return;
+    const ctx = params.context;
+    if (ctx && ctx.auxData && ctx.auxData.frameId === mainFrameId && ctx.auxData.isDefault) {
+      contextId = ctx.id;
+    }
+  };
+  chrome.debugger.onEvent.addListener(onEvent);
+  try {
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+    if (contextId == null) await new Promise((resolve) => setTimeout(resolve, 50));
+    return contextId;
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+  }
+}
+
 async function evalViaCdp(tabId, code, timeoutMs) {
   await chrome.debugger.attach({ tabId }, '1.3');
   try {
     try {
       await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
     } catch (_) {}
-    const cdpRes = await withTimeout(chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+    const contextId = await mainWorldContextId(tabId).catch(() => undefined);
+    const params = {
       expression: buildCdpScript(String(code || '')),
       awaitPromise: true,
       returnByValue: true,
       timeout: timeoutMs,
-    }), timeoutMs, 'CDP Runtime.evaluate');
+    };
+    if (contextId != null) params.contextId = contextId;
+    const cdpRes = await withTimeout(chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', params), timeoutMs, 'CDP Runtime.evaluate');
     if (cdpRes.exceptionDetails) {
       const desc = cdpRes.exceptionDetails.exception?.description || 'CDP Error';
       return { ok: false, error: { name: 'Error', message: desc, stack: desc } };
@@ -386,7 +416,7 @@ async function evalViaCdp(tabId, code, timeoutMs) {
 
 async function evalViaScripting(tabId, code, timeoutMs) {
   const result = await withTimeout(chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId, frameIds: [0] },
     world: 'MAIN',
     injectImmediately: true,
     func: async (s) => await eval(s),
@@ -412,7 +442,7 @@ async function handleWsExec(data) {
     try {
       res = await evalViaCdp(tabId, data.code, timeoutMs);
     } catch (e) {
-      if (isDebuggerBusy(e)) {
+      if (isDebuggerBusy(e) || isForeignExtensionError(e)) {
         try {
           res = await evalViaScripting(tabId, data.code, timeoutMs);
         } catch (scriptErr) {

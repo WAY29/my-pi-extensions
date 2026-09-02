@@ -22760,6 +22760,11 @@ var BrowserBridge = class {
     if (!tabId) return false;
     return this.tabs.has(String(tabId));
   }
+  tabLabel(sessionId) {
+    const id = sessionId ? String(sessionId) : this.defaultLocalTabId();
+    const tab = id ? this.tabs.get(id) : void 0;
+    return summarizeText(tab ? titleFromTab(tab) : id || "tab", 40);
+  }
   defaultLocalTabId() {
     const tabs = this.getLocalTabs();
     const active = tabs.find((tab) => tab.active);
@@ -23368,6 +23373,10 @@ function hostFromUrl(url) {
     return url;
   }
 }
+function titleFromTab(tab) {
+  if (!tab) return "unknown";
+  return tab.title || hostFromUrl(tab.url) || tab.id || "unknown";
+}
 var browserTreeGroupSeq = 0;
 var browserTreeCurrentTail = null;
 var browserTreeActive = false;
@@ -23913,8 +23922,7 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      const mode = args.text_only ? "text" : "html";
-      return renderBrowserCall("scan page", mode, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall("scan", bridge.tabLabel(args.session_id), theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;
@@ -24035,7 +24043,10 @@ ${message}`;
       }
     },
     renderCall(args, theme, context) {
-      return renderBrowserCall("type", args.ref || args.selector || "", theme, context.toolCallId, context.invalidate);
+      const target = args.ref || args.selector || "";
+      const text = summarizeText(String(args.text || ""), 40);
+      const summary = [target, text && `"${text}"`].filter(Boolean).join(" ");
+      return renderBrowserCall("type", summary, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;

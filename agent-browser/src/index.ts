@@ -183,6 +183,12 @@ class BrowserBridge {
     return this.tabs.has(String(tabId));
   }
 
+  tabLabel(sessionId?: string): string {
+    const id = sessionId ? String(sessionId) : this.defaultLocalTabId();
+    const tab = id ? this.tabs.get(id) : undefined;
+    return summarizeText(tab ? titleFromTab(tab) : (id || 'tab'), 40);
+  }
+
   private defaultLocalTabId() {
     const tabs = this.getLocalTabs();
     const active = tabs.find((tab) => tab.active);
@@ -1479,8 +1485,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      const mode = args.text_only ? 'text' : 'html';
-      return renderBrowserCall('scan page', mode, theme, context.toolCallId, context.invalidate);
+      return renderBrowserCall('scan', bridge.tabLabel(args.session_id), theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
@@ -1605,7 +1610,10 @@ export default function agentBrowser(pi: ExtensionAPI) {
       }
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('type', args.ref || args.selector || '', theme, context.toolCallId, context.invalidate);
+      const target = args.ref || args.selector || '';
+      const text = summarizeText(String(args.text || ''), 40);
+      const summary = [target, text && `"${text}"`].filter(Boolean).join(' ');
+      return renderBrowserCall('type', summary, theme, context.toolCallId, context.invalidate);
     },
     renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
       const details = result.details as any;
