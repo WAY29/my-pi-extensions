@@ -21895,6 +21895,7 @@ function createEnhancedDOMCopy() {
       return null;  
     }  
     if (sourceNode.nodeType === 3) return sourceNode.cloneNode(false);  
+    const hasRef = sourceNode.nodeType === 1 && sourceNode.hasAttribute && sourceNode.hasAttribute('data-pi');
     const clone = sourceNode.cloneNode(false);
     if ((sourceNode.tagName === 'INPUT' || sourceNode.tagName === 'TEXTAREA') && sourceNode.value) clone.setAttribute('value', sourceNode.value);
     if (sourceNode.tagName === 'INPUT' && (sourceNode.type === 'radio' || sourceNode.type === 'checkbox') && sourceNode.checked) clone.setAttribute('checked', '');
@@ -21982,14 +21983,14 @@ function createEnhancedDOMCopy() {
     if (sourceNode.nodeType === 1 && sourceNode.tagName === 'DIV') {    
       if (!hasValidChildren && !sourceNode.textContent.trim()) return null; 
     }  
-    if (sourceNode.getAttribute && sourceNode.getAttribute('aria-hidden') === 'true' && !info.isVisible) {
+    if (sourceNode.getAttribute && sourceNode.getAttribute('aria-hidden') === 'true' && !info.isVisible && !hasRef) {
       return null;
     }
-    if (info.isVisible || hasValidChildren || keep) {  
-      childNodes.forEach(child => clone.appendChild(child));  
-      return clone;  
-    }  
-    return null;  
+    if (info.isVisible || hasValidChildren || keep || hasRef) {
+      childNodes.forEach(child => clone.appendChild(child));
+      return clone;
+    }
+    return null;
   }  
   
   return {  
@@ -22154,6 +22155,7 @@ const _fc = [...domCopy.querySelectorAll('*')].filter(el => {
   .sort((a, b) => (getNodeInfo(b).rect.width * getNodeInfo(b).rect.height) - (getNodeInfo(a).rect.width * getNodeInfo(a).rect.height))
   .slice(0, 2);
 _fc.forEach(el => { el.parentNode.removeChild(el); domCopy.appendChild(el); });
+const unfiltered = domCopy.outerHTML;
 analyzeNode(domCopy); 
 domCopy.querySelectorAll('[data-mark^="R:"]').forEach(el=>el.parentNode?.removeChild(el));  
 let root = domCopy;  
@@ -22174,7 +22176,9 @@ root.querySelectorAll('iframe').forEach(f => {
     f.parentNode.replaceChild(d, f);
   }
 });
-return root.outerHTML;
+const html = root.outerHTML || '';
+if (!html || html.length < 80 || (unfiltered.indexOf('data-pi=') !== -1 && html.indexOf('data-pi=') === -1)) return unfiltered;
+return html;
     }
 optHTML()`;
 var jsFindMainList = String.raw`function findMainList(startElement = null) {
