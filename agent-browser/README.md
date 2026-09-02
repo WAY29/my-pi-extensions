@@ -21,10 +21,14 @@ Pi 扩展骨架：把 `agent-browser-mcp` 迁成 Pi package 风格，并用 skil
 - 基础浏览器工具：
   - `browser_status`
   - `browser_list_tabs`
-  - `browser_switch_tab`
   - `browser_open_url`
   - `browser_open_new_tab`
   - `browser_scan_page`
+  - `browser_click`
+  - `browser_hover`
+  - `browser_scroll`
+  - `browser_type`
+  - `browser_press`
   - `browser_execute_js`
   - `browser_cdp_command`
   - `browser_cdp_batch`

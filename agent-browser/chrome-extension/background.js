@@ -189,11 +189,6 @@ async function handleExtMessage(msg, sender) {
   if (msg.cmd === 'batch') return await handleBatch(msg, sender);
   if (msg.cmd === 'tabs') {
     try {
-      if (msg.method === 'switch') {
-        const tab = await chrome.tabs.update(msg.tabId, { active: true });
-        await chrome.windows.update(tab.windowId, { focused: true });
-        return { ok: true };
-      }
       if (msg.method === 'open_new_tab') {
         const tab = await chrome.tabs.create({ url: msg.url, active: false });
         await updateBadge();
@@ -342,8 +337,71 @@ function buildCdpScript(code) {
   `);
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms);
+    }),
+  ]);
+}
+
+function isDebuggerBusy(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /already attached|Cannot attach to this target/i.test(message);
+}
+
+function execTimeoutMs(data) {
+  const n = Number(data && data.timeoutMs);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 15_000;
+}
+
+function errorResult(error) {
+  const err = error instanceof Error ? error : new Error(String(error));
+  return { ok: false, error: { name: err.name || 'Error', message: err.message || String(error), stack: err.stack || '' } };
+}
+
+async function evalViaCdp(tabId, code, timeoutMs) {
+  await chrome.debugger.attach({ tabId }, '1.3');
+  try {
+    try {
+      await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+    } catch (_) {}
+    const cdpRes = await withTimeout(chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: buildCdpScript(String(code || '')),
+      awaitPromise: true,
+      returnByValue: true,
+      timeout: timeoutMs,
+    }), timeoutMs, 'CDP Runtime.evaluate');
+    if (cdpRes.exceptionDetails) {
+      const desc = cdpRes.exceptionDetails.exception?.description || 'CDP Error';
+      return { ok: false, error: { name: 'Error', message: desc, stack: desc } };
+    }
+    return cdpRes.result?.value;
+  } finally {
+    try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+  }
+}
+
+async function evalViaScripting(tabId, code, timeoutMs) {
+  const result = await withTimeout(chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    injectImmediately: true,
+    func: async (s) => await eval(s),
+    args: [buildPageScript(String(code || ''))],
+  }), timeoutMs, 'executeScript');
+  const res = result?.[0]?.result;
+  if (res === null || res === undefined) {
+    return { ok: false, error: { name: 'Error', message: 'executeScript returned null (possible CSP or context issue)', stack: '' } };
+  }
+  return res;
+}
+
 async function handleWsExec(data) {
   const tabId = data.tabId;
+  const timeoutMs = execTimeoutMs(data);
   ws.send(JSON.stringify({ type: 'ack', id: data.id }));
   if (!tabId) {
     ws.send(JSON.stringify({ type: 'error', id: data.id, error: 'No tabId provided' }));
@@ -352,37 +410,16 @@ async function handleWsExec(data) {
   try {
     let res;
     try {
-      const result = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: async (s) => await eval(s),
-        args: [buildPageScript(String(data.code || ''))]
-      });
-      res = result?.[0]?.result;
-      if (res === null || res === undefined) {
-        res = { ok: false, error: { name: 'Error', message: 'executeScript returned null (possible CSP or context issue)', stack: '' }, csp: true };
-      }
+      res = await evalViaCdp(tabId, data.code, timeoutMs);
     } catch (e) {
-      res = { ok: false, error: { name: e.name || 'Error', message: e.message || String(e), stack: e.stack || '' }, csp: true };
-    }
-    if (res && !res.ok && res.csp) {
-      try {
-        await chrome.debugger.attach({ tabId }, '1.3');
-        const cdpRes = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-          expression: buildCdpScript(String(data.code || '')),
-          awaitPromise: true,
-          returnByValue: true,
-        });
-        await chrome.debugger.detach({ tabId });
-        if (cdpRes.exceptionDetails) {
-          const desc = cdpRes.exceptionDetails.exception?.description || 'CDP Error';
-          res = { ok: false, error: { name: 'Error', message: desc, stack: desc } };
-        } else {
-          res = cdpRes.result.value;
+      if (isDebuggerBusy(e)) {
+        try {
+          res = await evalViaScripting(tabId, data.code, timeoutMs);
+        } catch (scriptErr) {
+          res = errorResult(scriptErr);
         }
-      } catch (cdpErr) {
-        try { await chrome.debugger.detach({ tabId }); } catch (_) {}
-        res = { ok: false, error: { name: 'Error', message: 'CDP fallback failed: ' + cdpErr.message, stack: '' } };
+      } else {
+        res = errorResult(e);
       }
     }
     if (res?.ok) {
@@ -391,7 +428,7 @@ async function handleWsExec(data) {
       ws.send(JSON.stringify({ type: 'error', id: data.id, error: res?.error || 'Unknown error' }));
     }
   } catch (e) {
-    ws.send(JSON.stringify({ type: 'error', id: data.id, error: { name: e.name || 'Error', message: e.message || String(e), stack: e.stack || '' } }));
+    ws.send(JSON.stringify({ type: 'error', id: data.id, error: errorResult(e).error }));
   }
 }
 

@@ -23,10 +23,14 @@ const execFile = promisify(execFileCb);
 const TOOL_NAMES = [
   'browser_status',
   'browser_list_tabs',
-  'browser_switch_tab',
   'browser_open_url',
   'browser_open_new_tab',
   'browser_scan_page',
+  'browser_click',
+  'browser_hover',
+  'browser_scroll',
+  'browser_type',
+  'browser_press',
   'browser_execute_js',
   'browser_cdp_command',
   'browser_cdp_batch',
@@ -193,11 +197,6 @@ class BrowserBridge {
     return current;
   }
 
-  private findLocalTabByPattern(pattern?: string) {
-    if (!pattern) return undefined;
-    return this.getLocalTabs().find((tab) => (tab.url || '').includes(pattern) || (tab.title || '').includes(pattern));
-  }
-
   async sendRaw(tabId: string, code: string | Record<string, unknown>, timeoutMs = 15_000): Promise<any> {
     const socket = this.socketsByTab.get(tabId);
     if (!socket || socket.readyState !== socket.OPEN) {
@@ -205,8 +204,8 @@ class BrowserBridge {
     }
     const id = randomUUID();
     const payload = typeof code === 'string'
-      ? { id, tabId: Number(tabId), code }
-      : { id, tabId: Number(tabId), code: JSON.stringify(code) };
+      ? { id, tabId: Number(tabId), code, timeoutMs }
+      : { id, tabId: Number(tabId), code: JSON.stringify(code), timeoutMs };
 
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -234,6 +233,11 @@ class BrowserBridge {
     await this.ensureStarted();
     if (this.remoteMode) return await this.remoteRpc('execute_js', args);
     return await this.executeJsLocal(args);
+  }
+
+  async act(args: Record<string, unknown> & { session_id?: string }) {
+    const { session_id, ...cmd } = args;
+    return await this.executeJs({ session_id, script: buildActScript(cmd) });
   }
 
   private async cdpCommandLocal(args: { method: string; params_json?: string; session_id?: string; tab_id?: number }) {
@@ -297,20 +301,6 @@ class BrowserBridge {
     await this.ensureStarted();
     if (this.remoteMode) return await this.remoteRpc('list_extensions', args);
     return await this.listExtensionsLocal(args);
-  }
-
-  private async switchTabLocal(args: { session_id?: string; url_pattern?: string }) {
-    let tab = args.session_id ? this.tabs.get(String(args.session_id)) : undefined;
-    if (!tab && args.url_pattern) tab = this.findLocalTabByPattern(args.url_pattern);
-    if (!tab) throw new Error('Target tab not found');
-    await this.sendRaw(String(tab.id), { cmd: 'tabs', method: 'switch', tabId: Number(tab.id) }, 10_000);
-    return { active_session_id: String(tab.id), tabs: this.getLocalTabs() };
-  }
-
-  async switchTab(args: { session_id?: string; url_pattern?: string }) {
-    await this.ensureStarted();
-    if (this.remoteMode) return await this.remoteRpc('switch_tab', args);
-    return await this.switchTabLocal(args);
   }
 
   private async openUrlLocal(args: { url: string; session_id?: string; timeout_ms?: number }) {
@@ -576,8 +566,6 @@ class BrowserBridge {
         return await this.getCookiesLocal(params);
       case 'list_extensions':
         return await this.listExtensionsLocal(params);
-      case 'switch_tab':
-        return await this.switchTabLocal(params);
       case 'open_url':
         return await this.openUrlLocal(params);
       case 'open_new_tab':
@@ -646,6 +634,148 @@ function normalizeWsResult(result: unknown) {
     return result as Record<string, unknown>;
   }
   return { data: result };
+}
+
+const PAGE_ACTOR = String.raw`function __piBrowserAct(cmd) {
+  function parseMods(s) {
+    const out = { ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
+    if (!s) return out;
+    for (const part of String(s).split('+')) {
+      const p = part.trim().toLowerCase();
+      if (p === 'ctrl' || p === 'control') out.ctrlKey = true;
+      else if (p === 'meta' || p === 'cmd' || p === 'command' || p === 'win') out.metaKey = true;
+      else if (p === 'alt' || p === 'option') out.altKey = true;
+      else if (p === 'shift') out.shiftKey = true;
+    }
+    return out;
+  }
+  function parseChord(keys) {
+    const parts = String(keys || '').split('+').map((s) => s.trim()).filter(Boolean);
+    const mods = parseMods(parts.slice(0, -1).join('+'));
+    return Object.assign({ key: parts[parts.length - 1] || '' }, mods);
+  }
+  function resolve() {
+    if (cmd.selector) {
+      const el = document.querySelector(cmd.selector);
+      if (!el) throw new Error('No element matching ' + cmd.selector);
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const r = el.getBoundingClientRect();
+      const x = cmd.x != null ? r.left + Number(cmd.x) : r.left + Math.max(1, r.width / 2);
+      const y = cmd.y != null ? r.top + Number(cmd.y) : r.top + Math.max(1, r.height / 2);
+      return { el, x, y };
+    }
+    if (cmd.x == null || cmd.y == null) throw new Error('Provide selector or x and y');
+    const x = Number(cmd.x);
+    const y = Number(cmd.y);
+    return { el: document.elementFromPoint(x, y) || document.body, x, y };
+  }
+  function info(el) {
+    return { tag: el && el.tagName, id: el && el.id || undefined, text: String((el && (el.innerText || el.value)) || '').slice(0, 80) };
+  }
+  const mods = parseMods(cmd.modifiers);
+  const op = cmd.op;
+  if (op === 'scroll') {
+    if (cmd.selector && cmd.dx == null && cmd.dy == null && !cmd.to) {
+      const el = document.querySelector(cmd.selector);
+      if (!el) throw new Error('No element matching ' + cmd.selector);
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return Object.assign({ op, scrolled: 'into-view' }, info(el));
+    }
+    if (cmd.to === 'top') window.scrollTo(0, 0);
+    else if (cmd.to === 'bottom') window.scrollTo(0, document.documentElement.scrollHeight);
+    else {
+      const dx = Number(cmd.dx) || 0;
+      const dy = Number(cmd.dy) || 0;
+      if (cmd.selector) {
+        const el = document.querySelector(cmd.selector);
+        if (!el) throw new Error('No element matching ' + cmd.selector);
+        el.scrollBy(dx, dy);
+        return Object.assign({ op, dx, dy }, info(el));
+      }
+      window.scrollBy(dx, dy);
+    }
+    return { op, x: window.scrollX, y: window.scrollY };
+  }
+  if (op === 'type') {
+    if (!cmd.selector) throw new Error('type requires selector');
+    const el = document.querySelector(cmd.selector);
+    if (!el) throw new Error('No element matching ' + cmd.selector);
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (typeof el.focus === 'function') el.focus();
+    const text = cmd.text == null ? '' : String(cmd.text);
+    if (el.tagName === 'SELECT') {
+      const hit = Array.from(el.options).find((o) => o.value === text || o.text === text);
+      if (!hit) throw new Error('No <option> matching ' + text);
+      el.value = hit.value;
+    } else if (el.isContentEditable) {
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, text);
+    } else {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+      if (setter) setter.call(el, text);
+      else if ('value' in el) el.value = text;
+      else el.textContent = text;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (cmd.submit) {
+      const form = el.form || el.closest('form');
+      if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+      else el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    }
+    return Object.assign({ op, typed: text.length }, info(el));
+  }
+  if (op === 'press') {
+    const chord = parseChord(cmd.keys || cmd.key);
+    const el = cmd.selector ? document.querySelector(cmd.selector) : (document.activeElement || document.body);
+    if (!el) throw new Error(cmd.selector ? 'No element matching ' + cmd.selector : 'No target element');
+    if (typeof el.focus === 'function') el.focus();
+    const opts = { key: chord.key, bubbles: true, cancelable: true, ctrlKey: chord.ctrlKey, metaKey: chord.metaKey, altKey: chord.altKey, shiftKey: chord.shiftKey };
+    el.dispatchEvent(new KeyboardEvent('keydown', opts));
+    el.dispatchEvent(new KeyboardEvent('keyup', opts));
+    return Object.assign({ op, keys: chord.key }, info(el));
+  }
+  const t = resolve();
+  const el = t.el;
+  const x = t.x;
+  const y = t.y;
+  if (typeof el.focus === 'function') { try { el.focus(); } catch (e) {} }
+  function mouseInit(extra) {
+    return Object.assign({ bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, ctrlKey: mods.ctrlKey, metaKey: mods.metaKey, altKey: mods.altKey, shiftKey: mods.shiftKey }, extra);
+  }
+  function pointer(type, extra) {
+    el.dispatchEvent(new PointerEvent(type, Object.assign({ pointerId: 1, pointerType: 'mouse', isPrimary: true }, mouseInit(extra))));
+  }
+  function mouse(type, extra) {
+    el.dispatchEvent(new MouseEvent(type, mouseInit(extra)));
+  }
+  if (op === 'hover') {
+    pointer('pointerover', {});
+    pointer('pointerenter', {});
+    mouse('mouseover', {});
+    mouse('mouseenter', {});
+    return Object.assign({ op }, info(el));
+  }
+  const button = cmd.button === 'right' ? 2 : cmd.button === 'middle' ? 1 : 0;
+  const count = Math.max(1, Math.min(Number(cmd.count) || 1, 3));
+  const buttonsDown = button === 0 ? 1 : button === 2 ? 2 : 4;
+  for (let i = 1; i <= count; i++) {
+    pointer('pointerdown', { button: button, buttons: buttonsDown, detail: i });
+    mouse('mousedown', { button: button, buttons: buttonsDown, detail: i });
+    pointer('pointerup', { button: button, buttons: 0, detail: i });
+    mouse('mouseup', { button: button, buttons: 0, detail: i });
+    if (button === 2) mouse('contextmenu', { button: 2, detail: i });
+    else if (button === 1) mouse('auxclick', { button: 1, detail: i });
+    else mouse('click', { button: 0, detail: i });
+  }
+  if (count > 1 && button === 0) mouse('dblclick', { button: 0, detail: 2 });
+  return Object.assign({ op: op || 'click', button: cmd.button || 'left', count: count }, info(el));
+}`
+
+function buildActScript(cmd: unknown) {
+  return `${PAGE_ACTOR}
+__piBrowserAct(${JSON.stringify(cmd)})`;
 }
 
 function serializeText(value: unknown) {
@@ -856,13 +986,6 @@ function summarizeBrowserStatus(status: any): string {
 function summarizeBrowserTabs(details: any): string {
   const tabs = Array.isArray(details?.tabs) ? details.tabs : [];
   return `${tabs.length} tab${tabs.length === 1 ? '' : 's'}`;
-}
-
-function summarizeBrowserSwitch(details: any): string {
-  const id = details?.active_session_id ? `#${details.active_session_id}` : 'unknown';
-  const tabs = Array.isArray(details?.tabs) ? details.tabs : [];
-  const active = tabs.find((tab: any) => String(tab.id) === String(details?.active_session_id));
-  return `${id} · ${titleFromTab(active)}`;
 }
 
 function summarizeBrowserOpenUrl(details: any): string {
@@ -1238,38 +1361,11 @@ export default function agentBrowser(pi: ExtensionAPI) {
   });
 
   registerBrowserTool({
-    name: 'browser_switch_tab',
-    label: 'Browser Switch Tab',
-    description: 'Switch the active real Chrome tab by session id or URL substring.',
-    parameters: Type.Object({
-      session_id: Type.Optional(Type.String({ description: 'Exact tab/session id to activate' })),
-      url_pattern: Type.Optional(Type.String({ description: 'Substring to match against current tabs' })),
-    }),
-    executionMode: 'sequential' as ToolExecutionMode,
-    async execute(_id: any, params: any) {
-      try {
-        const result = await bridge.switchTab(params) as any;
-        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
-      } catch (error) {
-        return browserErrorResult(error);
-      }
-    },
-    renderCall(args: any, theme: any, context: any) {
-      return renderBrowserCall('switch tab', args.session_id || args.url_pattern || '', theme, context.toolCallId, context.invalidate);
-    },
-    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
-      const details = result.details as any;
-      const summary = details?.error ? `Error: ${details.error}` : summarizeBrowserSwitch(details);
-      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
-    },
-  });
-
-  registerBrowserTool({
     name: 'browser_open_url',
     label: 'Browser Open URL',
-    description: 'Navigate the current real Chrome tab to a URL.',
+    description: 'Navigate a real Chrome tab to a URL without bringing Chrome to the foreground.',
     parameters: Type.Object({
-      url: Type.String({ description: 'The URL to open in the active tab' }),
+      url: Type.String({ description: 'The URL to open. Does not focus Chrome.' }),
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
       timeout_ms: Type.Optional(Type.Number({ description: 'Optional timeout in milliseconds' })),
     }),
@@ -1321,7 +1417,7 @@ export default function agentBrowser(pi: ExtensionAPI) {
   registerBrowserTool({
     name: 'browser_scan_page',
     label: 'Browser Scan Page',
-    description: 'Read the current page from the real Chrome session as simplified HTML or plain text.',
+    description: 'Read a tab as simplified HTML or plain text. Works on background tabs via session_id; does not focus Chrome.',
     parameters: Type.Object({
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
       text_only: Type.Optional(Type.Boolean({ description: 'Return plain text instead of HTML' })),
@@ -1351,9 +1447,158 @@ export default function agentBrowser(pi: ExtensionAPI) {
   });
 
   registerBrowserTool({
+    name: 'browser_click',
+    label: 'Browser Click',
+    description: 'Click in a tab without focusing Chrome or moving the OS cursor. Provide selector and/or viewport x,y. button=left|right|middle, count=2 for double-click, modifiers like Control or Meta+Shift.',
+    parameters: Type.Object({
+      selector: Type.Optional(Type.String({ description: 'CSS selector. Optional x,y are offsets inside this element.' })),
+      x: Type.Optional(Type.Number({ description: 'Viewport X, or offset X inside selector' })),
+      y: Type.Optional(Type.Number({ description: 'Viewport Y, or offset Y inside selector' })),
+      button: Type.Optional(Type.String({ description: 'left (default), right, or middle' })),
+      count: Type.Optional(Type.Number({ description: '1=single, 2=double-click' })),
+      modifiers: Type.Optional(Type.String({ description: 'Chord such as Control, Meta+Shift' })),
+      session_id: Type.Optional(Type.String({ description: 'Target tab/session id; background tabs are fine' })),
+    }),
+    executionMode: 'sequential' as ToolExecutionMode,
+    async execute(_id: any, params: any) {
+      try {
+        const result = await bridge.act({ op: 'click', ...params });
+        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+      } catch (error) {
+        return browserErrorResult(error);
+      }
+    },
+    renderCall(args: any, theme: any, context: any) {
+      return renderBrowserCall('click', args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
+    },
+    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+      const details = result.details as any;
+      const summary = details?.error ? `Error: ${details.error}` : `click · ${summarizeText(String(context.args?.selector || context.args?.button || 'left'), 40)}`;
+      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
+    },
+  });
+
+  registerBrowserTool({
+    name: 'browser_hover',
+    label: 'Browser Hover',
+    description: 'Hover a selector or viewport point (dropdowns/tooltips). Does not move the OS cursor or focus Chrome.',
+    parameters: Type.Object({
+      selector: Type.Optional(Type.String({ description: 'CSS selector to hover' })),
+      x: Type.Optional(Type.Number({ description: 'Viewport X if no selector' })),
+      y: Type.Optional(Type.Number({ description: 'Viewport Y if no selector' })),
+      session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
+    }),
+    executionMode: 'sequential' as ToolExecutionMode,
+    async execute(_id: any, params: any) {
+      try {
+        const result = await bridge.act({ op: 'hover', ...params });
+        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+      } catch (error) {
+        return browserErrorResult(error);
+      }
+    },
+    renderCall(args: any, theme: any, context: any) {
+      return renderBrowserCall('hover', args.selector || `${args.x ?? ''},${args.y ?? ''}`, theme, context.toolCallId, context.invalidate);
+    },
+    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+      const details = result.details as any;
+      const summary = details?.error ? `Error: ${details.error}` : `hover · ${summarizeText(String(context.args?.selector || 'point'), 40)}`;
+      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
+    },
+  });
+
+  registerBrowserTool({
+    name: 'browser_scroll',
+    label: 'Browser Scroll',
+    description: 'Scroll a tab or element. selector alone scrolls it into view; dx/dy scroll by pixels; to=top|bottom. Does not focus Chrome.',
+    parameters: Type.Object({
+      selector: Type.Optional(Type.String({ description: 'CSS selector to scroll into view, or the element to scrollBy' })),
+      dx: Type.Optional(Type.Number({ description: 'Horizontal pixels' })),
+      dy: Type.Optional(Type.Number({ description: 'Vertical pixels; positive is down' })),
+      to: Type.Optional(Type.String({ description: 'top or bottom of the page' })),
+      session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
+    }),
+    executionMode: 'sequential' as ToolExecutionMode,
+    async execute(_id: any, params: any) {
+      try {
+        const result = await bridge.act({ op: 'scroll', ...params });
+        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+      } catch (error) {
+        return browserErrorResult(error);
+      }
+    },
+    renderCall(args: any, theme: any, context: any) {
+      const hint = args.to || args.selector || `dy=${args.dy ?? 0}`;
+      return renderBrowserCall('scroll', String(hint), theme, context.toolCallId, context.invalidate);
+    },
+    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+      const details = result.details as any;
+      const summary = details?.error ? `Error: ${details.error}` : 'scroll';
+      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
+    },
+  });
+
+  registerBrowserTool({
+    name: 'browser_type',
+    label: 'Browser Type',
+    description: 'Fill an input, textarea, contenteditable, or select by CSS selector. Uses the native value setter (React-safe). Does not use the OS keyboard or focus Chrome.',
+    parameters: Type.Object({
+      selector: Type.String({ description: 'CSS selector of the field' }),
+      text: Type.String({ description: 'Value to set. For <select>, option value or label.' }),
+      submit: Type.Optional(Type.Boolean({ description: 'Submit the enclosing form after filling' })),
+      session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
+    }),
+    executionMode: 'sequential' as ToolExecutionMode,
+    async execute(_id: any, params: any) {
+      try {
+        const result = await bridge.act({ op: 'type', ...params });
+        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+      } catch (error) {
+        return browserErrorResult(error);
+      }
+    },
+    renderCall(args: any, theme: any, context: any) {
+      return renderBrowserCall('type', args.selector || '', theme, context.toolCallId, context.invalidate);
+    },
+    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+      const details = result.details as any;
+      const summary = details?.error ? `Error: ${details.error}` : `type · ${summarizeText(String(context.args?.text || ''), 40)}`;
+      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
+    },
+  });
+
+  registerBrowserTool({
+    name: 'browser_press',
+    label: 'Browser Press',
+    description: 'Press a key or chord in a tab: Enter, Escape, Tab, ArrowDown, Control+a, Meta+Enter. Does not press the OS keyboard or focus Chrome.',
+    parameters: Type.Object({
+      keys: Type.String({ description: 'Key or chord, e.g. Enter, Tab, Escape, ArrowDown, Control+a, Meta+Enter' }),
+      selector: Type.Optional(Type.String({ description: 'Focus this selector first; otherwise the active element' })),
+      session_id: Type.Optional(Type.String({ description: 'Target tab/session id' })),
+    }),
+    executionMode: 'sequential' as ToolExecutionMode,
+    async execute(_id: any, params: any) {
+      try {
+        const result = await bridge.act({ op: 'press', ...params });
+        return { content: [{ type: 'text', text: serializeText(result) }], details: result };
+      } catch (error) {
+        return browserErrorResult(error);
+      }
+    },
+    renderCall(args: any, theme: any, context: any) {
+      return renderBrowserCall('press', args.keys || '', theme, context.toolCallId, context.invalidate);
+    },
+    renderResult(result: any, { expanded, isPartial }: any, theme: any, context: any) {
+      const details = result.details as any;
+      const summary = details?.error ? `Error: ${details.error}` : `press · ${String(context.args?.keys || '')}`;
+      return renderBrowserResult(result, summary, theme, isPartial, expanded, context.toolCallId, context.invalidate);
+    },
+  });
+
+  registerBrowserTool({
     name: 'browser_execute_js',
     label: 'Browser Execute JS',
-    description: 'Execute arbitrary JavaScript in the current page context of the real Chrome session.',
+    description: 'Execute JavaScript in a tab. Prefer click/hover/scroll/type/press for basic actions. Works on background tabs; does not focus Chrome.',
     parameters: Type.Object({
       script: Type.String({ description: 'JavaScript source code to execute in the page' }),
       session_id: Type.Optional(Type.String({ description: 'Optional target tab/session id' })),
