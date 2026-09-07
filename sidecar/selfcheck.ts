@@ -2,6 +2,7 @@ import {
 	_selfCheck,
 	buildRoundPrompt,
 	containsStopKeyword,
+	herdrAgentStatePath,
 	resolveExtensionPaths,
 	resolveSkillPaths,
 	slugAgentName,
@@ -18,7 +19,7 @@ const prompt = buildRoundPrompt("Do review", {
 if (!prompt.endsWith("DONE_X") && !prompt.includes("DONE_X")) {
 	throw new Error("expected stop keyword in prompt");
 }
-if (!containsStopKeyword("hello DONE_X", "DONE_X")) throw new Error("detect");
+if (!containsStopKeyword("hello\nDONE_X", "DONE_X")) throw new Error("detect");
 if (slugAgentName(undefined, "Review") !== "sidecar-review") {
 	// may vary; just validate shape
 	const s = slugAgentName(undefined, "Review");
@@ -28,6 +29,8 @@ if (slugAgentName(undefined, "Review") !== "sidecar-review") {
 // package resolution smoke (ponytail installed in this environment)
 const exts = resolveExtensionPaths(["ponytail"]);
 const skills = resolveSkillPaths(["ponytail-review"]);
+const herdrState = herdrAgentStatePath();
+if (!herdrState) throw new Error("herdr-agent-state.ts missing");
 console.log(
 	JSON.stringify(
 		{
@@ -35,6 +38,7 @@ console.log(
 			slug: slugAgentName("My Agent", "demo"),
 			ponytailExts: exts,
 			ponytailReviewSkill: skills,
+			herdrAgentState: herdrState,
 			samplePrompt: prompt.slice(0, 120),
 		},
 		null,

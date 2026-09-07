@@ -6,6 +6,18 @@ import type { SidecarDefinition, SidecarGlobalConfig, SidecarMode } from "./type
 export const USER_SIDECARS_DIR = join(homedir(), ".pi", "agent", "sidecars");
 export const GLOBAL_CONFIG_PATH = join(USER_SIDECARS_DIR, "config.json");
 export const PROJECT_SIDECARS_DIR = join(".pi", "sidecars");
+export const HERDR_AGENT_STATE_PATH = join(
+	homedir(),
+	".pi",
+	"agent",
+	"extensions",
+	"herdr-agent-state.ts",
+);
+
+/** herdr-installed pi integration; required for agent prompt --wait. */
+export function herdrAgentStatePath(): string | undefined {
+	return existsSync(HERDR_AGENT_STATE_PATH) ? HERDR_AGENT_STATE_PATH : undefined;
+}
 
 const DEFAULT_GLOBAL: SidecarGlobalConfig = {
 	mode: "herdr",

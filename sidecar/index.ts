@@ -10,6 +10,7 @@ import {
 	containsStopKeyword,
 	discoverSidecars,
 	findSidecar,
+	herdrAgentStatePath,
 	loadGlobalConfig,
 	resolveExtensionPaths,
 	resolveSkillPaths,
@@ -17,12 +18,15 @@ import {
 	slugAgentName,
 } from "./config.js";
 import {
+	agentGet,
 	agentPrompt,
 	agentRead,
 	agentStart,
+	agentWait,
 	assertHerdrEnv,
 	currentWorkspaceId,
 	HerdrError,
+	readAgentState,
 	reclaimAgentName,
 	tabClose,
 	tabCreate,
@@ -248,6 +252,9 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 	): string[] {
 		const args: string[] = ["--no-extensions", "--no-skills", "--session", sessionFile];
 		const extPaths = resolveExtensionPaths(def.agent?.extensions);
+		// herdr prompt --wait needs pane.report_agent; --no-extensions would drop it.
+		const herdrState = herdrAgentStatePath();
+		if (herdrState && !extPaths.includes(herdrState)) extPaths.unshift(herdrState);
 		for (const p of extPaths) {
 			args.push("-e", p);
 		}
@@ -377,6 +384,29 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	/** After stall + jsonl grew: wait for herdr seq/status to move, then idle/done/blocked. */
+	async function waitHerdrAfterStall(inst: SidecarInstance, deadline: number): Promise<void> {
+		const seq0 = readAgentState(await agentGet(inst.agentName)).seq;
+		while (true) {
+			if (inst.abort.signal.aborted) throw new HerdrError("sidecar aborted");
+			const left = deadline - Date.now();
+			if (left <= 0) throw new HerdrError("sidecar timed out waiting for herdr settle");
+			try {
+				refreshMessagesFromSession(inst);
+			} catch {
+				// session may not exist yet
+			}
+			const { status, seq } = readAgentState(await agentGet(inst.agentName));
+			if (status === "working" || status === "blocked") {
+				await agentWait({ target: inst.agentName, timeoutMs: left });
+				return;
+			}
+			// seq moved off the stalled idle snapshot → herdr saw the turn settle
+			if ((status === "idle" || status === "done") && seq != null && seq !== seq0) return;
+			await new Promise<void>((r) => setTimeout(r, 500));
+		}
+	}
+
 	async function runRound(
 		inst: SidecarInstance,
 		promptText: string,
@@ -391,6 +421,8 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			output = await runInnerRound(inst, promptText, cfg.prompt_timeout_ms);
 		} else {
 			const before = readLastAssistantFromSession(inst.sessionFile);
+			const beforeCount = readMessagesFromSession(inst.sessionFile).length;
+			const deadline = Date.now() + cfg.prompt_timeout_ms;
 			// Poll TUI while --wait blocks, so /sidecar status can stream.
 			let promptDone = false;
 			const waitP = agentPrompt({
@@ -417,7 +449,16 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 					new Promise<void>((r) => setTimeout(r, 500)),
 				]);
 			}
-			await waitP;
+			try {
+				await waitP;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (!msg.includes("agent_prompt_stalled")) throw err;
+				const landed = readMessagesFromSession(inst.sessionFile).length > beforeCount;
+				if (!landed) throw err;
+				appendStatus(inst, `[stall] herdr idle; session grew, waiting herdr settle`);
+				await waitHerdrAfterStall(inst, deadline);
+			}
 
 			if (inst.abort.signal.aborted) {
 				throw new HerdrError("sidecar aborted");

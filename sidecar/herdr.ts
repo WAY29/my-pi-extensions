@@ -258,3 +258,20 @@ export async function agentGet(target: string): Promise<any> {
 	const { stdout } = await herdr(["agent", "get", target], 15_000);
 	return parseJson(stdout);
 }
+
+export function readAgentState(json: any): { status?: string; seq?: number } {
+	const r = json?.result ?? json;
+	return {
+		status: r?.agent_status ?? r?.status,
+		seq: typeof r?.state_change_seq === "number" ? r.state_change_seq : undefined,
+	};
+}
+
+export async function agentWait(opts: {
+	target: string;
+	timeoutMs?: number;
+}): Promise<void> {
+	const args = ["agent", "wait", opts.target];
+	if (opts.timeoutMs != null) args.push("--timeout", String(opts.timeoutMs));
+	await herdr(args, (opts.timeoutMs ?? 600_000) + 10_000);
+}
