@@ -405,6 +405,11 @@ function parseMode(value: string): ToolOutputMode | undefined {
 	return undefined;
 }
 
+function resolveOutputMode(expanded: boolean | undefined): ToolOutputMode {
+	const mode = peekToolOutputMode();
+	return mode === "full" || expanded ? "full" : mode;
+}
+
 export default function toolCallSummary(pi: ExtensionAPI) {
 	const groupedCalls = new Map<string, GroupedToolCall>();
 	const toolGroups = new Map<number, ToolGroup>();
@@ -700,7 +705,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			renderCall(
 				args: unknown,
 				theme: SummaryTheme,
-				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void },
+				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void; expanded?: boolean },
 			) {
 				trackComponentInvalidator(context.toolCallId, context.invalidate);
 				const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
@@ -709,7 +714,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 						context.toolCallId,
 						toolName,
 						asFileToolArgs(args),
-						peekToolOutputMode(),
+						resolveOutputMode(context.expanded),
 						theme,
 					),
 				);
@@ -731,7 +736,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		id: "tool-call-summary",
 		wrapRenderResult: (next) => (result, options, theme, context) => {
 			trackComponentInvalidator(context.toolCallId, context.invalidate);
-			const outputMode = peekToolOutputMode();
+			const outputMode = resolveOutputMode(options.expanded);
 			if (outputMode === "hidden") return new Container();
 			return next(result, { ...options, expanded: outputMode === "full" }, theme, context);
 		},
