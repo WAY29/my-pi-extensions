@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, MouseRegion, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { getAgentDir, renderDiff, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ExecutePatchError, executePatch, type ExecutePatchResult } from "./patch.ts";
@@ -39,6 +39,7 @@ type ApplyPatchCallRenderComponent = Box & {
 	previewArgsKey?: string | undefined;
 	settledSuccess?: boolean | undefined;
 	settledError?: boolean | undefined;
+	sectionOverrides?: Record<number, boolean> | undefined;
 };
 
 type ApplyPatchRenderState = {
@@ -165,12 +166,18 @@ function createApplyPatchCallRenderComponent(): ApplyPatchCallRenderComponent {
 		previewArgsKey: undefined,
 		settledSuccess: false,
 		settledError: false,
+		sectionOverrides: undefined,
 	});
 }
 
+function mouseChild(component: unknown): unknown {
+	return component instanceof MouseRegion ? (component as unknown as { child: unknown }).child : component;
+}
+
 function getApplyPatchCallRenderComponent(state: ApplyPatchRenderState, lastComponent: unknown): ApplyPatchCallRenderComponent {
-	if (lastComponent instanceof Box) {
-		const component = lastComponent as ApplyPatchCallRenderComponent;
+	const previous = mouseChild(lastComponent);
+	if (previous instanceof Box) {
+		const component = previous as ApplyPatchCallRenderComponent;
 		state.callComponent = component;
 		return component;
 	}
@@ -178,6 +185,28 @@ function getApplyPatchCallRenderComponent(state: ApplyPatchRenderState, lastComp
 	const component = createApplyPatchCallRenderComponent();
 	state.callComponent = component;
 	return component;
+}
+
+function isSectionExpanded(component: ApplyPatchCallRenderComponent, index: number, expanded: boolean): boolean {
+	return component.sectionOverrides?.[index] ?? expanded;
+}
+
+function sectionPreviewLimit(component: ApplyPatchCallRenderComponent, expanded: boolean): (index: number) => number {
+	return (index) => (isSectionExpanded(component, index, expanded) ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES);
+}
+
+function wrapClick(component: Component, onToggle?: () => void): MouseRegion {
+	return new MouseRegion(component, (event) => {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		onToggle?.();
+		return { handled: true };
+	});
+}
+
+function toggleSectionExpanded(component: ApplyPatchCallRenderComponent, index: number, expanded: boolean, invalidate: () => void): void {
+	const overrides = (component.sectionOverrides ??= {});
+	overrides[index] = !isSectionExpanded(component, index, expanded);
+	invalidate();
 }
 
 function colorizeCountGroup(counts: string, theme: { fg(role: string, text: string): string }): string {
@@ -234,18 +263,21 @@ function buildApplyPatchCallComponent(
 	component: ApplyPatchCallRenderComponent,
 	previewSections: ApplyPatchPreviewSection[],
 	theme: { fg(role: string, text: string): string; bold(text: string): string; bg(role: string, text: string): string },
+	onToggleSection: (index: number) => void,
 ): ApplyPatchCallRenderComponent {
 	component.setBgFn(getApplyPatchHeaderBg(component.settledSuccess, component.settledError, theme));
 	component.clear();
 	component.addChild(new Text(theme.fg("toolTitle", theme.bold("apply_patch")), 0, 0));
-	for (const section of previewSections) {
-		component.addChild(new Spacer(1));
-		component.addChild(new Text(stylePreviewText(section.summary, theme), 0, 0));
+	previewSections.forEach((section, index) => {
+		const body = new Container();
+		body.addChild(new Spacer(1));
+		body.addChild(new Text(stylePreviewText(section.summary, theme), 0, 0));
 		if (section.diffText) {
-			component.addChild(new Spacer(1));
-			component.addChild(new Text(renderDiff(section.diffText), 0, 0));
+			body.addChild(new Spacer(1));
+			body.addChild(new Text(renderDiff(section.diffText), 0, 0));
 		}
-	}
+		component.addChild(wrapClick(body, () => onToggleSection(index)));
+	});
 	if (previewSections.length === 0) {
 		component.addChild(new Spacer(1));
 		component.addChild(new Text(theme.fg("warning", "Patching..."), 0, 0));
@@ -342,10 +374,6 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 					throw new Error("apply_patch requires a string 'input' parameter");
 				}
 
-				const previewSections = getApplyPatchPreviewSections(params.input, ctx.cwd, {
-					allowPartial: false,
-					maxPreviewLinesPerFile: Number.MAX_SAFE_INTEGER,
-				});
 				try {
 					const result = executePatch({ cwd: ctx.cwd, patchText: params.input });
 					const summary = [
@@ -358,7 +386,7 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 					].join("\n");
 					return {
 						content: [{ type: "text", text: summary }],
-						details: { status: "success", result, previewSections } satisfies ApplyPatchSuccessDetails,
+						details: { status: "success", result } satisfies ApplyPatchSuccessDetails,
 					};
 				} catch (error) {
 					if (error instanceof ExecutePatchError) {
@@ -378,7 +406,6 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 									error: recoveryMessage,
 									failedFiles: failurePaths,
 									appliedFiles,
-									previewSections,
 								} satisfies ApplyPatchPartialFailureDetails,
 							};
 						}
@@ -398,14 +425,19 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 					component.lastPreviewSections = undefined;
 					component.settledSuccess = false;
 					component.settledError = false;
+					component.sectionOverrides = undefined;
 				}
 				const previewSections = getApplyPatchPreviewSections(patchText, cwd, {
 					allowPartial: context.argsComplete === false,
-					maxPreviewLinesPerFile: context.expanded ? Number.MAX_SAFE_INTEGER : COMPACT_PREVIEW_LINES,
+					maxPreviewLinesPerFile: sectionPreviewLimit(component, context.expanded),
 				});
 				component.previewSections = previewSections;
 				if (previewSections.length > 0) component.lastPreviewSections = previewSections;
-				return buildApplyPatchCallComponent(component, previewSections, theme);
+				return wrapClick(
+					buildApplyPatchCallComponent(component, previewSections, theme, (index) => {
+						toggleSectionExpanded(component, index, context.expanded, context.invalidate);
+					}),
+				);
 			},
 			renderResult(result, { expanded }, theme, context) {
 				const state = context.state as ApplyPatchRenderState;
@@ -415,17 +447,30 @@ export default async function codexStyleApplyPatch(pi: ExtensionAPI): Promise<vo
 				if (callComponent) {
 					callComponent.settledSuccess = !context.isError && !isPartialFailure;
 					callComponent.settledError = context.isError || isPartialFailure;
-					if ((!callComponent.previewSections || callComponent.previewSections.length === 0) && details?.previewSections) {
-						callComponent.previewSections = details.previewSections;
-						if (details.previewSections.length > 0) callComponent.lastPreviewSections = details.previewSections;
+					if (!callComponent.previewSections || callComponent.previewSections.length === 0) {
+						const patchText = getPatchText((context.args ?? {}) as { input?: unknown | undefined });
+						const previewSections = getApplyPatchPreviewSections(patchText, context.cwd ?? process.cwd(), {
+							allowPartial: false,
+							maxPreviewLinesPerFile: sectionPreviewLimit(callComponent, expanded),
+						});
+						if (previewSections.length > 0) {
+							callComponent.previewSections = previewSections;
+							callComponent.lastPreviewSections = previewSections;
+						} else if (details?.previewSections?.length) {
+							callComponent.previewSections = details.previewSections;
+							callComponent.lastPreviewSections = details.previewSections;
+						}
 					}
 					const previewSections = callComponent.previewSections?.length
 						? callComponent.previewSections
 						: callComponent.lastPreviewSections ?? [];
-					buildApplyPatchCallComponent(callComponent, previewSections, theme);
+					buildApplyPatchCallComponent(callComponent, previewSections, theme, (index) => {
+						toggleSectionExpanded(callComponent, index, expanded, context.invalidate);
+					});
 				}
 				const output = formatApplyPatchResult(result, theme, context.isError, isPartialFailure);
-				const component = context.lastComponent instanceof Container ? context.lastComponent : new Container();
+				const previous = mouseChild(context.lastComponent);
+				const component = previous instanceof Container ? previous : new Container();
 				component.clear();
 				if (!output) return component;
 				component.addChild(new Spacer(1));

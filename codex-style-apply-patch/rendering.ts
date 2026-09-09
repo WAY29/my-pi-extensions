@@ -10,9 +10,15 @@ import {
 	type ParsedPatchAction,
 } from "./patch.ts";
 
+type MaxPreviewLinesPerFile = number | ((index: number) => number);
+
 interface RenderApplyPatchPreviewOptions {
 	allowPartial?: boolean | undefined;
-	maxPreviewLinesPerFile?: number | undefined;
+	maxPreviewLinesPerFile?: MaxPreviewLinesPerFile | undefined;
+}
+
+function resolveMaxPreviewLines(maxPreviewLinesPerFile: MaxPreviewLinesPerFile, index: number): number {
+	return typeof maxPreviewLinesPerFile === "function" ? maxPreviewLinesPerFile(index) : maxPreviewLinesPerFile;
 }
 
 export interface ApplyPatchPreviewSection {
@@ -62,14 +68,10 @@ function displayPath(path: string, cwd: string): string {
 	return path;
 }
 
-function osc8FileLink(display: string, absolutePath: string): string {
-	return `\x1b]8;;${pathToFileURL(absolutePath).href}\x1b\\${display}\x1b]8;;\x1b\\`;
-}
-
 function linkDisplayPath(path: string, cwd: string): string {
 	const display = displayPath(path, cwd);
 	const absolute = isAbsolute(path) ? path : resolve(cwd, path);
-	return osc8FileLink(display, absolute);
+	return `\x1b]8;;${pathToFileURL(absolute).href}\x1b\\${display}\x1b]8;;\x1b\\`;
 }
 
 export function formatPatchTarget(path: string, movePath: string | undefined, cwd: string): string {
@@ -604,7 +606,7 @@ function parsePartialFiles(patchText: string): FilePreview[] {
 	return files;
 }
 
-function renderPreviewFromFiles(files: FilePreview[], cwd: string, maxPreviewLinesPerFile: number): string {
+function renderPreviewFromFiles(files: FilePreview[], cwd: string, maxPreviewLinesPerFile: MaxPreviewLinesPerFile): string {
 	if (files.length === 0) return "";
 
 	const lines: string[] = [];
@@ -614,7 +616,7 @@ function renderPreviewFromFiles(files: FilePreview[], cwd: string, maxPreviewLin
 		lines.push(counts
 			? `${bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd))} ${counts}`
 			: bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd)));
-		lines.push(...renderLimitedPreviewLines(file.lines, maxPreviewLinesPerFile));
+		lines.push(...renderLimitedPreviewLines(file.lines, resolveMaxPreviewLines(maxPreviewLinesPerFile, 0)));
 		return lines.join("\n");
 	}
 
@@ -623,19 +625,19 @@ function renderPreviewFromFiles(files: FilePreview[], cwd: string, maxPreviewLin
 		if (index > 0) lines.push("");
 		const counts = renderCounts(file.added, file.removed);
 		lines.push(counts ? `  └ ${formatPatchTarget(file.path, file.movePath, cwd)} ${counts}` : `  └ ${formatPatchTarget(file.path, file.movePath, cwd)}`);
-		lines.push(...renderLimitedPreviewLines(file.lines, maxPreviewLinesPerFile));
+		lines.push(...renderLimitedPreviewLines(file.lines, resolveMaxPreviewLines(maxPreviewLinesPerFile, index)));
 	}
 
 	return lines.join("\n");
 }
 
-function buildPreviewSections(files: FilePreview[], cwd: string, maxPreviewLinesPerFile: number): ApplyPatchPreviewSection[] {
-	return files.map((file) => {
+function buildPreviewSections(files: FilePreview[], cwd: string, maxPreviewLinesPerFile: MaxPreviewLinesPerFile): ApplyPatchPreviewSection[] {
+	return files.map((file, index) => {
 		const counts = renderCounts(file.added, file.removed);
 		const summary = counts
 			? `${bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd))} ${counts}`
 			: bulletHeader(file.verb, formatPatchTarget(file.path, file.movePath, cwd));
-		const diffText = renderLimitedPreviewDiffText(file.lines, maxPreviewLinesPerFile);
+		const diffText = renderLimitedPreviewDiffText(file.lines, resolveMaxPreviewLines(maxPreviewLinesPerFile, index));
 		return {
 			summary,
 			diffText: diffText || undefined,
