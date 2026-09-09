@@ -5,7 +5,7 @@ import {
 	createLsToolDefinition,
 	createReadToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Key, Text } from "@earendil-works/pi-tui";
+import { Container, Key, MouseRegion, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import { isAbsolute, relative } from "node:path";
 
 import {
@@ -44,6 +44,7 @@ const SHORTCUTS = [
 
 const PATCH_STATE_KEY = Symbol.for("pi.tool-call-summary.toolExecutionRenderPatch");
 const componentInvalidators = new Map<string, () => void>();
+const rowExpanded = new Set<string>();
 const MAX_PATH_DISPLAY_LENGTH = 80;
 const MAX_READABLE_PARENT_SEGMENTS = 2;
 const EXTRA_PARENT_SEGMENT_PENALTY = 4;
@@ -394,6 +395,7 @@ function applyOutputMode(
 ): void {
 	const previousMode = setToolOutputMode(mode);
 	const nextMode = peekToolOutputMode();
+	rowExpanded.clear();
 	setStatus(ctx);
 	refreshToolRows();
 	ctx.ui.notify(`${TOOL_SCOPE} output: ${previousMode} → ${nextMode}`, "info");
@@ -405,9 +407,23 @@ function parseMode(value: string): ToolOutputMode | undefined {
 	return undefined;
 }
 
-function resolveOutputMode(expanded: boolean | undefined): ToolOutputMode {
+function resolveOutputMode(toolCallId: string): ToolOutputMode {
 	const mode = peekToolOutputMode();
-	return mode === "full" || expanded ? "full" : mode;
+	return mode === "full" || rowExpanded.has(toolCallId) ? "full" : mode;
+}
+
+function mouseChild(component: unknown): unknown {
+	return component instanceof MouseRegion ? (component as unknown as { child: unknown }).child : component;
+}
+
+function wrapClick(component: Component, toolCallId: string, invalidate?: () => void): MouseRegion {
+	return new MouseRegion(component, (event) => {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		if (rowExpanded.has(toolCallId)) rowExpanded.delete(toolCallId);
+		else rowExpanded.add(toolCallId);
+		invalidate?.();
+		return { handled: true };
+	});
 }
 
 export default function toolCallSummary(pi: ExtensionAPI) {
@@ -481,6 +497,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		};
 		for (const item of content) {
 			if (isTargetToolCallContent(item)) {
+				if (run.length > 0 && run[run.length - 1]!.toolName !== item.name) flushRun();
 				run.push({
 					id: item.id,
 					toolName: item.name,
@@ -542,6 +559,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			}
 			for (const item of content) {
 				if (isTargetToolCallContent(item)) {
+					if (run.length > 0 && run[run.length - 1]!.toolName !== item.name) flushRun();
 					run.push({ id: item.id, toolName: item.name, args: asFileToolArgs(item.arguments) });
 					continue;
 				}
@@ -662,32 +680,33 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		return text.split("\n").map((line) => `${bodyPrefix}${theme.fg("toolOutput", line)}`);
 	}
 
-	function formatGroupedTree(
+	function renderGroupedTree(
 		toolCallId: string,
 		fallbackToolName: TargetToolName,
 		fallbackArgs: FileToolArgs,
-		mode: ToolOutputMode,
 		theme: SummaryTheme,
-	): string {
+		lastComponent: unknown,
+		invalidate?: () => void,
+	): Container {
+		const root = lastComponent instanceof Container ? lastComponent : new Container();
+		root.clear();
 		const sections = getRenderableSections(toolCallId, fallbackToolName, fallbackArgs);
-		const lines: string[] = [];
-
 		sections.forEach((section, sectionIndex) => {
-			if (sectionIndex > 0) {
-				lines.push("");
-			}
-			lines.push(formatSectionHeader(section, theme));
+			if (sectionIndex > 0) root.addChild(new Spacer(1));
+			root.addChild(new Text(formatSectionHeader(section, theme), 0, 0));
 			section.calls.forEach((call, callIndex) => {
 				const isLast = callIndex === section.calls.length - 1;
 				const result = toolResults.get(call.id);
-				lines.push(formatLeafLine(call, result, isLast, mode, theme));
+				const mode = resolveOutputMode(call.id);
+				let text = formatLeafLine(call, result, isLast, mode, theme);
 				if (mode === "full") {
-					lines.push(...formatFullLeafBody(call, result, isLast, theme));
+					const body = formatFullLeafBody(call, result, isLast, theme);
+					if (body.length > 0) text += `\n${body.join("\n")}`;
 				}
+				root.addChild(wrapClick(new Text(text, 0, 0), call.id, invalidate));
 			});
 		});
-
-		return lines.join("\n");
+		return root;
 	}
 
 	function isHiddenGroupedComponent(component: unknown): boolean {
@@ -705,20 +724,17 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			renderCall(
 				args: unknown,
 				theme: SummaryTheme,
-				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void; expanded?: boolean },
+				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void },
 			) {
 				trackComponentInvalidator(context.toolCallId, context.invalidate);
-				const component = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-				component.setText(
-					formatGroupedTree(
-						context.toolCallId,
-						toolName,
-						asFileToolArgs(args),
-						resolveOutputMode(context.expanded),
-						theme,
-					),
+				return renderGroupedTree(
+					context.toolCallId,
+					toolName,
+					asFileToolArgs(args),
+					theme,
+					context.lastComponent,
+					context.invalidate,
 				);
-				return component;
 			},
 			renderResult() {
 				return new Container();
@@ -734,11 +750,25 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 
 	registerBashToolPlugin(pi, {
 		id: "tool-call-summary",
+		wrapRenderCall: (next) => (args, theme, context) => {
+			trackComponentInvalidator(context.toolCallId, context.invalidate);
+			const previous = mouseChild(context.lastComponent);
+			const inner = next(args, theme, { ...context, lastComponent: previous as typeof context.lastComponent });
+			return wrapClick(inner, context.toolCallId, context.invalidate);
+		},
 		wrapRenderResult: (next) => (result, options, theme, context) => {
 			trackComponentInvalidator(context.toolCallId, context.invalidate);
-			const outputMode = resolveOutputMode(options.expanded);
+			const outputMode = resolveOutputMode(context.toolCallId);
 			if (outputMode === "hidden") return new Container();
-			return next(result, { ...options, expanded: outputMode === "full" }, theme, context);
+			const previous = mouseChild(context.lastComponent);
+			const reuse = previous && typeof previous === "object" && "state" in previous ? previous : undefined;
+			const inner = next(
+				result,
+				{ ...options, expanded: outputMode === "full" },
+				theme,
+				{ ...context, lastComponent: reuse as typeof context.lastComponent },
+			);
+			return wrapClick(inner, context.toolCallId, context.invalidate);
 		},
 	});
 
@@ -823,6 +853,7 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 			patchState.shouldHide = undefined;
 		}
 		componentInvalidators.clear();
+		rowExpanded.clear();
 		releaseBashToolOwner(pi);
 		releaseGrepToolOwner(pi);
 		deactivateToolOutputMode();

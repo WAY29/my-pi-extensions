@@ -7,10 +7,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 type BashToolDefinition = ReturnType<typeof createBashToolDefinition>;
+type BashRenderCall = (
+  ...args: Parameters<NonNullable<BashToolDefinition["renderCall"]>>
+) => Component;
 type BashRenderResult = (
   ...args: Parameters<NonNullable<BashToolDefinition["renderResult"]>>
 ) => Component;
 
+type BashRenderCallWrapper = (next: BashRenderCall) => BashRenderCall;
 type BashRenderResultWrapper = (next: BashRenderResult) => BashRenderResult;
 type BashOperationsWrapper = (next: BashOperations) => BashOperations;
 
@@ -18,6 +22,7 @@ export interface BashToolPlugin {
   id: string;
   priority?: number;
   wrapOperations?: BashOperationsWrapper;
+  wrapRenderCall?: BashRenderCallWrapper;
   wrapRenderResult?: BashRenderResultWrapper;
 }
 
@@ -51,6 +56,17 @@ function composeOperations(state: BashToolCoordinatorState): BashOperations {
   return operations;
 }
 
+function composeRenderCall(
+  state: BashToolCoordinatorState,
+  baseRenderCall: BashRenderCall,
+): BashRenderCall {
+  let renderCall = baseRenderCall;
+  for (const plugin of orderedPlugins(state)) {
+    if (plugin.wrapRenderCall) renderCall = plugin.wrapRenderCall(renderCall);
+  }
+  return renderCall;
+}
+
 function composeRenderResult(
   state: BashToolCoordinatorState,
   baseRenderResult: BashRenderResult,
@@ -64,13 +80,16 @@ function composeRenderResult(
 
 function createComposedBashTool(cwd: string, state: BashToolCoordinatorState): BashToolDefinition {
   const base = createBashToolDefinition(cwd, { operations: composeOperations(state) });
-  if (!base.renderResult) return base;
-
   return {
     ...base,
-    renderResult: composeRenderResult(state, base.renderResult as BashRenderResult) as NonNullable<
-      BashToolDefinition["renderResult"]
-    >,
+    ...(base.renderCall ? { renderCall: composeRenderCall(state, base.renderCall) } : {}),
+    ...(base.renderResult
+      ? {
+          renderResult: composeRenderResult(state, base.renderResult as BashRenderResult) as NonNullable<
+            BashToolDefinition["renderResult"]
+          >,
+        }
+      : {}),
   };
 }
 
@@ -119,4 +138,10 @@ export default function bashToolCoordinator(_pi: ExtensionAPI): void {
   // other extensions import the named helpers above to compose the shared bash tool.
 }
 
-export type { BashRenderResult, BashRenderResultWrapper, BashOperationsWrapper };
+export type {
+  BashRenderCall,
+  BashRenderCallWrapper,
+  BashRenderResult,
+  BashRenderResultWrapper,
+  BashOperationsWrapper,
+};
