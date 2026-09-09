@@ -263,6 +263,20 @@ function applyPreviewChunks(lines: string[], chunks: Chunk[]): string[] {
 	return next;
 }
 
+function withHunkGaps(lines: PreviewLine[]): PreviewLine[] {
+	if (lines.length < 2) return lines;
+	const gapped: PreviewLine[] = [lines[0]!];
+	for (let index = 1; index < lines.length; index += 1) {
+		const prev = lines[index - 1]!;
+		const next = lines[index]!;
+		if (prev.lineNumber > 0 && next.lineNumber > 0 && next.lineNumber > prev.lineNumber + 1) {
+			gapped.push({ lineNumber: 0, marker: " ", text: "..." });
+		}
+		gapped.push(next);
+	}
+	return gapped;
+}
+
 function formatPreviewLine(line: PreviewLine, lines: PreviewLine[]): string {
 	const numberedLines = lines.filter((entry) => entry.lineNumber > 0);
 	const numberWidth = Math.max(1, ...numberedLines.map((entry) => String(entry.lineNumber).length));
@@ -284,9 +298,10 @@ function renderPreviewDiffText(lines: PreviewLine[]): string {
 
 function renderPreviewLines(lines: PreviewLine[]): string[] {
 	if (lines.length === 0) return [];
-	const numberedLines = lines.filter((entry) => entry.lineNumber > 0);
+	const gapped = withHunkGaps(lines);
+	const numberedLines = gapped.filter((entry) => entry.lineNumber > 0);
 	const numberWidth = Math.max(1, ...numberedLines.map((entry) => String(entry.lineNumber).length));
-	const diffText = lines
+	const diffText = gapped
 		.map((line) => {
 			const lineNumber = line.lineNumber > 0 ? String(line.lineNumber).padStart(numberWidth, " ") : " ".repeat(numberWidth);
 			return `${line.marker}${lineNumber} ${line.text}`;
@@ -295,7 +310,7 @@ function renderPreviewLines(lines: PreviewLine[]): string[] {
 	try {
 		return renderDiff(diffText).split("\n").map((line) => `    ${line}`);
 	} catch {
-		return lines.map((line) => formatPreviewLine(line, lines));
+		return gapped.map((line) => formatPreviewLine(line, gapped));
 	}
 }
 
@@ -349,7 +364,7 @@ function renderLimitedPreviewDiffText(lines: PreviewLine[], maxPreviewLinesPerFi
 	const numberedLines = lines.filter((entry) => entry.lineNumber > 0);
 	const numberWidth = Math.max(1, ...numberedLines.map((entry) => String(entry.lineNumber).length));
 	const { slicedLines, omittedBefore, omittedAfter } = sliceLinesAroundChanges(lines, maxPreviewLinesPerFile);
-	const rendered = slicedLines
+	const rendered = withHunkGaps(slicedLines)
 		.map((line) => {
 			const lineNumber = line.lineNumber > 0 ? String(line.lineNumber).padStart(numberWidth, " ") : " ".repeat(numberWidth);
 			return `${line.marker}${lineNumber} ${line.text}`;
