@@ -9,6 +9,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import type { ExtensionAPI, ExtensionContext, ToolExecutionMode } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { Text } from '@earendil-works/pi-tui';
+import { collectBrowserRuns, messagesFromSessionBranch } from './browser-tree.js';
 import { applyCutList, buildFindMainListScript, buildOptHtmlScript, normalizeTextOnlyOutput, postProcessScannedHtml } from './simphtml.js';
 import { isScreenshotCdpBatch, isScreenshotCdpMethod, SCREENSHOT_MAX_EDGE, screenshotCaptureParams, screenshotData, screenshotViewport } from './screenshot.js';
 
@@ -58,11 +59,14 @@ interface BrowserState {
   armed: boolean;
 }
 
-interface BrowserTreeMeta {
+interface BrowserTreeRow {
   groupId: number;
-  isFirst: boolean;
-  isLast: boolean;
+  leaderId: string;
+  label: string;
+  summary: string;
+  detail?: string;
   invalidate?: () => void;
+  callText?: Text;
 }
 
 interface PortOccupant {
@@ -160,7 +164,6 @@ class BrowserBridge {
       notes: [
         'Load the unpacked extension from extension_path in chrome://extensions with Developer Mode enabled.',
         'Keep a normal http/https page open in Chrome; about:blank is not enough.',
-        'Run /browser-on in the session before asking the model to use browser tools.'
       ]
     };
   }
@@ -857,172 +860,135 @@ function firstTextContent(result: { content?: Array<{ type: string; text?: strin
 }
 
 let browserTreeGroupSeq = 0;
-let browserTreeCurrentTail: string | null = null;
-let browserTreeActive = false;
-const browserTreeMeta = new Map<string, BrowserTreeMeta>();
-
-function isBrowserToolName(name: string | undefined): boolean {
-  return typeof name === 'string' && name.startsWith('browser_');
-}
-
-function getAssistantContent(message: unknown): unknown[] | undefined {
-  if (!message || typeof message !== 'object') return undefined;
-  const candidate = message as { role?: unknown; content?: unknown };
-  if (candidate.role !== 'assistant' || !Array.isArray(candidate.content)) return undefined;
-  return candidate.content;
-}
-
-function isToolCallContent(content: unknown): content is { id?: unknown; name?: unknown; arguments?: unknown } {
-  return Boolean(content && typeof content === 'object' && (content as { type?: unknown }).type === 'toolCall');
-}
-
-function isBrowserToolCallContent(content: unknown): content is { id: string } {
-  return isToolCallContent(content) && isBrowserToolName(typeof content.name === 'string' ? content.name : undefined) && typeof content.id === 'string';
-}
-
-function isVisibleAssistantContent(content: unknown): boolean {
-  if (!content || typeof content !== 'object') return false;
-  const candidate = content as { type?: unknown; text?: unknown; thinking?: unknown };
-  return (
-    (candidate.type === 'text' && typeof candidate.text === 'string' && candidate.text.trim() !== '') ||
-    (candidate.type === 'thinking' && typeof candidate.thinking === 'string' && candidate.thinking.trim() !== '')
-  );
-}
-
-function getBrowserToolCallIds(message: unknown): string[] {
-  return getAssistantContent(message)?.filter(isBrowserToolCallContent).map((item) => item.id) ?? [];
-}
-
-function addBrowserRun(ids: string[]) {
-  if (ids.length === 0) return;
-  browserTreeGroupSeq += 1;
-  ids.forEach((id, index) => {
-    browserTreeMeta.set(id, {
-      groupId: browserTreeGroupSeq,
-      isFirst: index === 0,
-      isLast: index === ids.length - 1,
-    });
-  });
-}
-
-function indexAssistantBrowserGroups(message: unknown) {
-  const content = getAssistantContent(message);
-  if (!content) return;
-
-  let run: string[] = [];
-  const flushRun = () => {
-    addBrowserRun(run);
-    run = [];
-  };
-
-  for (const item of content) {
-    if (isBrowserToolCallContent(item)) {
-      run.push(item.id);
-    } else if (isToolCallContent(item) || isVisibleAssistantContent(item)) {
-      flushRun();
-    }
-  }
-
-  flushRun();
-}
-
-function rebuildBrowserGroupsFromSession(ctx: { sessionManager: { getBranch(): unknown[] } }) {
-  resetBrowserTree();
-
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (!entry || typeof entry !== 'object') continue;
-    const candidate = entry as { type?: unknown; message?: unknown };
-    if (candidate.type !== 'message' || !candidate.message || typeof candidate.message !== 'object') continue;
-    indexAssistantBrowserGroups(candidate.message);
-  }
-}
+const browserTreeRows = new Map<string, BrowserTreeRow>();
+const browserTreeGroups = new Map<number, string[]>();
+const browserTreeInvalidators = new Map<string, () => void>();
 
 function resetBrowserTree() {
   browserTreeGroupSeq = 0;
-  browserTreeCurrentTail = null;
-  browserTreeActive = false;
-  browserTreeMeta.clear();
+  browserTreeRows.clear();
+  browserTreeGroups.clear();
+  browserTreeInvalidators.clear();
 }
 
-function finalizeBrowserTreeRun() {
-  browserTreeActive = false;
-  browserTreeCurrentTail = null;
+function sameBrowserRuns(left: string[][], right: string[][]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((run, index) => {
+    const other = right[index]!;
+    return run.length === other.length && run.every((id, idIndex) => id === other[idIndex]);
+  });
 }
 
-function noteBrowserToolStart(toolCallId: string, toolName: string) {
-  if (!isBrowserToolName(toolName)) {
-    finalizeBrowserTreeRun();
-    return;
-  }
-
-  if (!browserTreeActive) {
-    browserTreeGroupSeq += 1;
-    browserTreeActive = true;
-    browserTreeMeta.set(toolCallId, {
-      groupId: browserTreeGroupSeq,
-      isFirst: true,
-      isLast: true,
-    });
-    browserTreeCurrentTail = toolCallId;
-    return;
-  }
-
-  if (browserTreeCurrentTail) {
-    const prev = browserTreeMeta.get(browserTreeCurrentTail);
-    if (prev) {
-      prev.isLast = false;
-      prev.invalidate?.();
+function applyBrowserRuns(runs: string[][], invalidate = false) {
+  if (sameBrowserRuns([...browserTreeGroups.values()], runs)) return;
+  const preserved = new Map(browserTreeRows);
+  browserTreeRows.clear();
+  browserTreeGroups.clear();
+  browserTreeGroupSeq = 0;
+  for (const ids of runs) {
+    if (ids.length === 0) continue;
+    const groupId = ++browserTreeGroupSeq;
+    const leaderId = ids[0]!;
+    browserTreeGroups.set(groupId, ids);
+    for (const id of ids) {
+      const prev = preserved.get(id);
+      browserTreeRows.set(id, {
+        groupId,
+        leaderId,
+        label: prev?.label ?? '',
+        summary: prev?.summary ?? '',
+        detail: prev?.detail,
+        invalidate: prev?.invalidate,
+        callText: prev?.callText,
+      });
     }
   }
+  if (!invalidate) return;
+  for (const fn of browserTreeInvalidators.values()) fn();
+}
 
-  browserTreeMeta.set(toolCallId, {
-    groupId: browserTreeGroupSeq,
-    isFirst: false,
-    isLast: true,
+function rebuildBrowserGroupsFromSession(
+  ctx: { sessionManager: { getBranch(): unknown[] } },
+  extraMessage?: unknown,
+) {
+  applyBrowserRuns(collectBrowserRuns(messagesFromSessionBranch(ctx.sessionManager.getBranch(), extraMessage)), true);
+}
+
+function formatBrowserTree(
+  rows: Array<{ label: string; summary: string; detail?: string }>,
+  theme: any,
+): string {
+  if (rows.length === 0) return '';
+  const lines = [`${theme.fg('toolTitle', theme.bold('Browser'))}`];
+  rows.forEach((row, index) => {
+    const isLast = index === rows.length - 1;
+    const branch = isLast ? '└─ ' : '├─ ';
+    const indent = isLast ? '   ' : '│  ';
+    let line = theme.fg('toolTitle', branch) + theme.fg('accent', row.label);
+    if (row.summary) line += theme.fg('dim', ` · ${row.summary}`);
+    lines.push(line);
+    if (row.detail === 'working') {
+      lines.push(theme.fg('warning', `${indent}Working...`));
+    } else if (row.detail) {
+      lines.push(theme.fg('dim', indent) + theme.fg('error', row.detail));
+    }
   });
-  browserTreeCurrentTail = toolCallId;
+  return lines.join('\n');
 }
 
-function attachBrowserTreeRow(toolCallId: string, invalidate?: () => void) {
-  if (!toolCallId) return;
-  const meta = browserTreeMeta.get(toolCallId);
-  if (!meta) return;
-  meta.invalidate = invalidate;
+function formatBrowserGroup(groupId: number, theme: any): string {
+  const ids = browserTreeGroups.get(groupId) ?? [];
+  const rows = ids
+    .map((id) => browserTreeRows.get(id))
+    .filter((row): row is BrowserTreeRow => Boolean(row?.label));
+  return formatBrowserTree(rows, theme);
 }
 
-function browserBranchPrefix(meta?: BrowserTreeMeta): string {
-  if (!meta) return '• ';
-  return meta.isLast ? '└─ ' : '├─ ';
-}
-
-function browserResultPrefix(meta?: BrowserTreeMeta): string {
-  if (!meta) return '  ';
-  return meta.isLast ? '   ' : '│  ';
+function refreshLeaderCall(row: BrowserTreeRow, theme: any) {
+  const leader = browserTreeRows.get(row.leaderId) ?? row;
+  leader.callText?.setText(formatBrowserGroup(leader.groupId, theme));
 }
 
 function renderBrowserCall(label: string, summary: string, theme: any, toolCallId?: string, invalidate?: () => void) {
-  if (toolCallId) attachBrowserTreeRow(toolCallId, invalidate);
-  const meta = toolCallId ? browserTreeMeta.get(toolCallId) : undefined;
-  const branch = browserBranchPrefix(meta);
-  let text = '';
-  if (meta?.isFirst) {
-    text += `${theme.fg('toolTitle', theme.bold('Browser'))}\n`;
+  if (toolCallId && invalidate) browserTreeInvalidators.set(toolCallId, invalidate);
+  if (!toolCallId) {
+    return new Text(formatBrowserTree([{ label, summary }], theme), 0, 0);
   }
-  text += theme.fg('toolTitle', branch);
-  text += theme.fg('accent', label);
-  if (summary) text += theme.fg('dim', ` · ${summary}`);
-  return new Text(text, 0, 0);
+
+  const row = browserTreeRows.get(toolCallId);
+  if (!row) {
+    return new Text(formatBrowserTree([{ label, summary }], theme), 0, 0);
+  }
+
+  row.label = label;
+  row.summary = summary;
+  row.invalidate = invalidate;
+
+  if (row.leaderId !== toolCallId) {
+    browserTreeRows.get(row.leaderId)?.invalidate?.();
+    return new Text('', 0, 0);
+  }
+
+  const callText = new Text(formatBrowserGroup(row.groupId, theme), 0, 0);
+  row.callText = callText;
+  return callText;
 }
 
 function renderBrowserResult(result: any, _summary: string, theme: any, isPartial?: boolean, _expanded?: boolean, toolCallId?: string, invalidate?: () => void) {
-  if (toolCallId) attachBrowserTreeRow(toolCallId, invalidate);
-  const meta = toolCallId ? browserTreeMeta.get(toolCallId) : undefined;
-  const indent = browserResultPrefix(meta);
-  if (isPartial) return new Text(theme.fg('warning', `${indent}Working...`), 0, 0);
+  if (!toolCallId) return new Text('', 0, 0);
+  const row = browserTreeRows.get(toolCallId);
+  if (!row) return new Text('', 0, 0);
+
+  if (invalidate) browserTreeInvalidators.set(toolCallId, invalidate);
+  row.invalidate = invalidate ?? row.invalidate;
   const details = result?.details as any;
-  if (details?.error) {
-    const message = summarizeText(String(details.error || 'unknown browser error'), 120);
-    return new Text(theme.fg('dim', indent) + theme.fg('error', `Error: ${message}`), 0, 0);
+  if (isPartial) row.detail = 'working';
+  else if (details?.error) row.detail = `Error: ${summarizeText(String(details.error || 'unknown browser error'), 120)}`;
+  else row.detail = undefined;
+
+  refreshLeaderCall(row, theme);
+  if (row.leaderId !== toolCallId) {
+    browserTreeRows.get(row.leaderId)?.invalidate?.();
   }
   return new Text('', 0, 0);
 }
@@ -1188,18 +1154,14 @@ function browserGuard(pi: ExtensionAPI, ctx: ExtensionContext) {
 
 export default function agentBrowser(pi: ExtensionAPI) {
   const bridge = new BrowserBridge();
-  const registerBrowserTool = (tool: any) => pi.registerTool(tool);
+  const registerBrowserTool = (tool: any) => pi.registerTool({ ...tool, renderShell: 'self' });
 
   pi.on('resources_discover', () => ({
     skillPaths: [skillFile],
   }));
 
-  pi.on('tool_execution_start', async (event) => {
-    noteBrowserToolStart(event.toolCallId, event.toolName);
-  });
-
-  pi.on('turn_end', async () => {
-    finalizeBrowserTreeRun();
+  pi.on('tool_execution_start', async (_event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx);
   });
 
   pi.on('session_start', async (_event, ctx) => {
@@ -1216,15 +1178,12 @@ export default function agentBrowser(pi: ExtensionAPI) {
     rebuildBrowserGroupsFromSession(ctx);
   });
 
-  pi.on('message_update', (event) => {
-    indexAssistantBrowserGroups(event.message);
+  pi.on('message_update', (event, ctx) => {
+    rebuildBrowserGroupsFromSession(ctx, event.message);
   });
 
-  pi.on('message_end', (event, ctx) => {
+  pi.on('message_end', (_event, ctx) => {
     rebuildBrowserGroupsFromSession(ctx);
-    if (getBrowserToolCallIds(event.message).some((id) => !browserTreeMeta.has(id))) {
-      indexAssistantBrowserGroups(event.message);
-    }
   });
 
   pi.on('input', async (event) => {
@@ -1358,6 +1317,9 @@ export default function agentBrowser(pi: ExtensionAPI) {
     name: 'browser_status',
     label: 'Browser Status',
     description: 'Return extension path, bridge ports, and connected real Chrome tabs for setup and diagnostics.',
+    promptGuidelines: [
+      'If browser_* tools are available, this session is already armed. Do not ask the user to run /browser-on; use the browser tools directly.',
+    ],
     parameters: Type.Object({}),
     executionMode: 'sequential' as ToolExecutionMode,
     async execute() {
