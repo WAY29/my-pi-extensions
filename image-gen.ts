@@ -22,19 +22,16 @@ import {
 } from "@earendil-works/pi-ai";
 
 const OPENAI_IMAGES_API = "openai-images" as const;
-const DEFAULT_IMAGE_MODEL = "gpt-image-2";
-const TRANSPARENT_IMAGE_MODEL = "gpt-image-1.5";
+const DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare";
 const DEFAULT_GROK_IMAGE_MODEL = "grok-imagine-image";
 const DEFAULT_GROK_QUALITY_MODEL = "grok-imagine-image-quality";
 const DEFAULT_OUTPUT_DIR = "output/imagegen";
 const MAX_INPUT_IMAGES = 16;
-const TRANSPARENT_CHROMA_KEY_HEX = "#00FF00";
 
 const ACTION_VALUES = ["auto", "generate", "edit"] as const;
 const BACKGROUND_VALUES = ["auto", "opaque", "transparent"] as const;
-const QUALITY_VALUES = ["auto", "low", "medium", "high"] as const;
+const QUALITY_VALUES = ["auto", "low", "medium", "high", "xhigh", "max"] as const;
 const OUTPUT_FORMAT_VALUES = ["png", "webp", "jpeg"] as const;
-const SAFE_RESPONSES_SIZES = new Set(["auto", "1024x1024", "1024x1536", "1536x1024"]);
 
 const IMAGE_GEN_PARAMS = Type.Object({
 	prompt: Type.String({ description: "The full image generation or edit request" }),
@@ -59,12 +56,12 @@ const IMAGE_GEN_PARAMS = Type.Object({
 	size: Type.Optional(
 		Type.String({
 			description:
-				"Output size. GPT Image: 1024x1024 / 1536x1024 / auto. Grok Imagine: aspect ratio (1:1, 16:9, auto) or resolution (1k, 2k).",
+				"Output size. GPT Image 2.5: auto or WIDTHxHEIGHT (e.g. 1024x1024, 1536x1024, 2048x2048); dimensions must be multiples of 16, each <=3840, aspect ratio 1:3 to 3:1, total pixels 655360 to 8294400. Grok Imagine: aspect ratio (1:1, 16:9, auto) or resolution (1k, 2k).",
 		}),
 	),
 	quality: Type.Optional(
 		StringEnum(QUALITY_VALUES, {
-			description: "Output quality. Use high for text-heavy or detail-critical assets.",
+			description: "Output quality. Use high for text-heavy or detail-critical assets. xhigh and max require GPT Image 2.5.",
 		}),
 	),
 	n: Type.Optional(Type.Integer({ description: "Number of images to generate", minimum: 1, maximum: 10 })),
@@ -86,7 +83,7 @@ const IMAGE_GEN_PARAMS = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Image model id. GPT: gpt-image-2 / gpt-image-1.5. Grok: grok-imagine-image / grok-imagine-image-quality. Default follows current chat provider.",
+				"Image model id. GPT: gpt-image-2.5-flare (default, everyday generation), gpt-image-2.5-sunburst (precise editing), gpt-image-2, gpt-image-1.5. Grok: grok-imagine-image / grok-imagine-image-quality. Default follows current chat provider.",
 		}),
 	),
 	output_dir: Type.Optional(Type.String({ description: "Workspace output directory. Defaults to output/imagegen" })),
@@ -124,7 +121,7 @@ type ResolvedImageInput = {
 type OpenAIRequestAuth = {
 	apiKey: string;
 	baseUrl: string;
-	headers?: Record<string, string>;
+	headers?: Record<string, string | null>;
 	providerModel: Model<any>;
 };
 
@@ -376,14 +373,6 @@ function toDataUrl(image: ImageContent): string {
 	return `data:${image.mimeType};base64,${image.data}`;
 }
 
-function normalizeResponsesToolSize(size: string | undefined): string | undefined {
-	const normalized = normalizeOptionalString(size);
-	if (!normalized) {
-		return undefined;
-	}
-	return SAFE_RESPONSES_SIZES.has(normalized) ? normalized : undefined;
-}
-
 function createImageContent(input: ResolvedImageInput): ImageContent {
 	return {
 		type: "image",
@@ -466,16 +455,15 @@ function buildRequestSignature(params: {
 	return createHash("sha256").update(payload).digest("hex").slice(0, 10);
 }
 
-function buildTransparentFallbackPrompt(prompt: string): string {
-	return `${prompt}\n\nRender the subject on a perfectly flat solid ${TRANSPARENT_CHROMA_KEY_HEX} chroma-key background. Do not use that exact green anywhere inside the subject. No checkerboard, no textured backdrop, and no cast shadow unless explicitly requested.`;
-}
-
-function buildRequestHeaders(headers: Record<string, string> | undefined, apiKey: string | undefined): Record<string, string> {
+function buildRequestHeaders(headers: Record<string, string | null> | undefined, apiKey: string | undefined): Record<string, string> {
 	const merged: Record<string, string> = {
 		"Content-Type": "application/json",
 		Accept: "application/json",
-		...(headers ?? {}),
 	};
+	// ProviderHeaders may use null as a deletion marker; drop those before fetch.
+	for (const [key, value] of Object.entries(headers ?? {})) {
+		if (value != null) merged[key] = value;
+	}
 
 	const hasAuthorization = Object.keys(merged).some((key) => key.toLowerCase() === "authorization");
 	if (!hasAuthorization && apiKey) {
@@ -686,7 +674,7 @@ async function requestResponsesImageGeneration(
 	if (options?.background !== undefined) {
 		tool.background = options.background;
 	}
-	const normalizedToolSize = normalizeResponsesToolSize(options?.size);
+	const normalizedToolSize = normalizeOptionalString(options?.size);
 	if (normalizedToolSize !== undefined) {
 		tool.size = normalizedToolSize;
 	}
@@ -812,14 +800,18 @@ function isOpenAICompatibleModel(model: Model<any>): boolean {
 async function resolveOpenAIRequestAuth(ctx: ExtensionContext, imageModelId: string): Promise<OpenAIRequestAuth> {
 	const availableModels = await ctx.modelRegistry.getAvailable();
 	const wantGrok = isGrokImagineModel(imageModelId);
-	const preferredModel = wantGrok
+	const currentModel = availableModels.find((model: Model<any>) =>
+		model.provider === ctx.model?.provider && model.id === ctx.model?.id &&
+		(wantGrok ? isGrokProvider(model.provider) : isOpenAICompatibleModel(model) && !isGrokProvider(model.provider)),
+	);
+	const preferredModel = currentModel ?? (wantGrok
 		? (availableModels.find((model: Model<any>) => model.provider === "internal-grok") ??
 			availableModels.find((model: Model<any>) => isGrokProvider(model.provider)) ??
 			availableModels.find((model: Model<any>) => model.id.toLowerCase().includes("grok")))
 		: (availableModels.find((model: Model<any>) => model.provider === "openai") ??
 			availableModels.find((model: Model<any>) => model.provider === "internal") ??
 			availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model) && !isGrokProvider(model.provider)) ??
-			availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model)));
+			availableModels.find((model: Model<any>) => isOpenAICompatibleModel(model))));
 	if (!preferredModel) {
 		const knownCompatible = ctx.modelRegistry.getAll().find((model: Model<any>) => isOpenAICompatibleModel(model));
 		if (knownCompatible) {
@@ -862,21 +854,25 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 	} else if (preferGrok) {
 		if (params.background === "transparent") {
 			throw new Error(
-				"Grok Imagine does not support background=transparent. Set model=gpt-image-1.5 (or another GPT Image model) for transparent cutouts.",
+				`Grok Imagine does not support background=transparent. Set model=${DEFAULT_IMAGE_MODEL} for transparent cutouts.`,
 			);
 		}
 		effectiveModel = params.quality === "high" ? DEFAULT_GROK_QUALITY_MODEL : DEFAULT_GROK_IMAGE_MODEL;
 		notes.push(`Auto-routed to ${effectiveModel} via Grok Imagine.`);
-	} else if (params.background === "transparent") {
-		effectiveModel = TRANSPARENT_IMAGE_MODEL;
-		notes.push(`Auto-routed transparent request to ${TRANSPARENT_IMAGE_MODEL}.`);
 	} else {
 		effectiveModel = DEFAULT_IMAGE_MODEL;
 	}
 
+	if ((params.quality === "xhigh" || params.quality === "max") && !effectiveModel.startsWith("gpt-image-2.5-")) {
+		throw new Error("quality=xhigh/max requires gpt-image-2.5-flare or gpt-image-2.5-sunburst.");
+	}
+	if (params.background === "transparent" && params.output_format === "jpeg") {
+		throw new Error("background=transparent requires output_format=png or webp. JPEG does not support transparency.");
+	}
+
 	if (isGrokImagineModel(effectiveModel)) {
 		if (params.background === "transparent") {
-			throw new Error("Grok Imagine does not support background=transparent. Use gpt-image-1.5 instead.");
+			throw new Error(`Grok Imagine does not support background=transparent. Use ${DEFAULT_IMAGE_MODEL} instead.`);
 		}
 		if (params.input_fidelity) {
 			notes.push("input_fidelity is ignored for Grok Imagine.");
@@ -884,7 +880,7 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 	} else {
 		if (params.background === "transparent" && isGptImage2Model(effectiveModel)) {
 			throw new Error(
-				"gpt-image-2 does not support background=transparent. Omit `model` to let image_gen auto-route to gpt-image-1.5, or choose gpt-image-1.5 explicitly.",
+				`gpt-image-2 does not support background=transparent. Omit model to use ${DEFAULT_IMAGE_MODEL}, or choose gpt-image-1.5 explicitly.`,
 			);
 		}
 
@@ -900,29 +896,6 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 		effectiveModel,
 		notes,
 	};
-}
-
-async function removeChromaKeyWithPython(pi: ExtensionAPI, images: SavedImage[]): Promise<void> {
-	const script = String.raw`from PIL import Image
-import sys
-
-paths = sys.argv[1:]
-tol = 20
-for path in paths:
-    image = Image.open(path).convert("RGBA")
-    pixels = image.load()
-    width, height = image.size
-    for y in range(height):
-        for x in range(width):
-            r, g, b, a = pixels[x, y]
-            if abs(r - 0) <= tol and abs(g - 255) <= tol and abs(b - 0) <= tol:
-                pixels[x, y] = (0, 0, 0, 0)
-    image.save(path)
-`;
-	const result = await pi.exec("python3", ["-c", script, ...images.map((image) => image.path)]);
-	if (result.code !== 0) {
-		throw new Error(result.stderr || result.stdout || "Failed to remove chroma key from transparent fallback image.");
-	}
 }
 
 function buildImagesModel(auth: OpenAIRequestAuth, modelId: string): OpenAIImagesModel {
@@ -1094,7 +1067,7 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 			"Use image_gen when the user needs a raster image asset such as a photo, illustration, sprite, mockup, texture, or transparent-background cutout.",
 			"Use image_gen instead of SVG/HTML/CSS placeholders when the requested deliverable should be a bitmap asset.",
 			"Use image_gen with explicit image_paths for workspace files; if image_paths are omitted but the user recently attached images, image_gen can use those attachments as edit or reference inputs.",
-			"Default image backend follows the current chat provider: internal-grok -> grok-imagine-image; otherwise GPT Image (gpt-image-2). Override with model=grok-imagine-image|grok-imagine-image-quality|gpt-image-2|gpt-image-1.5.",
+			`Default image backend follows the current chat provider: internal-grok -> grok-imagine-image; otherwise ${DEFAULT_IMAGE_MODEL}, including transparent backgrounds. Override image_gen with model=gpt-image-2.5-sunburst for precise editing, or choose gpt-image-2|gpt-image-1.5|grok-imagine-image|grok-imagine-image-quality. For transparent output, use PNG or WebP.`,
 			"When calling image_gen, omit redundant defaults unless the user explicitly asked for them: do not invent n=1, background=opaque, output_format=png, or action=generate if they are not needed.",
 			"When calling image_gen, do not invent tiny thumbnail sizes such as 256x256 unless the user explicitly requested them. Omit size when unsure.",
 		],
@@ -1133,53 +1106,22 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 				mask: inputBundle.mask ? createImageContent(inputBundle.mask) : undefined,
 			};
 
-			let effectiveModelId = selectedModel.effectiveModel;
-			const effectiveNotes = [...selectedModel.notes];
-			let requestPrompt = prompt;
-			let assistantImages = await generateImages(
+			const effectiveModelId = selectedModel.effectiveModel;
+			const assistantImages = await generateImages(
 				buildImagesModel(auth, effectiveModelId),
 				{
-					input: [{ type: "text", text: requestPrompt }, ...inputBundle.images.map((image) => createImageContent(image))],
+					input: [{ type: "text", text: prompt }, ...inputBundle.images.map((image) => createImageContent(image))],
 				},
 				baseProviderOptions,
 			);
-
-			const canUseTransparentFallback =
-				params.background === "transparent" &&
-				!selectedModel.explicitModel &&
-				selectedModel.effectiveModel === TRANSPARENT_IMAGE_MODEL &&
-				auth.providerModel.api === "openai-responses" &&
-				inputBundle.images.length === 0 &&
-				!inputBundle.mask;
-			if (assistantImages.stopReason !== "stop" && canUseTransparentFallback) {
-				effectiveModelId = DEFAULT_IMAGE_MODEL;
-				requestPrompt = buildTransparentFallbackPrompt(prompt);
-				effectiveNotes.push(
-					`Transparent request fell back to ${DEFAULT_IMAGE_MODEL} with a local chroma-key removal step because ${TRANSPARENT_IMAGE_MODEL} transparent providers were unavailable on the configured relay.`,
-				);
-				assistantImages = await generateImages(
-					buildImagesModel(auth, effectiveModelId),
-					{
-						input: [{ type: "text", text: requestPrompt }],
-					},
-					{
-						...baseProviderOptions,
-						background: undefined,
-						output_format: "png",
-					},
-				);
-			}
 
 			if (assistantImages.stopReason !== "stop") {
 				throw new Error(assistantImages.errorMessage || `image_gen failed with stopReason=${assistantImages.stopReason}`);
 			}
 
-			const savedImages = await saveGeneratedImages(ctx.cwd, assistantImages, params, { ...selectedModel, effectiveModel: effectiveModelId }, outputDir, inputBundle);
+			const savedImages = await saveGeneratedImages(ctx.cwd, assistantImages, params, selectedModel, outputDir, inputBundle);
 			if (savedImages.length === 0) {
 				throw new Error("image_gen completed without any image outputs.");
-			}
-			if (canUseTransparentFallback && effectiveModelId === DEFAULT_IMAGE_MODEL) {
-				await removeChromaKeyWithPython(pi, savedImages);
 			}
 
 			const route: ImageGenDetails["route"] = inputBundle.images.length > 0 || inputBundle.mask ? "edits" : "generations";
@@ -1212,7 +1154,7 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 					output_format: effectiveOutputFormat,
 					output_compression: params.output_compression,
 					usedRecentAttachments: inputBundle.usedRecentAttachments,
-					notes: effectiveNotes,
+					notes: selectedModel.notes,
 				},
 				outputs: savedImages.map((image) => ({
 					path: image.path,
