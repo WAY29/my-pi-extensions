@@ -156,6 +156,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				let cachedLines: string[] | undefined;
 				let cachedWidth: number | undefined;
 				const answers = new Map<string, Answer>();
+				const customDrafts = new Map<string, string>();
 
 				// Shared editor for "Type something" and option notes
 				const editorTheme: EditorTheme = {
@@ -253,6 +254,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 					}
 
 					const trimmed = value.trim() || "(no response)";
+					customDrafts.set(inputQuestionId, value);
 					saveAnswer(inputQuestionId, trimmed, trimmed, true);
 					clearEditorMode();
 					advanceAfterAnswer();
@@ -262,6 +264,9 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 					// Editor modes: route text input to editor, with Codex-style note cancellation.
 					if (inputMode) {
 						if (matchesKey(data, Key.escape) || (inputMode === "note" && matchesKey(data, Key.tab))) {
+							if (inputMode === "other" && inputQuestionId) {
+								customDrafts.set(inputQuestionId, editor.getText());
+							}
 							clearEditorMode();
 							refresh();
 							return;
@@ -319,7 +324,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 						inputQuestionId = q.id;
 						if (opt.isOther) {
 							inputMode = "other";
-							editor.setText("");
+							editor.setText(customDrafts.get(q.id) ?? "");
 							refresh();
 							return;
 						}
@@ -339,7 +344,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 						if (opt.isOther) {
 							inputMode = "other";
 							inputQuestionId = q.id;
-							editor.setText("");
+							editor.setText(customDrafts.get(q.id) ?? "");
 							refresh();
 							return;
 						}
@@ -403,7 +408,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 							const opt = opts[i];
 							const selected = i === optionIndex;
 							const isOther = opt.isOther === true;
-							const isAnsweredOption = answer?.value === opt.value && !answer.wasCustom;
+							const isAnsweredOption = isOther ? answer?.wasCustom === true : answer?.value === opt.value && !answer.wasCustom;
 							const isEditingThisNote = inputMode === "note" && noteOption?.value === opt.value;
 							const prefix = selected ? theme.fg("accent", "> ") : "  ";
 							const color = selected || isAnsweredOption ? "accent" : "text";
@@ -416,6 +421,10 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 							}
 							if (opt.description) {
 								add(`     ${theme.fg("muted", opt.description)}`);
+							}
+							if (isOther && inputMode !== "other" && q) {
+								const draft = customDrafts.get(q.id);
+								if (draft) add(`     ${theme.fg("muted", draft)}`);
 							}
 							if (isAnsweredOption && answer?.note) {
 								add(`     ${theme.fg("muted", `user_note: ${answer.note}`)}`);
@@ -439,7 +448,7 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 							add(` ${line}`);
 						}
 						lines.push("");
-						const help = inputMode === "note" ? " Enter to save note • Tab/Esc discard note" : " Enter to submit • Esc to cancel";
+						const help = inputMode === "note" ? " Enter to save note • Tab/Esc discard note" : " Enter to submit • Esc to keep draft";
 						add(theme.fg("dim", help));
 					} else if (currentTab === questions.length) {
 						add(theme.fg("accent", theme.bold(" Ready to submit")));
