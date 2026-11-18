@@ -155,3 +155,18 @@ export function resolveAutoModelSelection(
 ): AutoModelSelection | undefined {
 	return resolveModelSelection(resolveAutoModelSpec, registry, currentModel, spec);
 }
+
+const TITLE_REASONING_FALLBACKS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
+export function titleReasoningLevel(
+	model: Model<Api>,
+	thinkingLevel?: ThinkingLevel,
+): Exclude<ThinkingLevel, "off"> | undefined {
+	if (!model.reasoning) return undefined;
+	const requested = thinkingLevel ?? "off";
+	if (requested !== "off") return requested;
+	// pi-ai omits "off" from SimpleStreamOptions. If the model cannot disable thinking,
+	// send the lowest mapped level; omitting the field uses the provider default (usually high).
+	if (model.thinkingLevelMap?.off !== null) return undefined;
+	return TITLE_REASONING_FALLBACKS.find((level) => model.thinkingLevelMap?.[level] !== null);
+}

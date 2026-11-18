@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey, type TitleModelRegistry } from "../title-model.js";
+import { resolveAutoModelSelection, resolveAutoModelSpec, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey, titleReasoningLevel, type TitleModelRegistry } from "../title-model.js";
 
 function model(provider: string, id: string, name = id): Model<Api> {
 	return {
@@ -105,5 +105,28 @@ assert.equal(synthesizedExplicitProviderTitle?.baseUrl, unavailableOnly.baseUrl,
 assert.equal(resolveTitleModelSpec(registry, undefined, "gpt-5.2"), openaiTitle, "without an active model, bare specs can still resolve by model id");
 assert.equal(resolveTitleModelSpec(registry, undefined, "missing-model"), undefined, "unknown title models should not resolve without an active model");
 assert.equal(titleModelKey(openaiTitle), "openai/gpt-5.2", "title model keys should be provider/model");
+
+const grokTitle = {
+	...model("internal-grok", "grok-4.5"),
+	reasoning: true,
+	thinkingLevelMap: {
+		off: null,
+		minimal: "low",
+		low: "low",
+		medium: "medium",
+		high: "high",
+		xhigh: null,
+	},
+};
+const miniTitle = {
+	...model("internal", "gpt-5.4-mini"),
+	reasoning: true,
+	thinkingLevelMap: { xhigh: "xhigh" },
+};
+assert.equal(titleReasoningLevel(openaiTitle, "off"), undefined, "non-reasoning models should not send a title reasoning level");
+assert.equal(titleReasoningLevel(miniTitle, "off"), undefined, "models that can disable thinking should omit reasoning so the provider can send none");
+assert.equal(titleReasoningLevel(grokTitle, "off"), "minimal", "models that cannot disable thinking should fall back to the lowest mapped level");
+assert.equal(titleReasoningLevel(grokTitle, undefined), "minimal", "unspecified title thinking should still avoid the provider default on always-on models");
+assert.equal(titleReasoningLevel(grokTitle, "high"), "high", "explicit title thinking levels should be preserved");
 
 console.log("✓ title model resolution checks passed");

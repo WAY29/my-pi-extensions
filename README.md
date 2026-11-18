@@ -58,6 +58,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 
 | Extension | Type | Main command / tool / hook | Purpose |
 |---|---|---|---|
+| `codex-fast.ts` | request tier commands | `/fast`, `/ultrafast` | Toggles the service tier per internal GPT model and shows the active tier in pi-glance. |
 | `AskUserQuestion.ts` | tool | `AskUserQuestion` | Adds an interactive question tool for the agent. Supports single or multi-question flows, option lists, custom text answers, and per-option notes. |
 | `agent-browser/` | real-browser bridge + skill-guided tools | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | Connects pi to the user's real Chrome session through a bundled bridge and unpacked Chrome extension. Tools stay inactive until explicitly armed so normal sessions do not pay the token cost. |
 | `codex-style-apply-patch/` | tool renderer / Codex-style patch tool | `/codex-style-apply-patch`, `apply_patch` | Adds a Codex-style `apply_patch` tool for GPT/Codex models, disables built-in `edit`/`write` while active, and renders patch previews as compact diff views using Pi's built-in `renderDiff` path. |

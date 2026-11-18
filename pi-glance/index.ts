@@ -32,9 +32,10 @@ import {
 	type PlanModeSnapshot,
 	type SandboxSnapshot,
 } from "./state.js";
-import { resolveAutoModelSelection, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey } from "./title-model.js";
+import { resolveAutoModelSelection, resolveTitleModelSelection, resolveTitleModelSpec, titleModelKey, titleReasoningLevel } from "./title-model.js";
 import {
 	fallbackTitleFromPrompt,
+	resolveGeneratedTitle,
 	resolveSessionNameUpdate,
 	sanitizeGeneratedTitle,
 	shouldGenerateTitle,
@@ -80,6 +81,8 @@ type SandboxSetResponse = {
 	reason?: string;
 };
 
+const TITLE_TIMEOUT_MS = 8000;
+const TITLE_MAX_TOKENS = 64;
 const TITLE_SYSTEM_PROMPT = [
 	"Task: convert the user's first request into a session title.",
 	"This is a labeling task, not a chat task.",
@@ -261,6 +264,16 @@ export default function piGlance(pi: ExtensionAPI): void {
 
 	function applySandboxState(data: unknown): void {
 		if (state && setSandboxSnapshot(state, sandboxSnapshotFromResponse(data))) renderNow();
+	}
+
+	function requestFastState(): void {
+		if (!state) return;
+		state.model.fast = false;
+		state.model.serviceTier = undefined;
+		if (state.model.provider && state.model.id) {
+			pi.events.emit("internal-fast:request-state", { modelKey: `${state.model.provider}/${state.model.id}` });
+		}
+		renderNow();
 	}
 
 	async function configWithLiveSecurityState(ctx: ExtensionContext, base: GlanceConfig): Promise<GlanceConfig> {
@@ -507,7 +520,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 			const abort = () => controller.abort();
 			if (signal.aborted) abort();
 			signal.addEventListener("abort", abort, { once: true });
-			timeout = setTimeout(abort, 8000);
+			timeout = setTimeout(abort, TITLE_TIMEOUT_MS);
 
 			const trimmedPrompt = prompt.slice(0, 4000).trim();
 			const titleRequest = [
@@ -526,6 +539,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 				content: [{ type: "text", text: titleRequest }],
 				timestamp: Date.now(),
 			};
+			const reasoning = titleReasoningLevel(model, thinkingLevel);
 
 			const response = await completeSimple(
 				model,
@@ -537,8 +551,8 @@ export default function piGlance(pi: ExtensionAPI): void {
 					apiKey: auth.apiKey,
 					headers: auth.headers,
 					signal: controller.signal,
-					maxTokens: 64,
-					timeoutMs: 8000,
+					maxTokens: TITLE_MAX_TOKENS,
+					timeoutMs: TITLE_TIMEOUT_MS,
 					onPayload: (payload) => {
 						if (!payload || typeof payload !== "object") {
 							return undefined;
@@ -552,7 +566,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 							instructions: TITLE_SYSTEM_PROMPT,
 						};
 					},
-					...(model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}),
+					...(reasoning ? { reasoning } : {}),
 				},
 			);
 
@@ -560,11 +574,13 @@ export default function piGlance(pi: ExtensionAPI): void {
 				.filter((part): part is { type: "text"; text: string } => part.type === "text")
 				.map((part) => part.text)
 				.join("\n");
+			const succeeded = response.stopReason !== "aborted" && response.stopReason !== "error";
+			const resolved = resolveGeneratedTitle(text, fallback, succeeded);
 
-			if (generationId !== titleGenerationId || signal.aborted) return;
-			persistTitle(ctx, sanitizeGeneratedTitle(text, fallback), "llm", prompt, model);
+			if (generationId !== titleGenerationId) return;
+			persistTitle(ctx, resolved.text, resolved.source, prompt, model);
 		} catch {
-			if (generationId !== titleGenerationId || signal.aborted) return;
+			if (generationId !== titleGenerationId) return;
 			persistTitle(ctx, fallback, "fallback", prompt, model);
 		} finally {
 			if (timeout) clearTimeout(timeout);
@@ -728,6 +744,17 @@ export default function piGlance(pi: ExtensionAPI): void {
 	pi.events.on("plan-mode:state", applyPlanModeState);
 	pi.events.on("pi-goal:state", applyGoalState);
 	pi.events.on("pi-sandbox:state", applySandboxState);
+	pi.events.on("internal-fast:state", (data: unknown) => {
+		if (!state || !data || typeof data !== "object") return;
+		const update = data as { modelKey?: string; enabled?: boolean; tier?: string };
+		if (update.modelKey !== `${state.model.provider}/${state.model.id}` || typeof update.enabled !== "boolean") return;
+		const tier = update.enabled ? (update.tier === "ultrafast" ? "ultrafast" : "fast") : undefined;
+		if (state.model.fast === update.enabled && state.model.serviceTier === tier) return;
+		state.model.fast = update.enabled;
+		state.model.serviceTier = tier;
+		state.version++;
+		renderNow();
+	});
 
 	pi.registerCommand("glance", {
 		description: "Open pi-glance configuration pane",
@@ -771,6 +798,7 @@ export default function piGlance(pi: ExtensionAPI): void {
 		const autoModelNotice = await applyWorkspaceAutoModel(ctx);
 		addStartupInfo(pi.events.emit.bind(pi.events), autoModelNotice);
 		refreshModel(state, ctx, getConfig(), pi.getThinkingLevel());
+		requestFastState();
 		const goalState = lastResponse(await emitWithResponses<unknown>("pi-goal:request-state", { from: "pi-glance" }));
 		if (goalState !== undefined) applyGoalState(goalState);
 		await restoreTitle(ctx, config);
@@ -790,13 +818,14 @@ export default function piGlance(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		await ensureConfig();
 		ensureState(ctx);
-		maybeStartTitleGeneration(event.prompt, ctx);
+		if (typeof event.prompt === "string") maybeStartTitleGeneration(event.prompt, ctx);
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
 		await ensureConfig();
 		ensureState(ctx);
 		refreshReliableSnapshot(ctx, { model: true, git: true });
+		requestFastState();
 		await refreshSandboxState(ctx);
 		renderNow();
 	});

@@ -169,13 +169,14 @@ const SEGMENTS: SegmentDefinition[] = [
 			}
 			const thinking = ctx.state.model.thinking || "off";
 			const visibleThinking = shouldShowThinking(ctx, thinking) ? thinking : "";
+			const tier = ctx.state.model.serviceTier || (ctx.state.model.fast ? "fast" : undefined);
+			const label = `${model}${visibleThinking ? ` ${visibleThinking}` : ""}${tier ? ` (${tier})` : ""}`;
 			return {
-				primary: model,
-				secondary: visibleThinking || undefined,
+				primary: label,
 				display: {
-					full: visibleThinking ? `${model} ${visibleThinking}` : model,
-					compact: visibleThinking ? `${model} ${visibleThinking}` : model,
-					minimal: visibleThinking ? `${model} ${visibleThinking}` : model,
+					full: label,
+					compact: label,
+					minimal: label,
 				},
 			};
 		},

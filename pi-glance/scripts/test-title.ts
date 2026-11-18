@@ -5,6 +5,7 @@ import { stripControls } from "../format.js";
 import { renderInputSurface } from "../renderer.js";
 import {
 	fallbackTitleFromPrompt,
+	resolveGeneratedTitle,
 	resolveSessionNameUpdate,
 	sanitizeGeneratedTitle,
 	shouldGenerateTitle,
@@ -31,6 +32,21 @@ assert.equal(sanitizeGeneratedTitle("\n# Update glance title rendering\n\nextra"
 assert.equal(sanitizeGeneratedTitle("标题：修改 glance 标题显示", "fallback"), "修改 glance 标题显示", "generated title should drop common title prefixes");
 assert.equal(sanitizeGeneratedTitle("\x1b[31mColored generated title\x1b[0m", "fallback"), "Colored generated title", "title text should drop ANSI controls");
 assert.equal(sanitizeGeneratedTitle("升级 llama3.1 标题模型", "fallback"), "升级 llama3.1 标题模型", "title validation should allow dotted model ids");
+assert.deepEqual(
+	resolveGeneratedTitle("用户数据库连接信息", "帮我看看现在连接用户数据库的IP端口和数据库名是多少", true),
+	{ text: "用户数据库连接信息", source: "llm" },
+	"successful model text should be stored as an llm title",
+);
+assert.deepEqual(
+	resolveGeneratedTitle("", "帮我看看现在连接用户数据库的IP端口和数据库名是多少", true),
+	{ text: "帮我看看现在连接用户数据库的IP端口和数据库名是多少", source: "fallback" },
+	"empty model text should fall back instead of being stored as llm",
+);
+assert.deepEqual(
+	resolveGeneratedTitle("用户数据库连接信息", "帮我看看现在连接用户数据库的IP端口和数据库名是多少", false),
+	{ text: "帮我看看现在连接用户数据库的IP端口和数据库名是多少", source: "fallback" },
+	"aborted or error completions should not keep partial model text as llm",
+);
 
 const fallback = fallbackTitleFromPrompt("请帮我修改 glance 扩展，第一次用户提问之后生成一个很长很长的标题用于测试截断");
 assert.equal(TITLE_MAX_WIDTH, 64, "title budget should allow longer generated titles");

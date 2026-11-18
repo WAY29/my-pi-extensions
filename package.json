@@ -26,6 +26,7 @@
       "./better-grep/index.ts",
       "./builtin-tools.ts",
       "./code-block-enhancer.ts",
+      "./codex-fast.ts",
       "./codex-style-apply-patch/index.ts",
       "./effort.ts",
       "./grep-tool-coordinator.ts",

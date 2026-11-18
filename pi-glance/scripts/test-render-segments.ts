@@ -131,6 +131,10 @@ assert.equal(
 );
 
 assert.equal(line("model"), "ai GPT 5.5", "model auto hides thinking when off");
+assert.equal(line("model", { model: { id: "gpt-5.5", provider: "internal", displayName: "GPT 5.5", thinking: "high", fast: true } }), "ai GPT 5.5 high (fast)", "model shows fast beside thinking");
+assert.equal(line("model", { model: { id: "gpt-5.5", provider: "internal", displayName: "GPT 5.5", thinking: "off", fast: true } }), "ai GPT 5.5 (fast)", "model shows fast without thinking");
+assert.equal(line("model", { model: { id: "gpt-6.2-sol", provider: "internal", displayName: "GPT-6.2 Sol", thinking: "high", fast: true, serviceTier: "ultrafast" } }), "ai GPT-6.2 Sol high (ultrafast)", "model shows ultrafast beside thinking");
+assert.equal(line("model", { model: { id: "gpt-6.2-sol", provider: "internal", displayName: "GPT-6.2 Sol", thinking: "off", fast: true, serviceTier: "ultrafast" } }), "ai GPT-6.2 Sol (ultrafast)", "model shows ultrafast without thinking");
 assert.equal(
 	line("model", { model: { id: "gpt-5.5", provider: "openai", displayName: "GPT 5.5", thinking: "high" } }),
 	"ai GPT 5.5 high",

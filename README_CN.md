@@ -58,6 +58,7 @@ pi -e ~/.pi/agent/extensions/<extension-file-or-directory>
 
 | 扩展 | 类型 | 主要命令 / 工具 / 钩子 | 用途 |
 |---|---|---|---|
+| `codex-fast.ts` | 请求档位命令 | `/fast`、`/ultrafast` | 按 internal GPT 模型切换服务档位，并在 pi-glance 中显示当前加速档位。 |
 | `AskUserQuestion.ts` | 工具 | `AskUserQuestion` | 为 agent 添加交互式提问工具。支持单问题或多问题流程、选项列表、自定义文本回答和每个选项的备注。 |
 | `agent-browser/` | 真实浏览器桥接 + skill 引导工具 | `/browser-install`, `/browser-doctor`, `/browser-on`, `/browser-off`, `browser_*` | 通过内置 bridge 和已解压 Chrome 扩展，把 pi 连接到用户真实的 Chrome 会话。工具默认不激活，只有显式 arm 后才暴露，以减少普通会话的 token 开销。 |
 | `codex-style-apply-patch/` | 工具渲染 / Codex 风格 patch 工具 | `/codex-style-apply-patch`, `apply_patch` | 为 GPT/Codex 模型增加一个 Codex 风格的 `apply_patch` 工具。启用时会关闭内置 `edit`/`write`，并使用 Pi 内置 `renderDiff` 路径把 patch 预览渲染为紧凑 diff 视图。 |

@@ -150,6 +150,8 @@ export interface GlanceState {
 		provider?: string;
 		displayName?: string;
 		thinking: string;
+		fast?: boolean;
+		serviceTier?: "fast" | "ultrafast";
 	};
 	plan: {
 		enabled: boolean;

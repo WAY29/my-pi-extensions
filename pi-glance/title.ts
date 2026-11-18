@@ -34,10 +34,27 @@ function cleanTitleText(text: string): string {
 		.trim();
 }
 
-export function sanitizeGeneratedTitle(text: string, fallback: string): string {
-	const cleaned = cleanTitleText(text) || cleanTitleText(fallback) || "New chat";
+function generatedTitleText(text: string): string | undefined {
+	const cleaned = cleanTitleText(text);
+	if (!cleaned) return undefined;
 	if (visibleWidth(cleaned) <= TITLE_MAX_WIDTH) return cleaned;
-	return stripAnsiControls(truncateToWidth(cleaned, TITLE_MAX_WIDTH, "…")).trim();
+	return stripAnsiControls(truncateToWidth(cleaned, TITLE_MAX_WIDTH, "…")).trim() || undefined;
+}
+
+export function sanitizeGeneratedTitle(text: string, fallback: string): string {
+	return generatedTitleText(text) || generatedTitleText(fallback) || "New chat";
+}
+
+export function resolveGeneratedTitle(
+	rawText: string,
+	fallback: string,
+	succeeded: boolean,
+): { text: string; source: "llm" | "fallback" } {
+	if (succeeded) {
+		const generated = generatedTitleText(rawText);
+		if (generated) return { text: generated, source: "llm" };
+	}
+	return { text: sanitizeGeneratedTitle("", fallback), source: "fallback" };
 }
 
 export function fallbackTitleFromPrompt(prompt: string): string {
