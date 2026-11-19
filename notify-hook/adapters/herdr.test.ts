@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import herdrNotifyHookAdapter, { createHerdrNotifyHookAdapter } from "./herdr";
-import { NOTIFY_HOOK_LIFECYCLE_EVENT } from "./types";
+import { NOTIFY_HOOK_LIFECYCLE_EVENT, type NotifyHookContext } from "./types";
 
-const ENV_KEYS = ["HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"] as const;
+const ENV_KEYS = ["HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HC_TERMINAL_ID", "PI_PROGRAM_STATUS"] as const;
 const ORIGINAL_ENV = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])) as Record<
 	(typeof ENV_KEYS)[number],
 	string | undefined
@@ -43,10 +43,11 @@ describe("createHerdrNotifyHookAdapter", () => {
 	beforeEach(restoreEnv);
 	afterEach(restoreEnv);
 
-	test("returns null when herdr env is missing", () => {
+	test("returns null outside a Herdr terminal", () => {
 		delete process.env.HERDR_ENV;
 		delete process.env.HERDR_SOCKET_PATH;
 		delete process.env.HERDR_PANE_ID;
+		delete process.env.HC_TERMINAL_ID;
 		expect(createHerdrNotifyHookAdapter(makePi().pi)).toBeNull();
 	});
 
@@ -78,6 +79,37 @@ describe("createHerdrNotifyHookAdapter", () => {
 			{ name: "herdr:blocked", data: { active: true, label: "AskUserQuestion" } },
 			{ name: "herdr:blocked", data: { active: false } },
 		]);
+	});
+
+	test("reports blocked and resumes working over OSC 7501 in herdr-app", async () => {
+		delete process.env.HERDR_ENV;
+		delete process.env.PI_PROGRAM_STATUS;
+		process.env.HC_TERMINAL_ID = "t3";
+		const isTTY = process.stdout.isTTY;
+		process.stdout.isTTY = true;
+		const write = spyOn(process.stdout, "write").mockReturnValue(true);
+		try {
+			const { pi, emitted } = makePi();
+			const adapter = createHerdrNotifyHookAdapter(pi)!;
+			const ctx = {
+				isIdle: () => false,
+				sessionManager: { getSessionName: () => "Probe" },
+			} as NotifyHookContext;
+			await adapter.fire({
+				eventName: "request_user_input",
+				source: "attention_start",
+				details: { source: "AskUserQuestion", kind: "input" },
+			}, ctx);
+			await adapter.fire({ eventName: "Start", source: "attention_end" }, ctx);
+			expect(write.mock.calls.map(([sequence]) => sequence)).toEqual([
+				"\x1b]7501;state=blocked:app=pi:kind=question:msg=QXNrVXNlclF1ZXN0aW9u\x1b\\",
+				"\x1b]7501;state=working:app=pi:msg=UHJvYmU=\x1b\\",
+			]);
+			expect(emitted).toEqual([]);
+		} finally {
+			write.mockRestore();
+			process.stdout.isTTY = isTTY;
+		}
 	});
 
 	test("subscribes to notify-hook lifecycle events through pi event bus", async () => {

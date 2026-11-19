@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { formatProgramStatus } from "@earendil-works/pi-tui";
 
 import {
 	NOTIFY_HOOK_LIFECYCLE_EVENT,
@@ -19,26 +20,42 @@ function labelFor(signal: NotifyHookLifecycleSignal): string {
 	return "request_user_input";
 }
 
-/**
- * Bridge notify-hook attention waits → herdr:blocked.
- * working/idle stay owned by herdr-agent-state.ts.
- */
 export function createHerdrNotifyHookAdapter(pi: ExtensionAPI): NotifyHookAdapter | null {
-	if (!herdrEnabled()) return null;
+	const tui = herdrEnabled();
+	const core = process.env.HC_TERMINAL_ID && process.stdout.isTTY && process.env.PI_PROGRAM_STATUS !== "0";
+	if (!tui && !core) return null;
 
 	return {
 		name: "herdr",
-		async fire(signal: NotifyHookLifecycleSignal): Promise<void> {
+		async fire(signal, ctx): Promise<void> {
 			if (signal.eventName === "request_user_input") {
-				pi.events.emit("herdr:blocked", {
-					active: true,
-					label: labelFor(signal),
-				});
+				const label = labelFor(signal);
+				if (tui) {
+					pi.events.emit("herdr:blocked", { active: true, label });
+				} else {
+					// Pi reports built-in dialogs automatically. Custom dialogs need an explicit status.
+					const kind = signal.details?.kind;
+					process.stdout.write(formatProgramStatus({
+						app: "pi",
+						state: "blocked",
+						kind: kind === "auth" || kind === "permission" ? kind : "question",
+						message: label,
+					}));
+				}
 				return;
 			}
 
 			if (signal.eventName === "Start" && signal.source === "attention_end") {
-				pi.events.emit("herdr:blocked", { active: false });
+				if (tui) {
+					pi.events.emit("herdr:blocked", { active: false });
+				} else {
+					const state = ctx?.isIdle?.() === false ? "working" : "idle";
+					process.stdout.write(formatProgramStatus({
+						app: "pi",
+						state,
+						message: state === "working" ? ctx?.sessionManager.getSessionName() : undefined,
+					}));
+				}
 			}
 		},
 	};

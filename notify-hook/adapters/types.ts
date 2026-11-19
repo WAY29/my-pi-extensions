@@ -32,7 +32,7 @@ export interface NotifyHookLifecycleSignal {
 	details?: Record<string, unknown>;
 }
 
-export type NotifyHookContext = Pick<ExtensionContext, "sessionManager">;
+export type NotifyHookContext = Pick<ExtensionContext, "sessionManager" | "isIdle">;
 
 export interface NotifyHookLifecycleDispatch {
 	signal: NotifyHookLifecycleSignal;

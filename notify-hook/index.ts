@@ -19,7 +19,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
 	NOTIFY_HOOK_LIFECYCLE_EVENT,
 	type NotifyHookLifecycleDispatch,
-	type NotifyHookContext,
 	type NotifyHookLifecycleEvent,
 	type NotifyHookLifecycleSignal,
 	type NotifyHookLifecycleSource,
@@ -92,7 +91,7 @@ export default function notifyHook(pi: ExtensionAPI) {
 			clearPendingAgentEndCheck();
 		}
 
-		const effectiveCtx = (ctx ?? lastCtx) as NotifyHookContext | undefined;
+		const effectiveCtx = ctx ?? lastCtx;
 		const signal: NotifyHookLifecycleSignal = { eventName, source, details };
 
 		// Why: local attention cue even when no external adapter is active.
