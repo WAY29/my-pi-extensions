@@ -72,8 +72,9 @@ export interface SidecarInstance {
 	/** resolved runtime mode for this instance */
 	mode: SidecarMode;
 	agentName: string;
+	/** TUI agent name or App terminal address. */
+	agentTarget: string;
 	tabId: string;
-	paneId: string;
 	/** child pi session jsonl path (--session) */
 	sessionFile: string;
 	status: SidecarInstanceStatus;

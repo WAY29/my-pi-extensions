@@ -10,37 +10,45 @@ export class HerdrError extends Error {
 	}
 }
 
+export function isHerdrApp(): boolean {
+	return process.env.HERDR_ENV !== "1" && Boolean(process.env.HC_TERMINAL_ID);
+}
+
 export function assertHerdrEnv(): void {
+	if (isHerdrApp()) return;
 	if (process.env.HERDR_ENV !== "1") {
-		throw new HerdrError("herdr mode requires HERDR_ENV=1 (run inside a Herdr-managed pane)");
+		throw new HerdrError("herdr mode requires a Herdr TUI pane or Herdr App terminal");
 	}
-	if (!process.env.HERDR_WORKSPACE_ID) {
-		throw new HerdrError("HERDR_WORKSPACE_ID is missing");
-	}
+	currentWorkspaceId();
 	if (!process.env.HERDR_SOCKET_PATH) {
 		throw new HerdrError("HERDR_SOCKET_PATH is missing");
 	}
 }
 
 export function currentWorkspaceId(): string {
-	assertHerdrEnv();
-	return process.env.HERDR_WORKSPACE_ID!;
+	const workspace = process.env.HERDR_WORKSPACE_ID;
+	if (!workspace) throw new HerdrError("HERDR_WORKSPACE_ID is missing");
+	return workspace;
 }
 
-async function herdr(args: string[], timeoutMs = 120_000): Promise<{ stdout: string; stderr: string }> {
+async function runCommand(command: string, args: string[], timeoutMs = 120_000, env = process.env): Promise<string> {
 	try {
-		const { stdout, stderr } = await execFileAsync("herdr", args, {
+		const { stdout } = await execFileAsync(command, args, {
 			timeout: timeoutMs,
 			maxBuffer: 8 * 1024 * 1024,
-			env: process.env,
+			env,
 		});
-		return { stdout: stdout ?? "", stderr: stderr ?? "" };
+		return stdout;
 	} catch (err: any) {
 		const stderr = String(err?.stderr ?? "");
 		const stdout = String(err?.stdout ?? "");
-		const msg = stderr || stdout || err?.message || "herdr command failed";
-		throw new HerdrError(`herdr ${args.join(" ")} failed: ${msg}`, stderr || stdout);
+		const msg = stderr || stdout || err?.message || "command failed";
+		throw new HerdrError(`${command} ${args[0]} failed: ${msg}`, stderr || stdout);
 	}
+}
+
+function herdr(args: string[], timeoutMs?: number): Promise<string> {
+	return runCommand("herdr", args, timeoutMs);
 }
 
 function parseJson(stdout: string): any {
@@ -52,6 +60,50 @@ function parseJson(stdout: string): any {
 		// some commands may return raw text
 		return { raw: text };
 	}
+}
+
+async function appCommand(command: string, args: object): Promise<any> {
+	return parseJson(await runCommand("herdr-app", ["do", command, JSON.stringify(args)], 30_000));
+}
+
+function appAgentLabel(name: string): string {
+	return `pi.sidecar=${process.env.HC_TERMINAL_ID}:${name}`;
+}
+
+function assertAppWait(target: string, action: string, result: { reason?: string; status?: string } | undefined): void {
+	const { reason, status } = result ?? {};
+	if (reason === "status" && (status === "idle" || status === "done")) return;
+	throw new HerdrError(`Herdr App ${action} for ${target} failed: ${reason ?? "missing wait result"}${status ? ` (${status})` : ""}`);
+}
+
+export async function appTabCreate(opts: {
+	cwd: string;
+	label: string;
+	focus: boolean;
+	agentArgs: string[];
+}): Promise<{ tabId: string; paneId: string }> {
+	const parent = parseJson(await runCommand("hc", ["get", "--json", process.env.HC_TERMINAL_ID!], 15_000));
+	const space = parent?.labels?.["herdr.space"];
+	if (typeof space !== "string" || !space) {
+		throw new HerdrError("the current terminal is not in a Herdr App space");
+	}
+	const created = await appCommand("tab.new", {
+		space,
+		name: opts.label,
+		folder: opts.cwd,
+		focus: opts.focus,
+		argv: ["env", "PI_PROGRAM_STATUS=1", "pi", ...opts.agentArgs],
+	});
+	if (typeof created?.tab !== "string" || !created.tab || typeof created?.terminal !== "string" || !created.terminal) {
+		throw new HerdrError("Herdr App tab.new returned no tab or terminal id");
+	}
+	return { tabId: created.tab, paneId: created.terminal };
+}
+
+export async function waitForAppAgent(target: string, name: string): Promise<void> {
+	await runCommand("hc", ["label", target, appAgentLabel(name)], 15_000);
+	const result = parseJson(await runCommand("hc", ["wait", "--json", "--timeout", "60", target], 65_000));
+	assertAppWait(target, "startup", result);
 }
 
 export async function tabCreate(opts: {
@@ -71,7 +123,7 @@ export async function tabCreate(opts: {
 		opts.label,
 		opts.focus ? "--focus" : "--no-focus",
 	];
-	const { stdout } = await herdr(args);
+	const stdout = await herdr(args);
 	const json = parseJson(stdout);
 	const tabId = json?.result?.tab?.tab_id;
 	const paneId = json?.result?.root_pane?.pane_id;
@@ -82,11 +134,15 @@ export async function tabCreate(opts: {
 }
 
 export async function tabClose(tabId: string): Promise<void> {
+	if (isHerdrApp()) {
+		await appCommand("tab.close", { id: tabId, confirmed: true });
+		return;
+	}
 	await herdr(["tab", "close", tabId], 30_000);
 }
 
 export async function paneProcessInfo(paneId: string): Promise<any> {
-	const { stdout } = await herdr(["pane", "process-info", "--pane", paneId], 15_000);
+	const stdout = await herdr(["pane", "process-info", "--pane", paneId], 15_000);
 	return parseJson(stdout);
 }
 
@@ -138,7 +194,7 @@ export type HerdrAgentSummary = {
 };
 
 export async function agentList(): Promise<HerdrAgentSummary[]> {
-	const { stdout } = await herdr(["agent", "list"], 15_000);
+	const stdout = await herdr(["agent", "list"], 15_000);
 	const json = parseJson(stdout);
 	const agents = json?.result?.agents ?? [];
 	if (!Array.isArray(agents)) return [];
@@ -152,6 +208,14 @@ export async function agentList(): Promise<HerdrAgentSummary[]> {
 
 /** If name is already live, close its tab (orphan after /reload). */
 export async function reclaimAgentName(name: string): Promise<boolean> {
+	if (isHerdrApp()) {
+		const json = parseJson(await runCommand("hc", ["ls", "--json", "--label", appAgentLabel(name)], 15_000));
+		const terminal = json?.terminals?.find((t: { address: string }) => !t.address.includes("/"));
+		if (!terminal) return false;
+		await runCommand("hc", ["kill", terminal.address], 30_000);
+		await runCommand("hc", ["rm", terminal.address], 15_000);
+		return true;
+	}
 	const live = (await agentList()).find((a) => a.name === name);
 	if (!live) return false;
 	if (live.tabId) {
@@ -217,6 +281,18 @@ export async function agentPrompt(opts: {
 	wait?: boolean;
 	timeoutMs?: number;
 }): Promise<void> {
+	const timeoutMs = opts.timeoutMs ?? 600_000;
+	if (isHerdrApp()) {
+		const args = ["send", "--json"];
+		if (opts.wait) args.push("--wait", "--timeout", String(Math.ceil(timeoutMs / 1000)));
+		// hc wraps sends from another terminal in a message envelope.
+		const stdout = await runCommand("hc", [...args, "--", opts.target, opts.text], timeoutMs + 10_000, {
+			...process.env,
+			HC_TERMINAL_ID: undefined,
+		});
+		if (opts.wait) assertAppWait(opts.target, "prompt", parseJson(stdout)?.wait);
+		return;
+	}
 	const args = ["agent", "prompt", opts.target, opts.text];
 	if (opts.wait) {
 		args.push("--wait");
@@ -224,15 +300,17 @@ export async function agentPrompt(opts: {
 			args.push("--timeout", String(opts.timeoutMs));
 		}
 	}
-	const timeout = (opts.timeoutMs ?? 600_000) + 10_000;
-	await herdr(args, timeout);
+	await herdr(args, timeoutMs + 10_000);
 }
 
 export async function agentRead(opts: {
 	target: string;
 	lines: number;
 }): Promise<string> {
-	const { stdout } = await herdr(
+	if (isHerdrApp()) {
+		return runCommand("hc", ["read", "--lines", String(opts.lines), opts.target], 30_000);
+	}
+	const stdout = await herdr(
 		[
 			"agent",
 			"read",
@@ -255,6 +333,6 @@ export async function agentRead(opts: {
 }
 
 export async function agentGet(target: string): Promise<any> {
-	const { stdout } = await herdr(["agent", "get", target], 15_000);
+	const stdout = await herdr(["agent", "get", target], 15_000);
 	return parseJson(stdout);
 }

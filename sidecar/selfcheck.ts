@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
 	_selfCheck,
 	buildRoundPrompt,
@@ -7,8 +8,28 @@ import {
 	resolveSkillPaths,
 	slugAgentName,
 } from "./config.js";
+import { assertHerdrEnv, currentWorkspaceId, isHerdrApp } from "./herdr.js";
 
 _selfCheck();
+
+const originalEnv = process.env;
+try {
+	process.env = {};
+	assert.throws(assertHerdrEnv, /Herdr TUI pane or Herdr App terminal/);
+	process.env.HC_TERMINAL_ID = "t1";
+	assertHerdrEnv();
+	assert.equal(isHerdrApp(), true);
+	Object.assign(process.env, {
+		HERDR_ENV: "1",
+		HERDR_WORKSPACE_ID: "w1",
+		HERDR_SOCKET_PATH: "/tmp/herdr.sock",
+	});
+	assertHerdrEnv();
+	assert.equal(isHerdrApp(), false);
+	assert.equal(currentWorkspaceId(), "w1");
+} finally {
+	process.env = originalEnv;
+}
 
 const prompt = buildRoundPrompt("Do review", {
 	name: "r",

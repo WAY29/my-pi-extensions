@@ -21,12 +21,15 @@ import {
 	agentPrompt,
 	agentRead,
 	agentStart,
+	appTabCreate,
 	assertHerdrEnv,
 	currentWorkspaceId,
 	HerdrError,
+	isHerdrApp,
 	reclaimAgentName,
 	tabClose,
 	tabCreate,
+	waitForAppAgent,
 	waitForAvailableShell,
 } from "./herdr.js";
 import {
@@ -246,11 +249,12 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		def: SidecarDefinition,
 		ctx: ExtensionContext | ExtensionCommandContext,
 		sessionFile: string,
+		useTui: boolean,
 	): string[] {
 		const args: string[] = ["--no-extensions", "--no-skills", "--session", sessionFile];
 		const extPaths = resolveExtensionPaths(def.agent?.extensions);
 		// herdr prompt --wait needs pane.report_agent; --no-extensions would drop it.
-		const herdrState = herdrAgentStatePath();
+		const herdrState = useTui ? herdrAgentStatePath() : undefined;
 		if (herdrState && !extPaths.includes(herdrState)) extPaths.unshift(herdrState);
 		for (const p of extPaths) {
 			args.push("-e", p);
@@ -269,11 +273,11 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 	}
 
 	async function readSidecarOutput(inst: SidecarInstance): Promise<string> {
-		// Prefer child session jsonl (clean assistant text). Fall back to herdr TUI scrape.
+		// Prefer clean assistant text from the child session over terminal output.
 		const fromSession = readLastAssistantFromSession(inst.sessionFile);
 		if (fromSession.trim()) return fromSession.trim();
 		const cfg = loadGlobalConfig();
-		return (await agentRead({ target: inst.agentName, lines: cfg.read_lines })).trim();
+		return (await agentRead({ target: inst.agentTarget, lines: cfg.read_lines })).trim();
 	}
 
 	/**
@@ -395,10 +399,10 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			output = await runInnerRound(inst, promptText, cfg.prompt_timeout_ms);
 		} else {
 			const before = readLastAssistantFromSession(inst.sessionFile);
-			// Poll TUI while --wait blocks, so /sidecar status can stream.
+			// Refresh the transcript while the backend waits for the round.
 			let promptDone = false;
 			const waitP = agentPrompt({
-				target: inst.agentName,
+				target: inst.agentTarget,
 				text: promptText,
 				wait: true,
 				timeoutMs: cfg.prompt_timeout_ms,
@@ -465,24 +469,31 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 		}
 
 		assertHerdrEnv();
-		const agentName = inst.agentName;
-		const label = def.tab?.label?.trim() || `sidecar:${def.name}`;
-		await reclaimAgentName(agentName);
-		const created = await tabCreate({
-			workspace: currentWorkspaceId(),
+		const app = isHerdrApp();
+		const tab = {
 			cwd: ctx.cwd,
-			label,
+			label: def.tab?.label?.trim() || `sidecar:${def.name}`,
 			focus: def.tab?.focus === true,
-		});
+		};
+		const kind = def.agent?.kind || "pi";
+		if (app && kind !== "pi") throw new HerdrError("Herdr App sidecars require agent kind 'pi'");
+		const agentArgs = buildPiArgs(def, ctx, inst.sessionFile, !app);
+		await reclaimAgentName(inst.agentName);
+		const created = app
+			? await appTabCreate({ ...tab, agentArgs })
+			: await tabCreate({ ...tab, workspace: currentWorkspaceId() });
 		inst.tabId = created.tabId;
-		inst.paneId = created.paneId;
-		await waitForAvailableShell(created.paneId);
-		await agentStart({
-			name: agentName,
-			kind: def.agent?.kind || "pi",
-			paneId: created.paneId,
-			agentArgs: buildPiArgs(def, ctx, inst.sessionFile),
-		});
+		if (inst.abort.signal.aborted) {
+			await rollbackTab(inst.tabId);
+			throw new HerdrError("sidecar aborted");
+		}
+		if (app) {
+			inst.agentTarget = created.paneId;
+			await waitForAppAgent(inst.agentTarget, inst.agentName);
+		} else {
+			await waitForAvailableShell(created.paneId);
+			await agentStart({ name: inst.agentName, kind, paneId: created.paneId, agentArgs });
+		}
 		inst.status = "running";
 		appendStatus(inst, `[running tab=${inst.tabId}]`);
 		armTools();
@@ -511,8 +522,8 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 			def,
 			mode,
 			agentName,
+			agentTarget: agentName,
 			tabId: "",
-			paneId: "",
 			sessionFile,
 			status: "starting",
 			closeOnStop,
