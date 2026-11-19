@@ -6,11 +6,8 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ensureBashToolRegistered, registerBashToolPlugin, releaseBashToolOwner } from "./bash-tool-coordinator";
 import { withNotifyHookAttention } from "./notify-hook/attention";
-
-type MatchRange = { start: number; end: number };
-
-const RED = "\x1b[31m";
 
 type PermissionGateStateRequest = {
 	respond?: (response: PermissionGateStateResponse | Promise<PermissionGateStateResponse>) => void;
@@ -32,64 +29,12 @@ type PermissionGateSetResponse = {
 	reason?: string;
 };
 
-function getDangerousMatches(command: string, patterns: RegExp[]): MatchRange[] {
-	const ranges: MatchRange[] = [];
-
-	for (const pattern of patterns) {
-		const globalPattern = new RegExp(pattern.source, `${pattern.flags.replace(/[gy]/g, "")}g`);
-		let match: RegExpExecArray | null;
-
-		while ((match = globalPattern.exec(command)) !== null) {
-			if (match[0].length === 0) {
-				globalPattern.lastIndex++;
-				continue;
-			}
-
-			ranges.push({ start: match.index, end: match.index + match[0].length });
-		}
-	}
-
-	return mergeRanges(ranges);
-}
-
-function mergeRanges(ranges: MatchRange[]): MatchRange[] {
-	const sorted = [...ranges].sort((a, b) => a.start - b.start || b.end - a.end);
-	const merged: MatchRange[] = [];
-
-	for (const range of sorted) {
-		const previous = merged[merged.length - 1];
-		if (previous && range.start <= previous.end) {
-			previous.end = Math.max(previous.end, range.end);
-			continue;
-		}
-
-		merged.push({ ...range });
-	}
-
-	return merged;
-}
-
-function highlightRanges(command: string, ranges: MatchRange[], restoreColor: string): string {
-	let highlighted = "";
-	let lastIndex = 0;
-
-	for (const { start, end } of ranges) {
-		highlighted += command.slice(lastIndex, start);
-		highlighted += `${RED}${command.slice(start, end)}${restoreColor}`;
-		lastIndex = end;
-	}
-
-	return highlighted + command.slice(lastIndex);
-}
-
 async function selectWithStableScroll(
 	ctx: ExtensionContext,
 	title: string,
 	options: string[],
 ): Promise<string | undefined> {
-	// The working spinner redraws every ~80ms while a tool call is pending. For long
-	// select titles, those redraws fight the terminal's normal scrollback wheel and
-	// snap the viewport around. Pause it while the confirmation prompt is open.
+	// Pause spinner redraws so the user can scroll the command preview.
 	ctx.ui.setWorkingVisible(false);
 	try {
 		return await ctx.ui.select(title, options);
@@ -99,8 +44,23 @@ async function selectWithStableScroll(
 }
 
 export default function (pi: ExtensionAPI) {
-	const dangerousPatterns = [/(?<!-)\brm\b/i, /\b(chmod|chown)\b.*777/i];
+	const dangerousPattern = /(?<!-)\brm\b|\b(?:chmod|chown)\b.*777/gi;
 	let enabled = true;
+
+	registerBashToolPlugin(pi, {
+		id: "permission-gate",
+		wrapRenderCall: (next) => (args, theme, context) => {
+			if (!enabled || typeof args.command !== "string") return next(args, theme, context);
+			const command = args.command.replace(dangerousPattern, (match) =>
+				`${theme.fg("error", match)}${theme.getFgAnsi("toolTitle")}`,
+			);
+			return next({ ...args, command }, theme, context);
+		},
+	});
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode === "tui") ensureBashToolRegistered(pi, ctx.cwd);
+	});
+	pi.on("session_shutdown", () => releaseBashToolOwner(pi));
 
 	pi.events.on("permission-gate:request-state", (data: unknown) => {
 		const request = data && typeof data === "object" ? (data as PermissionGateStateRequest) : {};
@@ -123,19 +83,18 @@ export default function (pi: ExtensionAPI) {
 		if (event.toolName !== "bash") return undefined;
 
 		const command = event.input.command as string;
-		const dangerousMatches = getDangerousMatches(command, dangerousPatterns);
-
-		if (dangerousMatches.length > 0) {
+		if (command.search(dangerousPattern) !== -1) {
 			if (!ctx.hasUI) {
 				// In non-interactive mode, block by default
 				return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };
 			}
 
-			const highlightedCommand = highlightRanges(command, dangerousMatches, ctx.ui.theme.getFgAnsi("accent"));
+			// The TUI already renders the full tool call above the editor.
+			const title = ctx.mode === "tui" ? "Run the dangerous command above?" : `⚠️ Dangerous command:\n\n${command}\n\nAllow?`;
 			const choice = await withNotifyHookAttention(
 				pi,
 				"permission-gate",
-				() => selectWithStableScroll(ctx, `⚠️ Dangerous command:\n\n  ${highlightedCommand}\n\nAllow?`, ["Yes", "No"]),
+				() => selectWithStableScroll(ctx, title, ["Yes", "No"]),
 				undefined,
 				"permission",
 			);
