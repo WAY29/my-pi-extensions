@@ -4,25 +4,24 @@ import { createHash } from "node:crypto";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
 import {
 	// @ts-expect-error compat-only runtime exports; extension loader aliases root to compat.
 	generateImages,
 	// @ts-expect-error compat-only runtime exports; extension loader aliases root to compat.
 	registerImagesApiProvider,
 	StringEnum,
-	Type,
 	type AssistantImages,
 	type ImageContent,
 	type ImagesFunction,
 	type ImagesModel,
 	type Model,
 	type ProviderImagesOptions,
-	type Static,
 	type Usage,
 } from "@earendil-works/pi-ai";
 
 const OPENAI_IMAGES_API = "openai-images" as const;
-const DEFAULT_IMAGE_MODEL = "gpt-image-2.5-flare";
+const DEFAULT_IMAGE_MODEL = "gpt-image-2.6-flare";
 const DEFAULT_GROK_IMAGE_MODEL = "grok-imagine-image";
 const DEFAULT_GROK_QUALITY_MODEL = "grok-imagine-image-quality";
 const DEFAULT_OUTPUT_DIR = "output/imagegen";
@@ -83,7 +82,7 @@ const IMAGE_GEN_PARAMS = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Image model id. GPT: gpt-image-2.5-flare (default, everyday generation), gpt-image-2.5-sunburst (precise editing), gpt-image-2, gpt-image-1.5. Grok: grok-imagine-image / grok-imagine-image-quality. Default follows current chat provider.",
+				`Image model id. GPT: ${DEFAULT_IMAGE_MODEL} (default, fast iteration), gpt-image-2.6-sunburst (detailed generation and editing), gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, gpt-image-1.5. Grok: grok-imagine-image / grok-imagine-image-quality. Default follows current chat provider.`,
 		}),
 	),
 	output_dir: Type.Optional(Type.String({ description: "Workspace output directory. Defaults to output/imagegen" })),
@@ -854,7 +853,7 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 	} else if (preferGrok) {
 		if (params.background === "transparent") {
 			throw new Error(
-				`Grok Imagine does not support background=transparent. Set model=${DEFAULT_IMAGE_MODEL} for transparent cutouts.`,
+				"Grok Imagine does not support background=transparent. Set model=gpt-image-2.5-flare for transparent cutouts.",
 			);
 		}
 		effectiveModel = params.quality === "high" ? DEFAULT_GROK_QUALITY_MODEL : DEFAULT_GROK_IMAGE_MODEL;
@@ -872,7 +871,7 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 
 	if (isGrokImagineModel(effectiveModel)) {
 		if (params.background === "transparent") {
-			throw new Error(`Grok Imagine does not support background=transparent. Use ${DEFAULT_IMAGE_MODEL} instead.`);
+			throw new Error("Grok Imagine does not support background=transparent. Use gpt-image-2.5-flare instead.");
 		}
 		if (params.input_fidelity) {
 			notes.push("input_fidelity is ignored for Grok Imagine.");
@@ -880,7 +879,7 @@ function selectImageModel(params: ImageGenParams, preferGrok: boolean): Selected
 	} else {
 		if (params.background === "transparent" && isGptImage2Model(effectiveModel)) {
 			throw new Error(
-				`gpt-image-2 does not support background=transparent. Omit model to use ${DEFAULT_IMAGE_MODEL}, or choose gpt-image-1.5 explicitly.`,
+				"gpt-image-2 does not support background=transparent. Choose gpt-image-2.5-flare or gpt-image-1.5 explicitly.",
 			);
 		}
 
@@ -1067,7 +1066,7 @@ export default function imageGenExtension(pi: ExtensionAPI) {
 			"Use image_gen when the user needs a raster image asset such as a photo, illustration, sprite, mockup, texture, or transparent-background cutout.",
 			"Use image_gen instead of SVG/HTML/CSS placeholders when the requested deliverable should be a bitmap asset.",
 			"Use image_gen with explicit image_paths for workspace files; if image_paths are omitted but the user recently attached images, image_gen can use those attachments as edit or reference inputs.",
-			`Default image backend follows the current chat provider: internal-grok -> grok-imagine-image; otherwise ${DEFAULT_IMAGE_MODEL}, including transparent backgrounds. Override image_gen with model=gpt-image-2.5-sunburst for precise editing, or choose gpt-image-2|gpt-image-1.5|grok-imagine-image|grok-imagine-image-quality. For transparent output, use PNG or WebP.`,
+			`Default image backend follows the current chat provider: internal-grok -> grok-imagine-image; otherwise ${DEFAULT_IMAGE_MODEL}. Choose gpt-image-2.6-sunburst for detailed generation and editing. For transparent output, use gpt-image-2.5-flare with PNG or WebP.`,
 			"When calling image_gen, omit redundant defaults unless the user explicitly asked for them: do not invent n=1, background=opaque, output_format=png, or action=generate if they are not needed.",
 			"When calling image_gen, do not invent tiny thumbnail sizes such as 256x256 unless the user explicitly requested them. Omit size when unsure.",
 		],
