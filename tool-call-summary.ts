@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	ToolExecutionComponent,
 	createFindToolDefinition,
 	createLsToolDefinition,
 	createReadToolDefinition,
@@ -42,7 +41,6 @@ const SHORTCUTS = [
 	Key.alt("o"),
 ] as const;
 
-const PATCH_STATE_KEY = Symbol.for("pi.tool-call-summary.toolExecutionRenderPatch");
 const componentInvalidators = new Map<string, () => void>();
 const rowExpanded = new Set<string>();
 const MAX_PATH_DISPLAY_LENGTH = 80;
@@ -120,11 +118,6 @@ type StoredToolResult = {
 	content?: unknown[];
 	details?: unknown;
 	isError?: boolean;
-};
-
-type RenderPatchState = {
-	originalRender?: (this: ToolExecutionComponent, width: number) => string[];
-	shouldHide?: (component: unknown) => boolean;
 };
 
 type GroupedToolDefinition =
@@ -342,19 +335,6 @@ function getTruncationSuffix(result: StoredToolResult | undefined, theme: Summar
 	return totalLines !== undefined
 		? theme.fg("warning", ` (truncated from ${totalLines})`)
 		: theme.fg("warning", " (truncated)");
-}
-
-function installGroupedRenderPatch(isHiddenComponent: (component: unknown) => boolean) {
-	const patchState = (((globalThis as Record<symbol, unknown>)[PATCH_STATE_KEY] as RenderPatchState | undefined) ??= {}) as RenderPatchState;
-	if (!patchState.originalRender) {
-		patchState.originalRender = ToolExecutionComponent.prototype.render;
-		ToolExecutionComponent.prototype.render = function (this: ToolExecutionComponent, width: number) {
-			if (patchState.shouldHide?.(this)) return [];
-			return patchState.originalRender!.call(this, width);
-		};
-	}
-	patchState.shouldHide = isHiddenComponent;
-	return patchState;
 }
 
 function setStatus(ctx: { ui: { setStatus(key: string, text: string | undefined): void } }): void {
@@ -709,14 +689,6 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 		return root;
 	}
 
-	function isHiddenGroupedComponent(component: unknown): boolean {
-		if (!component || typeof component !== "object") return false;
-		const candidate = component as { toolName?: unknown; toolCallId?: unknown };
-		if (!isTargetToolName(candidate.toolName) || typeof candidate.toolCallId !== "string") return false;
-		const call = groupedCalls.get(candidate.toolCallId);
-		return Boolean(call && call.leaderId !== candidate.toolCallId);
-	}
-
 	function wrapGroupedTool(toolName: TargetToolName, definition: GroupedToolDefinition): GroupedToolDefinition {
 		return {
 			...definition,
@@ -727,6 +699,9 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 				context: { lastComponent?: unknown; toolCallId: string; invalidate?: () => void },
 			) {
 				trackComponentInvalidator(context.toolCallId, context.invalidate);
+				const call = groupedCalls.get(context.toolCallId);
+				// Pi renders each call's images outside the custom call and result slots.
+				if (call && call.leaderId !== context.toolCallId) return new Container();
 				return renderGroupedTree(
 					context.toolCallId,
 					toolName,
@@ -745,8 +720,6 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 	function registerGroupedTool(toolName: Exclude<TargetToolName, "grep">, definition: GroupedToolDefinition) {
 		pi.registerTool(wrapGroupedTool(toolName, definition));
 	}
-
-	const patchState = installGroupedRenderPatch(isHiddenGroupedComponent);
 
 	registerBashToolPlugin(pi, {
 		id: "tool-call-summary",
@@ -849,9 +822,6 @@ export default function toolCallSummary(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		if (patchState.shouldHide === isHiddenGroupedComponent) {
-			patchState.shouldHide = undefined;
-		}
 		componentInvalidators.clear();
 		rowExpanded.clear();
 		releaseBashToolOwner(pi);
