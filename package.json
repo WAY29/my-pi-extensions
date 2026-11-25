@@ -29,6 +29,7 @@
       "./codex-fast.ts",
       "./codex-style-apply-patch/index.ts",
       "./effort.ts",
+      "./extension-manager.ts",
       "./grep-tool-coordinator.ts",
       "./herdr-agent-state.ts",
       "./image-gen.ts",
