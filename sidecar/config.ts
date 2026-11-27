@@ -1,3 +1,4 @@
+import type { PackageSource } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -150,9 +151,9 @@ export function resolvePackageRoot(nameOrPath: string): string | undefined {
 		return existsSync(abs) ? abs : undefined;
 	}
 	const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
-	let packages: string[] = [];
+	let packages: PackageSource[] = [];
 	try {
-		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
+		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: PackageSource[] };
 		packages = settings.packages ?? [];
 	} catch {
 		packages = [];
@@ -178,7 +179,9 @@ export function resolvePackageRoot(nameOrPath: string): string | undefined {
 	return undefined;
 }
 
-function packageSpecToPath(agentHome: string, spec: string): string | undefined {
+function packageSpecToPath(agentHome: string, entry: PackageSource): string | undefined {
+	const spec = typeof entry === "string" ? entry : entry?.source;
+	if (typeof spec !== "string") return undefined;
 	if (spec.startsWith("git:")) {
 		// git:github.com/org/repo or git:github.com/org/repo@ref
 		const rest = spec.slice(4).replace(/@[^/]+$/, "");
@@ -229,7 +232,7 @@ export function resolveSkillPaths(entries: string[] | undefined): string[] {
 	let packageRoots: string[] = [];
 	try {
 		const settings = JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8")) as {
-			packages?: string[];
+			packages?: PackageSource[];
 		};
 		packageRoots = (settings.packages ?? [])
 			.map((spec) => packageSpecToPath(agentHome, spec))
@@ -277,5 +280,10 @@ export function _selfCheck(): void {
 		// Review Bot! -> review-bot
 		const s = slugAgentName("Review Bot!", "x");
 		if (!/^[a-z][a-z0-9_-]{0,31}$/.test(s)) throw new Error(`bad slug ${s}`);
+	}
+	const source = "git:github.com/example/review";
+	const packageRoot = join("agent", "git", "github.com", "example", "review");
+	for (const entry of [source, { source, skills: [] }]) {
+		if (packageSpecToPath("agent", entry) !== packageRoot) throw new Error("package source resolution failed");
 	}
 }

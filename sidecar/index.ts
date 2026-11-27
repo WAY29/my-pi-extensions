@@ -19,6 +19,7 @@ import {
 } from "./config.js";
 import {
 	agentPrompt,
+	agentGet,
 	agentRead,
 	agentStart,
 	appTabCreate,
@@ -425,13 +426,26 @@ export default function sidecarExtension(pi: ExtensionAPI): void {
 					new Promise<void>((r) => setTimeout(r, 500)),
 				]);
 			}
-			await waitP;
+			try {
+				await waitP;
+			} catch (err) {
+				// herdr can time out waiting for the status event even after pi has
+				// finished. Trust the child session only when herdr reports idle and
+				// it contains a new assistant result.
+				const message = err instanceof Error ? err.message : String(err);
+				if (isHerdrApp() || !message.includes("timed out waiting for agent status")) throw err;
+				const state = await agentGet(inst.agentTarget);
+				const status = state?.result?.agent?.agent_status ?? state?.agent?.agent_status;
+				const recovered = await readSidecarOutput(inst);
+				if (status !== "idle" || !recovered || recovered === before) throw err;
+				output = recovered;
+			}
 
 			if (inst.abort.signal.aborted) {
 				throw new HerdrError("sidecar aborted");
 			}
 			// herdr idle can race slightly ahead of session flush — brief retry
-			for (let i = 0; i < 8; i++) {
+			for (let i = 0; i < 8 && !output; i++) {
 				output = await readSidecarOutput(inst);
 				if (output && output !== before) break;
 				await new Promise((r) => setTimeout(r, 150));

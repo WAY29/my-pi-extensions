@@ -50,6 +50,8 @@ if (slugAgentName(undefined, "Review") !== "sidecar-review") {
 // package resolution smoke (ponytail installed in this environment)
 const exts = resolveExtensionPaths(["ponytail"]);
 const skills = resolveSkillPaths(["ponytail-review"]);
+assert.ok(exts.length, "ponytail extension not resolved");
+assert.ok(skills.length, "ponytail-review skill not resolved");
 const herdrState = herdrAgentStatePath();
 if (!herdrState) throw new Error("herdr-agent-state.ts missing");
 console.log(
